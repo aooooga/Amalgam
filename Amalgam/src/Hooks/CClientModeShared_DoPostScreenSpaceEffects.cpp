@@ -3,6 +3,7 @@
 #include "../Features/Visuals/Chams/Chams.h"
 #include "../Features/Visuals/Glow/Glow.h"
 #include "../Features/Visuals/CameraWindow/CameraWindow.h"
+#include "../Features/Visuals/FlexFOV/FlexFOV.h"
 #include "../Features/Visuals/Visuals.h"
 #include "../Features/Visuals/Materials/Materials.h"
 #include "../Features/Spectate/Spectate.h"
@@ -18,7 +19,7 @@ MAKE_HOOK(CClientModeShared_DoPostScreenSpaceEffects, U::Memory.GetVirtual(I::Cl
 		return CALL_ORIGINAL(rcx, pSetup);
 	
 	F::Visuals.ProjectileTrace(H::Entities.GetLocal(), H::Entities.GetWeapon());
-	if (F::CameraWindow.m_bDrawing)
+	if (F::CameraWindow.m_bDrawing || F::FlexFOV.m_bDrawing)
 		return CALL_ORIGINAL(rcx, pSetup);
 
 	F::Visuals.DrawEffects();
@@ -36,7 +37,7 @@ MAKE_HOOK(CViewRender_DrawViewModels, S::CViewRender_DrawViewModels(), void,
 	DEBUG_RETURN(CViewRender_DrawViewModels, rcx, viewRender, drawViewmodel);
 
 	CALL_ORIGINAL(rcx, viewRender, F::Spectate.HasTarget() && !I::EngineClient->IsHLTV() ? false : drawViewmodel);
-	if (SDK::CleanScreenshot() || F::CameraWindow.m_bDrawing || I::EngineVGui->IsGameUIVisible() || !F::Materials.m_bLoaded)
+	if (SDK::CleanScreenshot() || F::CameraWindow.m_bDrawing || F::FlexFOV.m_bDrawing || I::EngineVGui->IsGameUIVisible() || !F::Materials.m_bLoaded)
 		return;
 
 	F::Glow.RenderSecond();

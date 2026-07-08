@@ -531,6 +531,7 @@ NAMESPACE_BEGIN(Vars)
 				Local = 1 << 0, Friends = 1 << 1, Party = 1 << 2, Assigned = 1 << 3);
 			CVar(FieldOfView, "Field of view## FOV", 0.f, VISUAL | SLIDER_MIN | SLIDER_PRECISION, 0.f, 160.f, 5.f);
 			CVar(ZoomFieldOfView, "Zoomed field of view## Zoomed FOV", 0.f, VISUAL | SLIDER_MIN | SLIDER_PRECISION, 0.f, 160.f, 5.f);
+			CVar(FlexFOVDebug, "Flex FOV debug## FlexFOVDebug", false, VISUAL);
 			CVar(AspectRatio, "Aspect ratio", 0.f, VISUAL | SLIDER_MIN | SLIDER_PRECISION, 0.f, 5.f, 0.05f);
 			CVar(RevealScoreboard, "Reveal scoreboard", false, VISUAL);
 			CVar(ScoreboardUtility, "Scoreboard utility", false);

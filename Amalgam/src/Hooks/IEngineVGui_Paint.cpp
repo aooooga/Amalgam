@@ -3,6 +3,7 @@
 #include "../Features/Visuals/ESP/ESP.h"
 #include "../Features/Visuals/OffscreenArrows/OffscreenArrows.h"
 #include "../Features/Visuals/CameraWindow/CameraWindow.h"
+#include "../Features/Visuals/FlexFOV/FlexFOV.h"
 #include "../Features/Visuals/Visuals.h"
 #include "../Features/Ticks/Ticks.h"
 #include "../Features/CritHack/CritHack.h"
@@ -36,6 +37,7 @@ MAKE_HOOK(IEngineVGui_Paint, U::Memory.GetVirtual(I::EngineVGui, 14), void,
 		if (auto pLocal = H::Entities.GetLocal())
 		{
 			F::CameraWindow.Draw();
+			F::FlexFOV.DrawDebug();
 
 			F::AntiAim.Draw(pLocal);
 			F::Visuals.DrawPickupTimers();

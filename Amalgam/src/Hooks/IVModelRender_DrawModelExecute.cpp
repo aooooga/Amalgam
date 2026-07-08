@@ -4,6 +4,7 @@
 #include "../Features/Visuals/Glow/Glow.h"
 #include "../Features/Visuals/Materials/Materials.h"
 #include "../Features/Visuals/CameraWindow/CameraWindow.h"
+#include "../Features/Visuals/FlexFOV/FlexFOV.h"
 
 MAKE_SIGNATURE(CBaseAnimating_InternalDrawModel, "client.dll", "48 8B C4 55 56 48 8D 6C 24 ? 48 81 EC ? ? ? ? 44 8B 81", 0x0);
 MAKE_SIGNATURE(CBaseViewModel_DrawModel, "client.dll", "40 53 55 56 48 83 EC ? 80 B9", 0x0);
@@ -16,7 +17,7 @@ MAKE_HOOK(IVModelRender_DrawModelExecute, U::Memory.GetVirtual(I::ModelRender, 1
 	DEBUG_RETURN(IVModelRender_DrawModelExecute, rcx, pState, pInfo, pBoneToWorld);
 
 	if (I::EngineVGui->IsGameUIVisible() || SDK::CleanScreenshot()
-		|| F::CameraWindow.m_bDrawing || !F::Materials.m_bLoaded || G::Unload)
+		|| F::CameraWindow.m_bDrawing || F::FlexFOV.m_bDrawing || !F::Materials.m_bLoaded || G::Unload)
 		return CALL_ORIGINAL(rcx, pState, pInfo, pBoneToWorld);
 
 	if (F::Chams.m_bRendering)
@@ -60,7 +61,7 @@ MAKE_HOOK(CBaseViewModel_DrawModel, S::CBaseViewModel_DrawModel(), int,
 	DEBUG_RETURN(CBaseAnimating_DrawModel, rcx, flags);
 
 	if (s_bDrawingViewmodel || I::EngineVGui->IsGameUIVisible() || SDK::CleanScreenshot()
-		|| F::CameraWindow.m_bDrawing || !F::Materials.m_bLoaded || G::Unload)
+		|| F::CameraWindow.m_bDrawing || F::FlexFOV.m_bDrawing || !F::Materials.m_bLoaded || G::Unload)
 		return CALL_ORIGINAL(rcx, flags);
 
 	s_bDrawingViewmodel = true;

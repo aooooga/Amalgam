@@ -4,6 +4,7 @@
 #include "../Aimbot/AimbotProjectile/AimbotProjectile.h"
 #include "../Aimbot/Aimbot.h"
 #include "CameraWindow/CameraWindow.h"
+#include "FlexFOV/FlexFOV.h"
 #include "Groups/Groups.h"
 #include "../Backtrack/Backtrack.h"
 #include "../Spectate/Spectate.h"
@@ -546,6 +547,10 @@ void CVisuals::FOV(CTFPlayer* pLocal, CViewSetup* pView)
 	}
 
 	G::FOV = pView->fov;
+
+	// Phase 1: activate the globe capture purely from the debug toggle.
+	F::FlexFOV.m_bActive = Vars::Visuals::UI::FlexFOVDebug.Value;
+
 	if (pLocal->IsAlive())
 	{
 		pLocal->m_iFOV() = ceilf(pView->fov);

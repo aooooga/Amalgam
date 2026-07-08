@@ -919,6 +919,7 @@
     <ClCompile Include="src\Features\Misc\AutoQueue\AutoQueue.cpp" />
     <ClCompile Include="src\Features\Backtrack\Backtrack.cpp" />
     <ClCompile Include="src\Features\Visuals\CameraWindow\CameraWindow.cpp" />
+    <ClCompile Include="src\Features\Visuals\FlexFOV\FlexFOV.cpp" />
     <ClCompile Include="src\Features\CheatDetection\CheatDetection.cpp" />
     <ClCompile Include="src\Features\Commands\Commands.cpp" />
     <ClCompile Include="src\Features\Binds\Binds.cpp" />
@@ -1379,6 +1380,7 @@
     <ClInclude Include="src\SDK\Definitions\Steam\Steam_Gameserver.h" />
     <ClInclude Include="src\Core\Core.h" />
     <ClInclude Include="src\Features\Visuals\CameraWindow\CameraWindow.h" />
+    <ClInclude Include="src\Features\Visuals\FlexFOV\FlexFOV.h" />
     <ClInclude Include="src\Features\Commands\Commands.h" />
     <ClInclude Include="src\Features\Binds\Binds.h" />
     <ClInclude Include="src\Features\Configs\Configs.h" />

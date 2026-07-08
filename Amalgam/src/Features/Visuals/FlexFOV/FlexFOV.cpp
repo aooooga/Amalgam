@@ -5,6 +5,11 @@
 
 #include <cmath>
 #include <algorithm>
+#include <vector>
+
+// Faces are rendered slightly wider than 90 deg so adjacent faces overlap and
+// triangles straddling a face boundary still sample valid UVs (hides seams).
+static constexpr float FLEXFOV_FACE_FOV = 95.f;
 
 // --- Inverse projection math (ported from shaunlebron/flex-fov flex.fs) ------
 // Coordinate frame: forward = +z, right = +x, up = +y, then z is negated so the
@@ -43,6 +48,18 @@ static Vec3 PaniniRay(float sx, float sy, float flFovXDeg)
 	vRay.z = -vRay.z;
 	return vRay;
 }
+
+// Cube-face bases in view-local ray coords (x = right, y = up, forward = -z),
+// consistent with CFlexFOV::ComputeFaceAngles. Order: FRONT,BACK,LEFT,RIGHT,UP,DOWN.
+// Fwd = look direction; Right/Up/Back define the face camera (looks along -Back).
+static const Vec3 s_FaceFwd[6]   = { {0,0,-1}, {0,0,1},  {-1,0,0}, {1,0,0},  {0,1,0},  {0,-1,0} };
+static const Vec3 s_FaceRight[6] = { {1,0,0},  {-1,0,0}, {0,0,-1}, {0,0,1},  {1,0,0},  {1,0,0}  };
+static const Vec3 s_FaceUp[6]    = { {0,1,0},  {0,1,0},  {0,1,0},  {0,1,0},  {0,0,1},  {0,0,-1} };
+static const Vec3 s_FaceBack[6]  = { {0,0,1},  {0,0,-1}, {1,0,0},  {-1,0,0}, {0,-1,0}, {0,1,0}  };
+
+static inline float Dot3(const Vec3& a, const Vec3& b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
+
+struct FVert { float x, y, z, u, v; };
 
 static const char* s_szFaceNames[CFlexFOV::FACE_COUNT] =
 {
@@ -91,7 +108,7 @@ void CFlexFOV::RenderFace(void* rcx, const CViewSetup& pViewSetup, EFace eFace, 
 	tViewSetup.width = m_iFaceSize;
 	tViewSetup.height = m_iFaceSize;
 	tViewSetup.m_flAspectRatio = 1.f;
-	tViewSetup.fov = 90.f;			// exact cube face; seam overlap comes later
+	tViewSetup.fov = FLEXFOV_FACE_FOV;	// slightly oversized for seam overlap
 	tViewSetup.angles = vAngles;
 	// origin left as the player's eye (pViewSetup.origin)
 
@@ -160,20 +177,91 @@ void CFlexFOV::DrawDebug()
 	pRenderContext->Release();
 }
 
-// M1 (mesh-ladder step 1): draw a single fullscreen quad textured with the
-// FRONT face, via a dynamic mesh. Validates vtable indices, MeshDesc_t stride,
-// material bind, and the identity-matrix screen-space setup before we add
-// tessellation (M2) and the inverse projection (M3+).
+// M4: full reprojection. Tessellate the screen into a grid, map each vertex
+// through the inverse projection to a view ray, assign each triangle to the
+// cube face its centroid looks at, and draw the triangles in per-face passes
+// (each with that face's texture, UVs in that face's frame). Faces are captured
+// slightly oversized so boundary triangles still have valid UVs -> no seams.
 void CFlexFOV::DrawComposite()
 {
 	if (!m_bComposite || !m_pFaceMaterials[FACE_FRONT] || !I::EngineClient->IsInGame())
 		return;
 
-	IMaterial* pMat = m_pFaceMaterials[FACE_FRONT];
-
 	auto pRenderContext = I::MaterialSystem->GetRenderContext();
 
-	// Draw positions directly in clip space: identity model/view/projection.
+	int sw = 0, sh = 0;
+	pRenderContext->GetWindowSize(sw, sh);
+	const float flAspect = sh ? float(sw) / float(sh) : (16.f / 9.f);
+	const float flFovX = 140.f; // fixed Panini preview; slider-driven in Phase 4
+
+	// UV scale for a face rendered at FLEXFOV_FACE_FOV degrees: 0.5 / tan(fov/2).
+	const float d = 0.5f / std::tan(FLEXFOV_FACE_FOV * 0.5f * (3.14159265f / 180.f));
+
+	const int nGrid = 64;
+	const int nSide = nGrid + 1;
+
+	// Per-vertex rays and clip positions.
+	static std::vector<Vec3> vRays;
+	vRays.resize(nSide * nSide);
+	for (int j = 0; j < nSide; j++)
+	{
+		for (int i = 0; i < nSide; i++)
+		{
+			const float cx = -1.f + 2.f * i / nGrid;
+			const float cy = -1.f + 2.f * j / nGrid;
+			vRays[j * nSide + i] = PaniniRay(cx, cy / flAspect, flFovX);
+		}
+	}
+
+	// Bucket each triangle into the face its centroid looks at.
+	static std::vector<FVert> vBuckets[FACE_COUNT];
+	for (int f = 0; f < FACE_COUNT; f++)
+		vBuckets[f].clear();
+
+	auto ClipX = [&](int idx) { return -1.f + 2.f * (idx % nSide) / nGrid; };
+	auto ClipY = [&](int idx) { return -1.f + 2.f * (idx / nSide) / nGrid; };
+
+	auto EmitTri = [&](int a, int b, int c)
+	{
+		const Vec3& ra = vRays[a]; const Vec3& rb = vRays[b]; const Vec3& rc = vRays[c];
+		const Vec3 vCentroid(ra.x + rb.x + rc.x, ra.y + rb.y + rc.y, ra.z + rb.z + rc.z);
+
+		int iFace = 0; float flBest = -1e30f;
+		for (int f = 0; f < FACE_COUNT; f++)
+		{
+			const float dd = Dot3(vCentroid, s_FaceFwd[f]);
+			if (dd > flBest) { flBest = dd; iFace = f; }
+		}
+
+		const int tri[3] = { a, b, c };
+		for (int t = 0; t < 3; t++)
+		{
+			const Vec3& r = vRays[tri[t]];
+			const float lz = Dot3(r, s_FaceBack[iFace]); // < 0 for the owning face
+			const float lx = Dot3(r, s_FaceRight[iFace]);
+			const float ly = Dot3(r, s_FaceUp[iFace]);
+			FVert fv;
+			fv.x = ClipX(tri[t]); fv.y = ClipY(tri[t]); fv.z = 0.5f;
+			fv.u = -lx / lz * d + 0.5f;
+			fv.v = 0.5f + ly / lz * d; // v flipped vs flex-fov (D3D top-left origin)
+			vBuckets[iFace].push_back(fv);
+		}
+	};
+
+	for (int j = 0; j < nGrid; j++)
+	{
+		for (int i = 0; i < nGrid; i++)
+		{
+			const int v00 = j * nSide + i;
+			const int v10 = v00 + 1;
+			const int v01 = v00 + nSide;
+			const int v11 = v01 + 1;
+			EmitTri(v00, v01, v11);
+			EmitTri(v00, v11, v10);
+		}
+	}
+
+	// Identity model/view/projection so vertex positions are clip coords.
 	pRenderContext->MatrixMode(MATERIAL_PROJECTION);
 	pRenderContext->PushMatrix();
 	pRenderContext->LoadIdentity();
@@ -184,87 +272,56 @@ void CFlexFOV::DrawComposite()
 	pRenderContext->PushMatrix();
 	pRenderContext->LoadIdentity();
 
-	pRenderContext->Bind(pMat);
-	IMesh* pMesh = pRenderContext->GetDynamicMesh(true, nullptr, nullptr, pMat);
-
-	// Tessellated screen-space grid of nGrid x nGrid quads. For M2 the mapping
-	// is trivial (uv = screen position), so it must look identical to M1; the
-	// inverse projection replaces that mapping in M3. Clamp the resolution so
-	// we stay within the dynamic mesh's vertex/index limits.
-	int nGrid = 64;
-	const int nMaxVerts = pRenderContext->GetMaxVerticesToRender(pMat);
-	const int nMaxIndices = pRenderContext->GetMaxIndicesToRender();
-	while (nGrid > 1 && ((nGrid + 1) * (nGrid + 1) > nMaxVerts || nGrid * nGrid * 6 > nMaxIndices))
-		nGrid /= 2;
-
-	const int nVerts = (nGrid + 1) * (nGrid + 1);
-	const int nIndices = nGrid * nGrid * 6;
-
-	int sw = 0, sh = 0;
-	pRenderContext->GetWindowSize(sw, sh);
-	const float flAspect = sh ? float(sw) / float(sh) : (16.f / 9.f);
-	const float flFovX = 140.f; // M3: fixed Panini preview; slider-driven in Phase 4
-
-	pMesh->SetPrimitiveType(MATERIAL_TRIANGLES);
-
-	MeshDesc_t desc;
-	pMesh->LockMesh(nVerts, nIndices, desc);
-
-	for (int j = 0; j <= nGrid; j++)
+	// One draw pass per face. Chunk each bucket to stay within dynamic limits.
+	for (int f = 0; f < FACE_COUNT; f++)
 	{
-		for (int i = 0; i <= nGrid; i++)
+		IMaterial* pMat = m_pFaceMaterials[f];
+		if (!pMat || vBuckets[f].empty())
+			continue;
+
+		pRenderContext->Bind(pMat);
+
+		int nMaxVerts = pRenderContext->GetMaxVerticesToRender(pMat);
+		int nMaxIndices = pRenderContext->GetMaxIndicesToRender();
+		int nChunk = std::min(nMaxVerts, nMaxIndices);
+		nChunk -= nChunk % 3; // whole triangles
+		if (nChunk < 3)
+			continue;
+
+		const int nTotal = static_cast<int>(vBuckets[f].size());
+		for (int base = 0; base < nTotal; base += nChunk)
 		{
-			const int k = j * (nGrid + 1) + i;
-			const float cx = -1.f + 2.f * i / nGrid; // clip x, left -> right
-			const float cy = -1.f + 2.f * j / nGrid; // clip y, bottom -> top
+			const int nCount = std::min(nChunk, nTotal - base);
 
-			float* pPos = reinterpret_cast<float*>(reinterpret_cast<unsigned char*>(desc.m_pPosition) + k * desc.m_VertexSize_Position);
-			pPos[0] = cx; pPos[1] = cy; pPos[2] = 0.5f;
+			IMesh* pMesh = pRenderContext->GetDynamicMesh(true, nullptr, nullptr, pMat);
+			pMesh->SetPrimitiveType(MATERIAL_TRIANGLES);
 
-			// Inverse projection: screen position -> view ray -> FRONT-face UV.
-			// (M3 samples the front face only; directions past its 90 deg edge
-			// clamp to the border. All 6 faces come in M4.)
-			const Vec3 vRay = PaniniRay(cx, cy / flAspect, flFovX);
-			float z = vRay.z;
-			if (z > -1e-4f)
-				z = -1e-4f; // keep in the forward hemisphere so edges clamp cleanly
-			const float d = 0.5f; // 0.5 / tan(90/2)
-			float u = -vRay.x / z * d + 0.5f;
-			float v = 0.5f + vRay.y / z * d; // v flipped vs flex-fov (D3D top-left origin)
-			u = std::clamp(u, 0.f, 1.f);
-			v = std::clamp(v, 0.f, 1.f);
+			MeshDesc_t desc;
+			pMesh->LockMesh(nCount, nCount, desc);
 
-			float* pUV = reinterpret_cast<float*>(reinterpret_cast<unsigned char*>(desc.m_pTexCoord[0]) + k * desc.m_VertexSize_TexCoord[0]);
-			pUV[0] = u;
-			pUV[1] = v;
-
-			if (desc.m_VertexSize_Color)
+			for (int n = 0; n < nCount; n++)
 			{
-				unsigned char* pCol = desc.m_pColor + k * desc.m_VertexSize_Color;
-				pCol[0] = pCol[1] = pCol[2] = pCol[3] = 255;
+				const FVert& fv = vBuckets[f][base + n];
+
+				float* pPos = reinterpret_cast<float*>(reinterpret_cast<unsigned char*>(desc.m_pPosition) + n * desc.m_VertexSize_Position);
+				pPos[0] = fv.x; pPos[1] = fv.y; pPos[2] = fv.z;
+
+				float* pUV = reinterpret_cast<float*>(reinterpret_cast<unsigned char*>(desc.m_pTexCoord[0]) + n * desc.m_VertexSize_TexCoord[0]);
+				pUV[0] = fv.u; pUV[1] = fv.v;
+
+				if (desc.m_VertexSize_Color)
+				{
+					unsigned char* pCol = desc.m_pColor + n * desc.m_VertexSize_Color;
+					pCol[0] = pCol[1] = pCol[2] = pCol[3] = 255;
+				}
+
+				desc.m_pIndices[n] = static_cast<unsigned short>(desc.m_nFirstVertex + n);
 			}
+
+			pMesh->UnlockMesh(nCount, nCount, desc);
+			pMesh->Draw();
 		}
 	}
-
-	// Two triangles per quad. Winding doesn't matter ($nocull on the material).
-	// Dynamic-mesh indices are offset by the shared buffer's first vertex.
-	int n = 0;
-	for (int j = 0; j < nGrid; j++)
-	{
-		for (int i = 0; i < nGrid; i++)
-		{
-			const unsigned short v00 = static_cast<unsigned short>(desc.m_nFirstVertex + j * (nGrid + 1) + i);
-			const unsigned short v10 = v00 + 1;
-			const unsigned short v01 = static_cast<unsigned short>(v00 + (nGrid + 1));
-			const unsigned short v11 = static_cast<unsigned short>(v01 + 1);
-
-			desc.m_pIndices[n++] = v00; desc.m_pIndices[n++] = v01; desc.m_pIndices[n++] = v11;
-			desc.m_pIndices[n++] = v00; desc.m_pIndices[n++] = v11; desc.m_pIndices[n++] = v10;
-		}
-	}
-
-	pMesh->UnlockMesh(nVerts, nIndices, desc);
-	pMesh->Draw();
 
 	pRenderContext->MatrixMode(MATERIAL_PROJECTION);
 	pRenderContext->PopMatrix();

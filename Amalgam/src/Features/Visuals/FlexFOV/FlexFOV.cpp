@@ -3,6 +3,47 @@
 #include "../Materials/Materials.h"
 #include "../../../SDK/Definitions/Main/IMesh.h"
 
+#include <cmath>
+#include <algorithm>
+
+// --- Inverse projection math (ported from shaunlebron/flex-fov flex.fs) ------
+// Coordinate frame: forward = +z, right = +x, up = +y, then z is negated so the
+// front face looks down -z (matching the flex-fov camera-frame convention).
+
+static Vec3 LatLonToRay(float flLat, float flLon)
+{
+	return Vec3(
+		std::sin(flLon) * std::cos(flLat),
+		std::sin(flLat),
+		std::cos(flLon) * std::cos(flLat)
+	);
+}
+
+// Panini inverse (compression d = 1). lenscoord already scaled to the fov.
+static Vec3 PaniniInverse(float x, float y)
+{
+	const float d = 1.f;
+	const float k = x * x / ((d + 1.f) * (d + 1.f));
+	const float dscr = k * k * d * d - (k + 1.f) * (k * d * d - 1.f);
+	const float clon = (-k * d + std::sqrt(dscr)) / (k + 1.f);
+	const float S = (d + 1.f) / (d + clon);
+	const float flLon = std::atan2(x, S * clon);
+	const float flLat = std::atan2(y, S);
+	return LatLonToRay(flLat, flLon);
+}
+
+// screen (sx in [-1,1], sy = clip.y/aspect) -> view-space ray (forward = -z).
+static Vec3 PaniniRay(float sx, float sy, float flFovXDeg)
+{
+	const float flLon = flFovXDeg * (3.14159265f / 180.f) * 0.5f; // half-fov, radians
+	const float d = 1.f;
+	const float S = (d + 1.f) / (d + std::cos(flLon));
+	const float flScale = S * std::sin(flLon); // panini_forward(0, fovx/2).x
+	Vec3 vRay = PaniniInverse(sx * flScale, sy * flScale);
+	vRay.z = -vRay.z;
+	return vRay;
+}
+
 static const char* s_szFaceNames[CFlexFOV::FACE_COUNT] =
 {
 	"FlexFOV_Front", "FlexFOV_Back", "FlexFOV_Left", "FlexFOV_Right", "FlexFOV_Up", "FlexFOV_Down"
@@ -159,6 +200,11 @@ void CFlexFOV::DrawComposite()
 	const int nVerts = (nGrid + 1) * (nGrid + 1);
 	const int nIndices = nGrid * nGrid * 6;
 
+	int sw = 0, sh = 0;
+	pRenderContext->GetWindowSize(sw, sh);
+	const float flAspect = sh ? float(sw) / float(sh) : (16.f / 9.f);
+	const float flFovX = 140.f; // M3: fixed Panini preview; slider-driven in Phase 4
+
 	pMesh->SetPrimitiveType(MATERIAL_TRIANGLES);
 
 	MeshDesc_t desc;
@@ -175,9 +221,22 @@ void CFlexFOV::DrawComposite()
 			float* pPos = reinterpret_cast<float*>(reinterpret_cast<unsigned char*>(desc.m_pPosition) + k * desc.m_VertexSize_Position);
 			pPos[0] = cx; pPos[1] = cy; pPos[2] = 0.5f;
 
+			// Inverse projection: screen position -> view ray -> FRONT-face UV.
+			// (M3 samples the front face only; directions past its 90 deg edge
+			// clamp to the border. All 6 faces come in M4.)
+			const Vec3 vRay = PaniniRay(cx, cy / flAspect, flFovX);
+			float z = vRay.z;
+			if (z > -1e-4f)
+				z = -1e-4f; // keep in the forward hemisphere so edges clamp cleanly
+			const float d = 0.5f; // 0.5 / tan(90/2)
+			float u = -vRay.x / z * d + 0.5f;
+			float v = 0.5f + vRay.y / z * d; // v flipped vs flex-fov (D3D top-left origin)
+			u = std::clamp(u, 0.f, 1.f);
+			v = std::clamp(v, 0.f, 1.f);
+
 			float* pUV = reinterpret_cast<float*>(reinterpret_cast<unsigned char*>(desc.m_pTexCoord[0]) + k * desc.m_VertexSize_TexCoord[0]);
-			pUV[0] = float(i) / nGrid;          // u: left -> right
-			pUV[1] = 1.f - float(j) / nGrid;    // v: top(=cy +1) -> 0
+			pUV[0] = u;
+			pUV[1] = v;
 
 			if (desc.m_VertexSize_Color)
 			{

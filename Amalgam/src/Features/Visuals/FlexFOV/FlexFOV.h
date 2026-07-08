@@ -3,22 +3,23 @@
 
 // Wide-angle FOV via globe reprojection (blinky / flex-fov technique).
 //
-// Phase 1: capture the scene as a world-axis-aligned cube of 6 faces rendered
-// from the player's eye, then blit those faces to screen as debug thumbnails to
+// Phase 1: capture the scene as a view-aligned cube of 6 faces rendered from
+// the player's eye, then blit those faces to screen as debug thumbnails to
 // verify the globe captures correctly. No reprojection yet - that is Phase 3.
 
 class CFlexFOV
 {
 public:
-	// World-axis-aligned cube faces. Order matches m_pFaceTextures / m_pFaceMaterials.
+	// View-aligned cube faces (oriented relative to the player's view each frame,
+	// so FRONT is centered on the crosshair). Order matches the texture arrays.
 	enum EFace
 	{
-		FACE_FRONT = 0,	// look +X (yaw 0)
-		FACE_BACK,		// look -X (yaw 180)
-		FACE_LEFT,		// look +Y (yaw 90)
-		FACE_RIGHT,		// look -Y (yaw -90)
-		FACE_UP,		// look +Z (pitch -90)
-		FACE_DOWN,		// look -Z (pitch 90)
+		FACE_FRONT = 0,	// player's view direction
+		FACE_BACK,		// directly behind
+		FACE_LEFT,		// 90 deg to the left
+		FACE_RIGHT,		// 90 deg to the right
+		FACE_UP,		// 90 deg up
+		FACE_DOWN,		// 90 deg down
 		FACE_COUNT
 	};
 
@@ -28,7 +29,8 @@ private:
 
 	int m_iFaceSize = 0; // square face resolution (px), set at Initialize from screen height
 
-	void RenderFace(void* rcx, const CViewSetup& pViewSetup, EFace eFace);
+	void RenderFace(void* rcx, const CViewSetup& pViewSetup, EFace eFace, const Vec3& vAngles);
+	void ComputeFaceAngles(const Vec3& vViewAngles, Vec3 vOut[FACE_COUNT]);
 
 public:
 	// Captures all 6 faces into their render targets. Called from the

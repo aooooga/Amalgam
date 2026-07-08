@@ -2,24 +2,42 @@
 
 #include "../Materials/Materials.h"
 
-// World-axis-aligned cube face camera angles (pitch, yaw, roll), indexed by EFace.
-static const Vec3 s_vFaceAngles[CFlexFOV::FACE_COUNT] =
-{
-	{   0.f,    0.f, 0.f }, // FACE_FRONT  -> +X
-	{   0.f,  180.f, 0.f }, // FACE_BACK   -> -X
-	{   0.f,   90.f, 0.f }, // FACE_LEFT   -> +Y
-	{   0.f,  -90.f, 0.f }, // FACE_RIGHT  -> -Y
-	{ -90.f,    0.f, 0.f }, // FACE_UP     -> +Z
-	{  90.f,    0.f, 0.f }, // FACE_DOWN   -> -Z
-};
-
 static const char* s_szFaceNames[CFlexFOV::FACE_COUNT] =
 {
 	"FlexFOV_Front", "FlexFOV_Back", "FlexFOV_Left", "FlexFOV_Right", "FlexFOV_Up", "FlexFOV_Down"
 };
 
+// Build a QAngle (with roll) from a face's forward/left/up basis vectors.
+// Column layout matches Math::AngleMatrix: [forward | left | up].
+static Vec3 AnglesFromBasis(const Vec3& vForward, const Vec3& vLeft, const Vec3& vUp)
+{
+	matrix3x4 m;
+	m[0][0] = vForward.x; m[1][0] = vForward.y; m[2][0] = vForward.z;
+	m[0][1] = vLeft.x;    m[1][1] = vLeft.y;    m[2][1] = vLeft.z;
+	m[0][2] = vUp.x;      m[1][2] = vUp.y;      m[2][2] = vUp.z;
+	m[0][3] = m[1][3] = m[2][3] = 0.f;
+	return Math::MatrixAngles(m);
+}
+
+// Computes the 6 view-aligned cube face orientations from the player's view
+// angles, so the front face is always centered on the crosshair (best/most
+// consistent resolution where the player looks).
+void CFlexFOV::ComputeFaceAngles(const Vec3& vViewAngles, Vec3 vOut[FACE_COUNT])
+{
+	Vec3 vF, vR, vU;
+	Math::AngleVectors(vViewAngles, &vF, &vR, &vU);
+	const Vec3 vL = -vR; // matrix "left" column is +Y in Source (= -right)
+
+	vOut[FACE_FRONT] = AnglesFromBasis( vF,  vL,  vU);
+	vOut[FACE_BACK]  = AnglesFromBasis(-vF, -vL,  vU);
+	vOut[FACE_LEFT]  = AnglesFromBasis( vL, -vF,  vU);
+	vOut[FACE_RIGHT] = AnglesFromBasis(-vL,  vF,  vU);
+	vOut[FACE_UP]    = AnglesFromBasis( vU,  vL, -vF);
+	vOut[FACE_DOWN]  = AnglesFromBasis(-vU,  vL,  vF);
+}
+
 // Renders the scene into a single cube face render target.
-void CFlexFOV::RenderFace(void* rcx, const CViewSetup& pViewSetup, EFace eFace)
+void CFlexFOV::RenderFace(void* rcx, const CViewSetup& pViewSetup, EFace eFace, const Vec3& vAngles)
 {
 	ITexture* pTexture = m_pFaceTextures[eFace];
 	if (!pTexture)
@@ -32,7 +50,7 @@ void CFlexFOV::RenderFace(void* rcx, const CViewSetup& pViewSetup, EFace eFace)
 	tViewSetup.height = m_iFaceSize;
 	tViewSetup.m_flAspectRatio = 1.f;
 	tViewSetup.fov = 90.f;			// exact cube face; seam overlap comes later
-	tViewSetup.angles = s_vFaceAngles[eFace];
+	tViewSetup.angles = vAngles;
 	// origin left as the player's eye (pViewSetup.origin)
 
 	auto pRenderContext = I::MaterialSystem->GetRenderContext();
@@ -53,8 +71,11 @@ void CFlexFOV::CaptureGlobe(void* rcx, const CViewSetup& pViewSetup)
 
 	m_bDrawing = true;
 
+	Vec3 vFaceAngles[FACE_COUNT];
+	ComputeFaceAngles(pViewSetup.angles, vFaceAngles);
+
 	for (int i = 0; i < FACE_COUNT; i++)
-		RenderFace(rcx, pViewSetup, static_cast<EFace>(i));
+		RenderFace(rcx, pViewSetup, static_cast<EFace>(i), vFaceAngles[i]);
 
 	m_bDrawing = false;
 }

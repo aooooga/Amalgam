@@ -49,6 +49,27 @@ static Vec3 PaniniRay(float sx, float sy, float flFovXDeg)
 	return vRay;
 }
 
+// Mercator inverse (cylindrical). Used for the 180-270 tier. Scale = fovx/2 rad.
+static Vec3 MercatorRay(float sx, float sy, float flFovXDeg)
+{
+	const float flScale = flFovXDeg * (3.14159265f / 180.f) * 0.5f;
+	const float flLon = sx * flScale;
+	const float flLat = std::atan(std::sinh(sy * flScale));
+	Vec3 vRay = LatLonToRay(flLat, flLon);
+	vRay.z = -vRay.z;
+	return vRay;
+}
+
+// Tier selection (flex-fov style, per the project's chosen boundaries):
+//   < 180 deg -> Panini, >= 180 deg -> Mercator (270-360 clamps to Mercator for
+//   now; Winkel-Tripel deferred). Below ~110 the feature is off (passthrough).
+static Vec3 ScreenToRay(float sx, float sy, float flFovXDeg)
+{
+	if (flFovXDeg < 180.f)
+		return PaniniRay(sx, sy, flFovXDeg);
+	return MercatorRay(sx, sy, flFovXDeg);
+}
+
 // Cube-face bases in view-local ray coords (x = right, y = up, forward = -z),
 // consistent with CFlexFOV::ComputeFaceAngles. Order: FRONT,BACK,LEFT,RIGHT,UP,DOWN.
 // Fwd = look direction; Right/Up/Back define the face camera (looks along -Back).
@@ -192,7 +213,11 @@ void CFlexFOV::DrawComposite()
 	int sw = 0, sh = 0;
 	pRenderContext->GetWindowSize(sw, sh);
 	const float flAspect = sh ? float(sw) / float(sh) : (16.f / 9.f);
-	const float flFovX = 140.f; // fixed Panini preview; slider-driven in Phase 4
+	// Driven by the FOV slider; default to 140 when the slider is low/off.
+	float flFovX = Vars::Visuals::UI::FieldOfView.Value;
+	if (flFovX < 90.f)
+		flFovX = 140.f;
+	flFovX = std::min(flFovX, 360.f);
 
 	// UV scale for a face rendered at FLEXFOV_FACE_FOV degrees: 0.5 / tan(fov/2).
 	const float d = 0.5f / std::tan(FLEXFOV_FACE_FOV * 0.5f * (3.14159265f / 180.f));
@@ -209,7 +234,7 @@ void CFlexFOV::DrawComposite()
 		{
 			const float cx = -1.f + 2.f * i / nGrid;
 			const float cy = -1.f + 2.f * j / nGrid;
-			vRays[j * nSide + i] = PaniniRay(cx, cy / flAspect, flFovX);
+			vRays[j * nSide + i] = ScreenToRay(cx, cy / flAspect, flFovX);
 		}
 	}
 

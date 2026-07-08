@@ -546,6 +546,12 @@ void CVisuals::FOV(CTFPlayer* pLocal, CViewSetup* pView)
 		}
 	}
 
+	// The FlexFOV composite can drive the FOV slider up to 360; cap the actual
+	// game view so it never builds a degenerate projection matrix (the composite
+	// covers it anyway, and normal users stay well under this).
+	if (pView->fov > 170.f)
+		pView->fov = 170.f;
+
 	G::FOV = pView->fov;
 
 	// Activate the globe capture when either debug view (tiles or mesh composite)

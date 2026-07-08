@@ -15,12 +15,8 @@ class IMesh;
 class CPrimList;
 class CMeshBuilder;
 
-enum VertexCompressionType_t
-{
-	VERTEX_COMPRESSION_INVALID = 0xFFFFFFFF,
-	VERTEX_COMPRESSION_NONE = 0,
-	VERTEX_COMPRESSION_ON = 1,
-};
+// VertexCompressionType_t comes from IMaterialSystemHardwareConfig.h
+// (included transitively via IMaterialSystem.h).
 
 struct VertexDesc_t
 {

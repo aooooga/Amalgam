@@ -1,0 +1,27 @@
+name: FlexFOV Fast Build
+
+# Fast single-config build for iterating on the flexfov branch: only Release|x64,
+# with multiprocessor compilation (/MP) to parallelize cl.exe across cores.
+on:
+  push:
+    branches: [flexfov]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Add MSBuild to PATH
+      uses: microsoft/setup-msbuild@v2
+
+    - name: Restore NuGet packages
+      run: nuget restore
+
+    - name: Build
+      run: msbuild Amalgam.sln /p:Platform=x64 /p:Configuration=Release /p:MultiProcessorCompilation=true /m /verbosity:minimal
+
+    - uses: actions/upload-artifact@v4
+      with:
+        name: Amalgamx64Release
+        path: output/x64/Release/*.dll

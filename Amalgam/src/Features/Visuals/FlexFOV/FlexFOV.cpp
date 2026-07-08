@@ -60,14 +60,25 @@ static Vec3 MercatorRay(float sx, float sy, float flFovXDeg)
 	return vRay;
 }
 
-// Tier selection (flex-fov style, per the project's chosen boundaries):
-//   < 180 deg -> Panini, >= 180 deg -> Mercator (270-360 clamps to Mercator for
-//   now; Winkel-Tripel deferred). Below ~110 the feature is off (passthrough).
+// Tier selection (per the project's chosen boundaries): Panini below 180 deg,
+// Mercator above, blended across a band around 180 to avoid a visible pop.
+// (270-360 clamps to Mercator for now; Winkel-Tripel deferred.)
 static Vec3 ScreenToRay(float sx, float sy, float flFovXDeg)
 {
-	if (flFovXDeg < 180.f)
+	const float flLo = 170.f, flHi = 190.f;
+	if (flFovXDeg <= flLo)
 		return PaniniRay(sx, sy, flFovXDeg);
-	return MercatorRay(sx, sy, flFovXDeg);
+	if (flFovXDeg >= flHi)
+		return MercatorRay(sx, sy, flFovXDeg);
+
+	// Blend the two ray directions and renormalize.
+	const float t = (flFovXDeg - flLo) / (flHi - flLo);
+	const Vec3 a = PaniniRay(sx, sy, flFovXDeg);
+	const Vec3 b = MercatorRay(sx, sy, flFovXDeg);
+	Vec3 m(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t);
+	const float len = std::sqrt(m.x * m.x + m.y * m.y + m.z * m.z);
+	if (len > 1e-6f) { m.x /= len; m.y /= len; m.z /= len; }
+	return m;
 }
 
 // Cube-face bases in view-local ray coords (x = right, y = up, forward = -z),
@@ -219,8 +230,13 @@ void CFlexFOV::DrawComposite()
 		flFovX = 140.f;
 	flFovX = std::min(flFovX, 360.f);
 
-	// UV scale for a face rendered at FLEXFOV_FACE_FOV degrees: 0.5 / tan(fov/2).
-	const float d = 0.5f / std::tan(FLEXFOV_FACE_FOV * 0.5f * (3.14159265f / 180.f));
+	// UV scale for a face. Source renders a CViewSetup's fov as a 4:3-referenced
+	// horizontal fov scaled by (aspect / (4/3)); our faces are square (aspect 1),
+	// so the effective horizontal fov is narrower than the nominal value. Match d
+	// to the *effective* fov, else edge rays read central content (zoom-in crop).
+	const float flFaceHalf = FLEXFOV_FACE_FOV * 0.5f * (3.14159265f / 180.f);
+	const float flEffTan = std::tan(flFaceHalf) * (1.f / (4.f / 3.f));
+	const float d = 0.5f / flEffTan;
 
 	const int nGrid = 64;
 	const int nSide = nGrid + 1;
@@ -377,7 +393,9 @@ void CFlexFOV::Initialize()
 				IMAGE_FORMAT_RGB888,
 				MATERIAL_RT_DEPTH_SHARED,
 				TEXTUREFLAGS_CLAMPS | TEXTUREFLAGS_CLAMPT,
-				CREATERENDERTARGETFLAGS_HDR
+				// Auto-mipmap so the reprojection samples with trilinear filtering
+				// (reduces aliasing where faces are minified toward the edges).
+				CREATERENDERTARGETFLAGS_HDR | CREATERENDERTARGETFLAGS_AUTOMIPMAP
 			);
 			m_pFaceTextures[i]->IncrementReferenceCount();
 		}

@@ -146,41 +146,65 @@ void CFlexFOV::DrawComposite()
 	pRenderContext->Bind(pMat);
 	IMesh* pMesh = pRenderContext->GetDynamicMesh(true, nullptr, nullptr, pMat);
 
-	// Fullscreen quad, clip xy in [-1,1] (y up), uv (0,0)=top-left of texture.
-	const float verts[4][5] =
-	{
-		{ -1.f,  1.f, 0.5f, 0.f, 0.f }, // top-left
-		{  1.f,  1.f, 0.5f, 1.f, 0.f }, // top-right
-		{  1.f, -1.f, 0.5f, 1.f, 1.f }, // bottom-right
-		{ -1.f, -1.f, 0.5f, 0.f, 1.f }, // bottom-left
-	};
-	const unsigned short idx[6] = { 0, 1, 2, 0, 2, 3 };
+	// Tessellated screen-space grid of nGrid x nGrid quads. For M2 the mapping
+	// is trivial (uv = screen position), so it must look identical to M1; the
+	// inverse projection replaces that mapping in M3. Clamp the resolution so
+	// we stay within the dynamic mesh's vertex/index limits.
+	int nGrid = 64;
+	const int nMaxVerts = pRenderContext->GetMaxVerticesToRender(pMat);
+	const int nMaxIndices = pRenderContext->GetMaxIndicesToRender();
+	while (nGrid > 1 && ((nGrid + 1) * (nGrid + 1) > nMaxVerts || nGrid * nGrid * 6 > nMaxIndices))
+		nGrid /= 2;
+
+	const int nVerts = (nGrid + 1) * (nGrid + 1);
+	const int nIndices = nGrid * nGrid * 6;
 
 	pMesh->SetPrimitiveType(MATERIAL_TRIANGLES);
 
 	MeshDesc_t desc;
-	pMesh->LockMesh(4, 6, desc);
+	pMesh->LockMesh(nVerts, nIndices, desc);
 
-	for (int i = 0; i < 4; i++)
+	for (int j = 0; j <= nGrid; j++)
 	{
-		float* pPos = reinterpret_cast<float*>(reinterpret_cast<unsigned char*>(desc.m_pPosition) + i * desc.m_VertexSize_Position);
-		pPos[0] = verts[i][0]; pPos[1] = verts[i][1]; pPos[2] = verts[i][2];
-
-		float* pUV = reinterpret_cast<float*>(reinterpret_cast<unsigned char*>(desc.m_pTexCoord[0]) + i * desc.m_VertexSize_TexCoord[0]);
-		pUV[0] = verts[i][3]; pUV[1] = verts[i][4];
-
-		if (desc.m_VertexSize_Color)
+		for (int i = 0; i <= nGrid; i++)
 		{
-			unsigned char* pCol = desc.m_pColor + i * desc.m_VertexSize_Color;
-			pCol[0] = pCol[1] = pCol[2] = pCol[3] = 255;
+			const int k = j * (nGrid + 1) + i;
+			const float cx = -1.f + 2.f * i / nGrid; // clip x, left -> right
+			const float cy = -1.f + 2.f * j / nGrid; // clip y, bottom -> top
+
+			float* pPos = reinterpret_cast<float*>(reinterpret_cast<unsigned char*>(desc.m_pPosition) + k * desc.m_VertexSize_Position);
+			pPos[0] = cx; pPos[1] = cy; pPos[2] = 0.5f;
+
+			float* pUV = reinterpret_cast<float*>(reinterpret_cast<unsigned char*>(desc.m_pTexCoord[0]) + k * desc.m_VertexSize_TexCoord[0]);
+			pUV[0] = float(i) / nGrid;          // u: left -> right
+			pUV[1] = 1.f - float(j) / nGrid;    // v: top(=cy +1) -> 0
+
+			if (desc.m_VertexSize_Color)
+			{
+				unsigned char* pCol = desc.m_pColor + k * desc.m_VertexSize_Color;
+				pCol[0] = pCol[1] = pCol[2] = pCol[3] = 255;
+			}
 		}
 	}
 
+	// Two triangles per quad. Winding doesn't matter ($nocull on the material).
 	// Dynamic-mesh indices are offset by the shared buffer's first vertex.
-	for (int i = 0; i < 6; i++)
-		desc.m_pIndices[i] = static_cast<unsigned short>(desc.m_nFirstVertex + idx[i]);
+	int n = 0;
+	for (int j = 0; j < nGrid; j++)
+	{
+		for (int i = 0; i < nGrid; i++)
+		{
+			const unsigned short v00 = static_cast<unsigned short>(desc.m_nFirstVertex + j * (nGrid + 1) + i);
+			const unsigned short v10 = v00 + 1;
+			const unsigned short v01 = static_cast<unsigned short>(v00 + (nGrid + 1));
+			const unsigned short v11 = static_cast<unsigned short>(v01 + 1);
 
-	pMesh->UnlockMesh(4, 6, desc);
+			desc.m_pIndices[n++] = v00; desc.m_pIndices[n++] = v01; desc.m_pIndices[n++] = v11;
+			desc.m_pIndices[n++] = v00; desc.m_pIndices[n++] = v11; desc.m_pIndices[n++] = v10;
+		}
+	}
+
+	pMesh->UnlockMesh(nVerts, nIndices, desc);
 	pMesh->Draw();
 
 	pRenderContext->MatrixMode(MATERIAL_PROJECTION);

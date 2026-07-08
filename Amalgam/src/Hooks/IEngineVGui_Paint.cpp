@@ -38,6 +38,7 @@ MAKE_HOOK(IEngineVGui_Paint, U::Memory.GetVirtual(I::EngineVGui, 14), void,
 		{
 			F::CameraWindow.Draw();
 			F::FlexFOV.DrawDebug();
+			F::FlexFOV.DrawComposite();
 
 			F::AntiAim.Draw(pLocal);
 			F::Visuals.DrawPickupTimers();

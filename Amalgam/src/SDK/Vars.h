@@ -532,6 +532,7 @@ NAMESPACE_BEGIN(Vars)
 			CVar(FieldOfView, "Field of view## FOV", 0.f, VISUAL | SLIDER_MIN | SLIDER_PRECISION, 0.f, 160.f, 5.f);
 			CVar(ZoomFieldOfView, "Zoomed field of view## Zoomed FOV", 0.f, VISUAL | SLIDER_MIN | SLIDER_PRECISION, 0.f, 160.f, 5.f);
 			CVar(FlexFOVDebug, "Flex FOV debug## FlexFOVDebug", false, VISUAL);
+			CVar(FlexFOVComposite, "Flex FOV composite## FlexFOVComposite", false, VISUAL);
 			CVar(AspectRatio, "Aspect ratio", 0.f, VISUAL | SLIDER_MIN | SLIDER_PRECISION, 0.f, 5.f, 0.05f);
 			CVar(RevealScoreboard, "Reveal scoreboard", false, VISUAL);
 			CVar(ScoreboardUtility, "Scoreboard utility", false);

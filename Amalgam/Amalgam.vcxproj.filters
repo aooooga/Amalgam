@@ -219,6 +219,7 @@
     <ClInclude Include="src\Core\Core.h" />
     <ClInclude Include="src\Features\Visuals\CameraWindow\CameraWindow.h" />
     <ClInclude Include="src\Features\Visuals\FlexFOV\FlexFOV.h" />
+    <ClInclude Include="src\SDK\Definitions\Main\IMesh.h" />
     <ClInclude Include="src\Features\Binds\Binds.h" />
     <ClInclude Include="src\Features\Configs\Configs.h" />
     <ClInclude Include="src\Features\ImGui\MaterialDesign\IconDefinitions.h" />

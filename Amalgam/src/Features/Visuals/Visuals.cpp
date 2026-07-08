@@ -548,8 +548,10 @@ void CVisuals::FOV(CTFPlayer* pLocal, CViewSetup* pView)
 
 	G::FOV = pView->fov;
 
-	// Phase 1: activate the globe capture purely from the debug toggle.
-	F::FlexFOV.m_bActive = Vars::Visuals::UI::FlexFOVDebug.Value;
+	// Activate the globe capture when either debug view (tiles or mesh composite)
+	// is enabled; the mesh composite also needs its own draw flag.
+	F::FlexFOV.m_bComposite = Vars::Visuals::UI::FlexFOVComposite.Value;
+	F::FlexFOV.m_bActive = Vars::Visuals::UI::FlexFOVDebug.Value || Vars::Visuals::UI::FlexFOVComposite.Value;
 
 	if (pLocal->IsAlive())
 	{

@@ -1,6 +1,7 @@
 #include "FlexFOV.h"
 
 #include "../Materials/Materials.h"
+#include "../../../SDK/Definitions/Main/IMesh.h"
 
 static const char* s_szFaceNames[CFlexFOV::FACE_COUNT] =
 {
@@ -118,6 +119,80 @@ void CFlexFOV::DrawDebug()
 	pRenderContext->Release();
 }
 
+// M1 (mesh-ladder step 1): draw a single fullscreen quad textured with the
+// FRONT face, via a dynamic mesh. Validates vtable indices, MeshDesc_t stride,
+// material bind, and the identity-matrix screen-space setup before we add
+// tessellation (M2) and the inverse projection (M3+).
+void CFlexFOV::DrawComposite()
+{
+	if (!m_bComposite || !m_pFaceMaterials[FACE_FRONT] || !I::EngineClient->IsInGame())
+		return;
+
+	IMaterial* pMat = m_pFaceMaterials[FACE_FRONT];
+
+	auto pRenderContext = I::MaterialSystem->GetRenderContext();
+
+	// Draw positions directly in clip space: identity model/view/projection.
+	pRenderContext->MatrixMode(MATERIAL_PROJECTION);
+	pRenderContext->PushMatrix();
+	pRenderContext->LoadIdentity();
+	pRenderContext->MatrixMode(MATERIAL_VIEW);
+	pRenderContext->PushMatrix();
+	pRenderContext->LoadIdentity();
+	pRenderContext->MatrixMode(MATERIAL_MODEL);
+	pRenderContext->PushMatrix();
+	pRenderContext->LoadIdentity();
+
+	pRenderContext->Bind(pMat);
+	IMesh* pMesh = pRenderContext->GetDynamicMesh(true, nullptr, nullptr, pMat);
+
+	// Fullscreen quad, clip xy in [-1,1] (y up), uv (0,0)=top-left of texture.
+	const float verts[4][5] =
+	{
+		{ -1.f,  1.f, 0.5f, 0.f, 0.f }, // top-left
+		{  1.f,  1.f, 0.5f, 1.f, 0.f }, // top-right
+		{  1.f, -1.f, 0.5f, 1.f, 1.f }, // bottom-right
+		{ -1.f, -1.f, 0.5f, 0.f, 1.f }, // bottom-left
+	};
+	const unsigned short idx[6] = { 0, 1, 2, 0, 2, 3 };
+
+	pMesh->SetPrimitiveType(MATERIAL_TRIANGLES);
+
+	MeshDesc_t desc;
+	pMesh->LockMesh(4, 6, desc);
+
+	for (int i = 0; i < 4; i++)
+	{
+		float* pPos = reinterpret_cast<float*>(reinterpret_cast<unsigned char*>(desc.m_pPosition) + i * desc.m_VertexSize_Position);
+		pPos[0] = verts[i][0]; pPos[1] = verts[i][1]; pPos[2] = verts[i][2];
+
+		float* pUV = reinterpret_cast<float*>(reinterpret_cast<unsigned char*>(desc.m_pTexCoord[0]) + i * desc.m_VertexSize_TexCoord[0]);
+		pUV[0] = verts[i][3]; pUV[1] = verts[i][4];
+
+		if (desc.m_VertexSize_Color)
+		{
+			unsigned char* pCol = desc.m_pColor + i * desc.m_VertexSize_Color;
+			pCol[0] = pCol[1] = pCol[2] = pCol[3] = 255;
+		}
+	}
+
+	// Dynamic-mesh indices are offset by the shared buffer's first vertex.
+	for (int i = 0; i < 6; i++)
+		desc.m_pIndices[i] = static_cast<unsigned short>(desc.m_nFirstVertex + idx[i]);
+
+	pMesh->UnlockMesh(4, 6, desc);
+	pMesh->Draw();
+
+	pRenderContext->MatrixMode(MATERIAL_PROJECTION);
+	pRenderContext->PopMatrix();
+	pRenderContext->MatrixMode(MATERIAL_VIEW);
+	pRenderContext->PopMatrix();
+	pRenderContext->MatrixMode(MATERIAL_MODEL);
+	pRenderContext->PopMatrix();
+
+	pRenderContext->Release();
+}
+
 void CFlexFOV::Initialize()
 {
 	// Square faces sized to screen height.
@@ -148,6 +223,7 @@ void CFlexFOV::Initialize()
 			kv->SetString("$basetexture", s_szFaceNames[i]);
 			kv->SetInt("$ignorez", 1);
 			kv->SetInt("$nofog", 1);
+			kv->SetInt("$nocull", 1);
 			m_pFaceMaterials[i] = F::Materials.Create(s_szFaceNames[i], kv);
 		}
 	}

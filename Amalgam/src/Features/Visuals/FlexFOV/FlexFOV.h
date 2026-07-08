@@ -41,6 +41,10 @@ public:
 	// Called from IEngineVGui_Paint.
 	void DrawDebug();
 
+	// Mesh-ladder composite (currently M1: fullscreen FRONT-face quad).
+	// Called from IEngineVGui_Paint.
+	void DrawComposite();
+
 	void Initialize();
 	void Unload();
 
@@ -48,9 +52,12 @@ public:
 	// (ESP, chams, glow, post fx) can skip themselves during the capture pass.
 	bool m_bDrawing = false;
 
-	// Whether the wide-FOV pipeline is active this frame (FOV above passthrough
-	// threshold). Set by CVisuals::FOV. Phase 1 only reads a debug toggle.
+	// Whether the wide-FOV pipeline is active this frame (needs the globe
+	// captured). Set by CVisuals::FOV from the debug/composite toggles for now.
 	bool m_bActive = false;
+
+	// Draw the mesh composite (M-ladder) instead of / on top of the tiles.
+	bool m_bComposite = false;
 };
 
 ADD_FEATURE(CFlexFOV, FlexFOV);

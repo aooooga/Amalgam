@@ -19,7 +19,7 @@ msbuild Amalgam.sln /p:Platform=x64 /p:Configuration=Release
 Output lands in `output/x64/<Configuration>/Amalgam.dll`.
 
 **Configurations** (`/p:Configuration=<name>`):
-- `Release` / `ReleaseAVX2` / `ReleaseFreetype` / `ReleaseFreetypeAVX2`
+- `ReleaseAVX2` / `Release` / `ReleaseFreetype` / `ReleaseFreetypeAVX2`
 - `Debug` / `DebugAVX2` / `DebugFreetype` / `DebugFreetypeAVX2`
 
 AVX2 variants use AVX2 intrinsics (faster, not universally compatible). Freetype variants enable `IMGUI_ENABLE_FREETYPE` and `AMALGAM_CUSTOM_FONTS` and produce a larger DLL with better text rendering.
@@ -94,6 +94,10 @@ Pipeline, in order:
 5. **WorldToScreen tie-in**: `CFlexFOV::WorldToScreen()` is the exact inverse of `DrawComposite`'s `ScreenToRay`. `SDK::W2S()` checks `F::FlexFOV.m_bComposite` and routes through it instead of the normal linear matrix when the composite is active — this is what keeps ESP/overlays aligned on the reprojected view. A per-frame snapshot of eye origin/view angles/FOV/aspect/strength is latched once in `CaptureGlobe`/`DrawComposite` so per-call `WorldToScreen` invocations (hundreds/frame for overlays) never redo trig.
 
 Key cvars (`Vars::Visuals::UI`, `Amalgam/src/SDK/Vars.h`): `FlexFOVDebug`, `FlexFOVComposite`, `FlexFOVStrength` (Panini `d`, 0–2), `FlexFOVSkipMainView`, `FlexFOVQuality` (face RT resolution scale). See the comments atop `FlexFOV.h`/`FlexFOV.cpp` for the full projection math and rig-selection details.
+
+## Discord requests
+
+If a request arrives tagged `<channel source="plugin:discord:discord" ...>`, read `.claude/skills/discord.md` in full before responding or acting — it covers the mandatory Discord-reply behavior, build/commit/push conventions, and reaction conventions for this channel.
 
 ## Repo / collaboration workflow
 

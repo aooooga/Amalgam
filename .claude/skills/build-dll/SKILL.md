@@ -3,24 +3,23 @@ name: build-dll
 description: Build the Amalgam TF2 cheat DLL via nuget restore + msbuild and report the resulting output DLL path. Use when asked to build, compile, or produce a fresh DLL (e.g. to share in Discord), or to verify the repo still builds after a change.
 ---
 
-Build the Amalgam DLL for this repo (`C:\Users\Honaaa\Desktop\Amalgam`).
+Build the Amalgam DLL for this repo (repo root — the folder containing `Amalgam.sln`).
 
-1. Determine the configuration to build. Default to `Release` unless the user specifies one of: `Release`, `ReleaseAVX2`, `ReleaseFreetype`, `ReleaseFreetypeAVX2`, `Debug`, `DebugAVX2`, `DebugFreetype`, `DebugFreetypeAVX2`. Platform is always `x64`.
+1. Determine the configuration to build. Default to `ReleaseAVX2` unless the user specifies one of: `Release`, `ReleaseFreetype`, `ReleaseFreetypeAVX2`, `Debug`, `DebugAVX2`, `DebugFreetype`, `DebugFreetypeAVX2`. Platform is always `x64`.
 
-2. Locate `nuget.exe`. It is not on PATH on this machine. Check `C:\temp\nuget-tool\nuget.exe` first; if missing, download it:
+2. Locate `nuget.exe`. Check if it's on PATH first (`nuget`). If not, check for a previously-downloaded copy in a local tools/temp folder; if none exists, download one:
    ```
-   curl -sL -o C:\temp\nuget-tool\nuget.exe https://dist.nuget.org/win-x86-commandline/latest/nuget.exe
+   curl -sL -o <local-tools-dir>/nuget.exe https://dist.nuget.org/win-x86-commandline/latest/nuget.exe
    ```
 
-3. Restore packages (only needs to happen once, but cheap to re-run):
+3. Restore packages (only needs to happen once, but cheap to re-run), from the repo root:
    ```
-   C:\temp\nuget-tool\nuget.exe restore Amalgam.sln
+   <path-to-nuget>/nuget.exe restore Amalgam.sln
    ```
-   (run from the repo root)
 
-4. Build with the 2022 BuildTools MSBuild explicitly by full path — do NOT let PATH resolve a different MSBuild (there's also a VS "18" install on this machine whose MSBuild lacks the v143 C++ toolset and will fail with a `VCTargetsPath` error for `v180`):
+4. Build with a Visual Studio 2022 (or newer, with the v143+ C++ toolset) MSBuild. If `msbuild` isn't on PATH, locate one explicitly — on some machines a different/older VS install's MSBuild resolves first and lacks the right C++ toolset, causing a `VCTargetsPath` error, so don't assume the first MSBuild found on PATH is correct if the build fails that way:
    ```
-   "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\MSBuild\Current\Bin\MSBuild.exe" Amalgam.sln /p:Platform=x64 /p:Configuration=<Configuration> /m
+   msbuild Amalgam.sln /p:Platform=x64 /p:Configuration=<Configuration> /m
    ```
 
 5. On success, report the exact output path: `output/x64/<Configuration>/Amalgam.dll` (and the sibling `.pdb` if present). This is the file to attach when sharing a build in Discord.

@@ -229,13 +229,50 @@ void CFlexFOV::RenderFace(void* rcx, const CViewSetup& pViewSetup, EFace eFace, 
 
 // Only claim to replace the main view when the composite is on AND everything it
 // needs to paint a full-screen result exists; otherwise the caller must still
-// render the normal view or the frame would be left blank.
+// render the normal view or the frame would be left blank. The GetLocal check
+// mirrors the Paint-hook gate: if it fails there, DrawComposite never runs and a
+// scene-stripped main pass would leave a stale frame under the HUD.
 bool CFlexFOV::ShouldReplaceView()
 {
 	return m_bComposite
 		&& Vars::Visuals::UI::FlexFOVSkipMainView.Value
 		&& m_pFaceTextures[FACE_FRONT] && m_pFaceMaterials[FACE_FRONT]
-		&& I::EngineClient->IsInGame();
+		&& I::EngineClient->IsInGame()
+		&& H::Entities.GetLocal();
+}
+
+// Scene-draw cvars zeroed for the cheap main pass. All are plain render gates
+// (some FCVAR_CHEAT, which direct SetValue bypasses); missing ones are skipped.
+static const char* s_szSceneCvars[] =
+{
+	"r_drawworld", "r_drawentities", "r_drawstaticprops",
+	"r_drawopaquerenderables", "r_drawtranslucentrenderables", "r_drawtranslucentworld",
+	"r_drawviewmodel", "r_skybox", "r_3dsky", "r_drawparticles", "r_shadows",
+};
+static constexpr int SCENE_CVAR_COUNT = sizeof(s_szSceneCvars) / sizeof(s_szSceneCvars[0]);
+static int s_iSavedSceneCvars[SCENE_CVAR_COUNT] = {};
+
+void CFlexFOV::BeginCheapMainView()
+{
+	m_bReplacingView = true;
+	for (int i = 0; i < SCENE_CVAR_COUNT; i++)
+	{
+		if (auto pVar = H::ConVars.FindVar(s_szSceneCvars[i]))
+		{
+			s_iSavedSceneCvars[i] = pVar->GetInt();
+			pVar->SetValue(0);
+		}
+	}
+}
+
+void CFlexFOV::EndCheapMainView()
+{
+	for (int i = 0; i < SCENE_CVAR_COUNT; i++)
+	{
+		if (auto pVar = H::ConVars.FindVar(s_szSceneCvars[i]))
+			pVar->SetValue(s_iSavedSceneCvars[i]);
+	}
+	m_bReplacingView = false;
 }
 
 void CFlexFOV::CaptureGlobe(void* rcx, const CViewSetup& pViewSetup)
@@ -255,8 +292,14 @@ void CFlexFOV::CaptureGlobe(void* rcx, const CViewSetup& pViewSetup)
 	Vec3 vFaceAngles[FACE_COUNT];
 	ComputeFaceAngles(pViewSetup.angles, vFaceAngles);
 
+	// Only render the faces the composite mesh actually samples at the current
+	// fov (recorded when the mesh was built). The debug tiles want all six.
+	const bool bAllFaces = !m_bComposite || Vars::Visuals::UI::FlexFOVDebug.Value;
 	for (int i = 0; i < FACE_COUNT; i++)
-		RenderFace(rcx, pViewSetup, static_cast<EFace>(i), vFaceAngles[i]);
+	{
+		if (bAllFaces || m_bFaceNeeded[i])
+			RenderFace(rcx, pViewSetup, static_cast<EFace>(i), vFaceAngles[i]);
+	}
 
 	m_bDrawing = false;
 }
@@ -327,80 +370,98 @@ void CFlexFOV::DrawComposite()
 	m_flFovX = flFovX;
 	m_flStrength = flStrength;
 
-	// UV scale for a face rendered at FLEXFOV_FACE_FOV degrees (square, aspect 1):
-	// 0.5 / tan(fov/2). This value gives geometrically correct, seamless stitching
-	// (confirmed clean in testing); the earlier aspect-scaled variant broke it.
-	const float d = 0.5f / std::tan(FLEXFOV_FACE_FOV * 0.5f * (3.14159265f / 180.f));
-
-	const int nGrid = 96; // finer grid: peripheral triangles span less angle at wide FOV
-	const int nSide = nGrid + 1;
-
-	// Per-vertex rays and clip positions.
-	static std::vector<Vec3> vRays;
-	vRays.resize(nSide * nSide);
-	for (int j = 0; j < nSide; j++)
-	{
-		for (int i = 0; i < nSide; i++)
-		{
-			const float cx = -1.f + 2.f * i / nGrid;
-			const float cy = -1.f + 2.f * j / nGrid;
-			vRays[j * nSide + i] = ScreenToRay(cx, cy / flAspect, flFovX, flStrength);
-		}
-	}
-
-	// Bucket each triangle into the face its centroid looks at.
+	// The warp mesh depends only on (fov, strength, aspect) - never on the view
+	// angles, because the cube faces are view-aligned (the warp is done entirely
+	// in view-local ray space). So the whole grid - inverse projection, triangle
+	// face assignment, UVs - is rebuilt only when one of those inputs changes,
+	// not per frame. Per frame we just upload the cached buckets.
 	static std::vector<FVert> vBuckets[FACE_COUNT];
-	for (int f = 0; f < FACE_COUNT; f++)
-		vBuckets[f].clear();
-
-	auto ClipX = [&](int idx) { return -1.f + 2.f * (idx % nSide) / nGrid; };
-	auto ClipY = [&](int idx) { return -1.f + 2.f * (idx / nSide) / nGrid; };
-
-	auto EmitTri = [&](int a, int b, int c)
+	static float s_flCacheFov = -1.f, s_flCacheStrength = -1.f, s_flCacheAspect = -1.f;
+	if (flFovX != s_flCacheFov || flStrength != s_flCacheStrength || flAspect != s_flCacheAspect)
 	{
-		const int tri[3] = { a, b, c };
+		s_flCacheFov = flFovX; s_flCacheStrength = flStrength; s_flCacheAspect = flAspect;
 
-		// Assign the triangle to the face that best contains its *worst* vertex
-		// (max over faces of the min per-vertex alignment). Far more robust than
-		// a centroid test when a triangle straddles a face boundary at wide FOV.
-		int iFace = 0; float flBestMin = -1e30f;
+		// UV scale for a face rendered at FLEXFOV_FACE_FOV degrees (square, aspect 1):
+		// 0.5 / tan(fov/2). This value gives geometrically correct, seamless stitching
+		// (confirmed clean in testing); the earlier aspect-scaled variant broke it.
+		const float d = 0.5f / std::tan(FLEXFOV_FACE_FOV * 0.5f * (3.14159265f / 180.f));
+
+		const int nGrid = 96; // finer grid: peripheral triangles span less angle at wide FOV
+		const int nSide = nGrid + 1;
+
+		// Per-vertex rays and clip positions.
+		static std::vector<Vec3> vRays;
+		vRays.resize(nSide * nSide);
+		for (int j = 0; j < nSide; j++)
+		{
+			for (int i = 0; i < nSide; i++)
+			{
+				const float cx = -1.f + 2.f * i / nGrid;
+				const float cy = -1.f + 2.f * j / nGrid;
+				vRays[j * nSide + i] = ScreenToRay(cx, cy / flAspect, flFovX, flStrength);
+			}
+		}
+
+		// Bucket each triangle into the face its centroid looks at.
 		for (int f = 0; f < FACE_COUNT; f++)
+			vBuckets[f].clear();
+
+		auto ClipX = [&](int idx) { return -1.f + 2.f * (idx % nSide) / nGrid; };
+		auto ClipY = [&](int idx) { return -1.f + 2.f * (idx / nSide) / nGrid; };
+
+		auto EmitTri = [&](int a, int b, int c)
 		{
-			float flMin = 1e30f;
+			const int tri[3] = { a, b, c };
+
+			// Assign the triangle to the face that best contains its *worst* vertex
+			// (max over faces of the min per-vertex alignment). Far more robust than
+			// a centroid test when a triangle straddles a face boundary at wide FOV.
+			int iFace = 0; float flBestMin = -1e30f;
+			for (int f = 0; f < FACE_COUNT; f++)
+			{
+				float flMin = 1e30f;
+				for (int t = 0; t < 3; t++)
+					flMin = std::min(flMin, Dot3(vRays[tri[t]], s_FaceFwd[f]));
+				if (flMin > flBestMin) { flBestMin = flMin; iFace = f; }
+			}
+
 			for (int t = 0; t < 3; t++)
-				flMin = std::min(flMin, Dot3(vRays[tri[t]], s_FaceFwd[f]));
-			if (flMin > flBestMin) { flBestMin = flMin; iFace = f; }
+			{
+				const Vec3& r = vRays[tri[t]];
+				float lz = Dot3(r, s_FaceBack[iFace]); // < 0 for the owning face
+				if (lz > -0.2f)
+					lz = -0.2f; // guard: never let a straddling vertex blow the UV to infinity
+				const float lx = Dot3(r, s_FaceRight[iFace]);
+				const float ly = Dot3(r, s_FaceUp[iFace]);
+				FVert fv;
+				fv.x = ClipX(tri[t]); fv.y = ClipY(tri[t]); fv.z = 0.5f;
+				// No UV clamp: faces are captured oversized (FLEXFOV_FACE_FOV > 90) so
+				// boundary triangles sample the overlap region and stitch seamlessly.
+				fv.u = -lx / lz * d + 0.5f;
+				fv.v = 0.5f + ly / lz * d; // v flipped for D3D top-left origin
+				vBuckets[iFace].push_back(fv);
+			}
+		};
+
+		for (int j = 0; j < nGrid; j++)
+		{
+			for (int i = 0; i < nGrid; i++)
+			{
+				const int v00 = j * nSide + i;
+				const int v10 = v00 + 1;
+				const int v01 = v00 + nSide;
+				const int v11 = v01 + 1;
+				EmitTri(v00, v01, v11);
+				EmitTri(v00, v11, v10);
+			}
 		}
 
-		for (int t = 0; t < 3; t++)
-		{
-			const Vec3& r = vRays[tri[t]];
-			float lz = Dot3(r, s_FaceBack[iFace]); // < 0 for the owning face
-			if (lz > -0.2f)
-				lz = -0.2f; // guard: never let a straddling vertex blow the UV to infinity
-			const float lx = Dot3(r, s_FaceRight[iFace]);
-			const float ly = Dot3(r, s_FaceUp[iFace]);
-			FVert fv;
-			fv.x = ClipX(tri[t]); fv.y = ClipY(tri[t]); fv.z = 0.5f;
-			// No UV clamp: faces are captured oversized (FLEXFOV_FACE_FOV > 90) so
-			// boundary triangles sample the overlap region and stitch seamlessly.
-			fv.u = -lx / lz * d + 0.5f;
-			fv.v = 0.5f + ly / lz * d; // v flipped for D3D top-left origin
-			vBuckets[iFace].push_back(fv);
-		}
-	};
-
-	for (int j = 0; j < nGrid; j++)
-	{
-		for (int i = 0; i < nGrid; i++)
-		{
-			const int v00 = j * nSide + i;
-			const int v10 = v00 + 1;
-			const int v01 = v00 + nSide;
-			const int v11 = v01 + 1;
-			EmitTri(v00, v01, v11);
-			EmitTri(v00, v11, v10);
-		}
+		// Record which faces the mesh actually samples so CaptureGlobe only
+		// renders those (BACK is never needed below ~180 fov; UP/DOWN often
+		// aren't at moderate fov). FRONT stays on as the pipeline's keystone.
+		for (int f = 0; f < FACE_COUNT; f++)
+			m_bFaceNeeded[f] = !vBuckets[f].empty();
+		m_bFaceNeeded[FACE_FRONT] = true;
 	}
 
 	// Identity model/view/projection so vertex positions are clip coords.

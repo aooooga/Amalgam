@@ -17,11 +17,17 @@ MAKE_HOOK(CViewRender_RenderView, U::Memory.GetVirtual(I::ViewRender, 6), void,
 	}
 
 	// When the FlexFOV composite owns the frame it repaints every pixel from the
-	// 6 captured faces, so the normal main-view pass is pure wasted work - skip it.
-	// (If the composite can't fully render this frame, ShouldReplaceView() is false
-	// and we fall back to the normal render so the screen is never left blank.)
-	const bool bReplace = F::FlexFOV.ShouldReplaceView();
-	if (!bReplace)
+	// captured faces, so the scene part of the main pass is pure wasted work.
+	// The pass itself must still run - the in-game HUD paint (which draws the
+	// composite) happens inside it - so instead of skipping CALL_ORIGINAL we run
+	// it with the scene-draw cvars zeroed, making the redundant render near-free.
+	if (F::FlexFOV.ShouldReplaceView())
+	{
+		F::FlexFOV.BeginCheapMainView();
+		CALL_ORIGINAL(rcx, view, nClearFlags, whatToDraw);
+		F::FlexFOV.EndCheapMainView();
+	}
+	else
 		CALL_ORIGINAL(rcx, view, nClearFlags, whatToDraw);
 
 	F::CameraWindow.RenderView(rcx, view);

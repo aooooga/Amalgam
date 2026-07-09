@@ -16,8 +16,11 @@ MAKE_HOOK(IVModelRender_DrawModelExecute, U::Memory.GetVirtual(I::ModelRender, 1
 {
 	DEBUG_RETURN(IVModelRender_DrawModelExecute, rcx, pState, pInfo, pBoneToWorld);
 
+	// Note: FlexFOV face captures (m_bDrawing) intentionally go through the full
+	// chams path below, so cham'd models are replaced in the cube faces exactly
+	// like in the main view (the composite covers the main view's chams).
 	if (I::EngineVGui->IsGameUIVisible() || SDK::CleanScreenshot()
-		|| F::CameraWindow.m_bDrawing || F::FlexFOV.m_bDrawing || !F::Materials.m_bLoaded || G::Unload)
+		|| F::CameraWindow.m_bDrawing || F::FlexFOV.m_bReplacingView || !F::Materials.m_bLoaded || G::Unload)
 		return CALL_ORIGINAL(rcx, pState, pInfo, pBoneToWorld);
 
 	if (F::Chams.m_bRendering)

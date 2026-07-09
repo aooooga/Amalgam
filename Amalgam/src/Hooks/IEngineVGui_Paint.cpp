@@ -36,9 +36,12 @@ MAKE_HOOK(IEngineVGui_Paint, U::Memory.GetVirtual(I::EngineVGui, 14), void,
 		H::Draw.Start(true);
 		if (auto pLocal = H::Entities.GetLocal())
 		{
-			F::CameraWindow.Draw();
-			F::FlexFOV.DrawDebug();
+			// Composite first: it repaints the whole screen, so everything that
+			// should stay visible (camera window, debug tiles, ESP below) must
+			// draw after it.
 			F::FlexFOV.DrawComposite();
+			F::FlexFOV.DrawDebug();
+			F::CameraWindow.Draw();
 
 			F::AntiAim.Draw(pLocal);
 			F::Visuals.DrawPickupTimers();

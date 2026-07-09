@@ -19,8 +19,20 @@ MAKE_HOOK(CClientModeShared_DoPostScreenSpaceEffects, U::Memory.GetVirtual(I::Cl
 		return CALL_ORIGINAL(rcx, pSetup);
 	
 	F::Visuals.ProjectileTrace(H::Entities.GetLocal(), H::Entities.GetWeapon());
-	if (F::CameraWindow.m_bDrawing || F::FlexFOV.m_bDrawing)
+	// Cheap (scene-stripped) main pass: the composite paints over everything this
+	// pass produces, so chams / glow / effects here are pure wasted work.
+	if (F::CameraWindow.m_bDrawing || F::FlexFOV.m_bReplacingView)
 		return CALL_ORIGINAL(rcx, pSetup);
+
+	// FlexFOV face capture: render chams into the cube faces so they survive the
+	// composite (otherwise they only exist in the covered main view). Glow stays
+	// off here - its screen-sized buffers don't match the square face RTs.
+	if (F::FlexFOV.m_bDrawing)
+	{
+		if (!I::EngineVGui->IsGameUIVisible() && F::Materials.m_bLoaded)
+			F::Chams.RenderMain();
+		return CALL_ORIGINAL(rcx, pSetup);
+	}
 
 	F::Visuals.DrawEffects();
 	if (I::EngineVGui->IsGameUIVisible() || !F::Materials.m_bLoaded)
@@ -37,7 +49,7 @@ MAKE_HOOK(CViewRender_DrawViewModels, S::CViewRender_DrawViewModels(), void,
 	DEBUG_RETURN(CViewRender_DrawViewModels, rcx, viewRender, drawViewmodel);
 
 	CALL_ORIGINAL(rcx, viewRender, F::Spectate.HasTarget() && !I::EngineClient->IsHLTV() ? false : drawViewmodel);
-	if (SDK::CleanScreenshot() || F::CameraWindow.m_bDrawing || F::FlexFOV.m_bDrawing || I::EngineVGui->IsGameUIVisible() || !F::Materials.m_bLoaded)
+	if (SDK::CleanScreenshot() || F::CameraWindow.m_bDrawing || F::FlexFOV.m_bDrawing || F::FlexFOV.m_bReplacingView || I::EngineVGui->IsGameUIVisible() || !F::Materials.m_bLoaded)
 		return;
 
 	F::Glow.RenderSecond();

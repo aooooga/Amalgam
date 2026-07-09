@@ -38,9 +38,18 @@ public:
 	void CaptureGlobe(void* rcx, const CViewSetup& pViewSetup);
 
 	// True when the composite is active and fully able to render this frame, so
-	// the CViewRender_RenderView hook can skip the normal main-view render (the
-	// composite covers every pixel anyway) to save the extra full-scene pass.
+	// the CViewRender_RenderView hook can run the normal main-view render as a
+	// cheap pass (the composite covers every pixel anyway).
 	bool ShouldReplaceView();
+
+	// Wraps the main-view CALL_ORIGINAL when ShouldReplaceView(): zeroes the
+	// scene-draw cvars (world / entities / skybox / viewmodel / particles) so the
+	// redundant main render costs almost nothing, while the engine still runs the
+	// rest of the pass - crucially the in-game HUD paint that lives inside
+	// RenderView, which is what draws the composite. (Skipping CALL_ORIGINAL
+	// entirely skipped that paint too and froze the screen.)
+	void BeginCheapMainView();
+	void EndCheapMainView();
 
 	// Blits the 6 captured faces as debug thumbnails over the current screen.
 	// Called from IEngineVGui_Paint.
@@ -61,9 +70,19 @@ public:
 	void Initialize();
 	void Unload();
 
-	// True while we are re-rendering the scene into a face RT, so other hooks
-	// (ESP, chams, glow, post fx) can skip themselves during the capture pass.
+	// True while we are re-rendering the scene into a face RT. Glow and the
+	// camera window skip themselves during the capture pass; chams deliberately
+	// do NOT (they must be baked into the faces or the composite covers them).
 	bool m_bDrawing = false;
+
+	// True while the cheap (scene-stripped) main-view pass is running, so chams /
+	// glow / screen effects can skip work the composite would paint over anyway.
+	bool m_bReplacingView = false;
+
+	// Which cube faces the current composite mesh actually samples (recorded when
+	// the mesh is rebuilt). CaptureGlobe skips rendering the rest - e.g. BACK is
+	// never sampled below ~180 fov, UP/DOWN often aren't at moderate fov.
+	bool m_bFaceNeeded[FACE_COUNT] = { true, true, true, true, true, true };
 
 	// Whether the wide-FOV pipeline is active this frame (needs the globe
 	// captured). Set by CVisuals::FOV from the debug/composite toggles for now.

@@ -1135,11 +1135,68 @@ public:
 	}
 };
 
+// A color stop on the glow health gradient; Pos is the health fraction (0..1).
+struct GlowStop_t
+{
+	float Pos = 0.f;
+	Color_t Color = { 255, 255, 255, 255 };
+};
+
+// Evaluate a stop list (sorted by Pos) at health fraction t: clamped at the
+// ends, linearly interpolated between neighboring stops.
+inline Color_t EvalGlowStops(const std::vector<GlowStop_t>& vStops, float t)
+{
+	if (vStops.empty())
+		return { 255, 255, 255, 255 };
+	if (t <= vStops.front().Pos)
+		return vStops.front().Color;
+	if (t >= vStops.back().Pos)
+		return vStops.back().Color;
+	for (size_t i = 1; i < vStops.size(); i++)
+	{
+		if (t <= vStops[i].Pos)
+		{
+			const auto& a = vStops[i - 1];
+			const auto& b = vStops[i];
+			const float flRange = b.Pos - a.Pos;
+			const float f = flRange > 0.f ? (t - a.Pos) / flRange : 0.f;
+			return {
+				byte(a.Color.r + (b.Color.r - a.Color.r) * f),
+				byte(a.Color.g + (b.Color.g - a.Color.g) * f),
+				byte(a.Color.b + (b.Color.b - a.Color.b) * f),
+				byte(a.Color.a + (b.Color.a - a.Color.a) * f)
+			};
+		}
+	}
+	return vStops.back().Color;
+}
+
 struct Glow_t
 {
 	int Stencil = 0;
 	float Blur = 0;
 
+	// Glow's own color, used instead of the group color.
+	Color_t Color = { 255, 255, 255, 255 };
+
+	// Color by health: entities with HP get their glow color from the Stops
+	// gradient evaluated at currentHP/maxHP (entities without HP use Color).
+	bool HealthColor = false;
+	std::vector<GlowStop_t> Stops = {
+		{ 0.f, { 255, 0, 0, 255 } }, { 0.5f, { 255, 255, 0, 255 } }, { 1.f, { 0, 255, 0, 255 } }
+	};
+
+	// Resolve the glow color for an entity with the given health fraction
+	// (pass -1 for entities without HP).
+	inline Color_t GetColor(float flHealthFrac = -1.f) const
+	{
+		if (HealthColor && flHealthFrac >= 0.f && !Stops.empty())
+			return EvalGlowStops(Stops, flHealthFrac);
+		return Color;
+	}
+
+	// Equality/hash cover only the render-pass parameters: entities are batched
+	// by (Stencil, Blur) into passes and the color is carried per entity.
 	inline bool operator==(const Glow_t& t) const
 	{
 		return Stencil == t.Stencil && Blur == t.Blur;

@@ -1,5 +1,7 @@
 #include "Configs.h"
 
+#include <algorithm>
+
 #include "../Binds/Binds.h"
 #include "../Visuals/Groups/Groups.h"
 #include "../Visuals/Materials/Materials.h"
@@ -96,6 +98,19 @@ template <> void CConfigs::SaveJson(boost::property_tree::ptree& t, const std::s
 	boost::property_tree::ptree tChild;
 	SaveJson(tChild, "Stencil", v.Stencil);
 	SaveJson(tChild, "Blur", v.Blur);
+	SaveJson(tChild, "Color", v.Color);
+	SaveJson(tChild, "HealthColor", v.HealthColor);
+
+	boost::property_tree::ptree tStops;
+	for (auto& tStop : v.Stops)
+	{
+		boost::property_tree::ptree tEntry;
+		SaveJson(tEntry, "Pos", tStop.Pos);
+		SaveJson(tEntry, "Color", tStop.Color);
+
+		tStops.push_back({ "", tEntry });
+	}
+	tChild.put_child("Stops", tStops);
 
 	t.put_child(s, tChild);
 }
@@ -220,6 +235,21 @@ template <> void CConfigs::LoadJson(const boost::property_tree::ptree& t, const 
 	{
 		LoadJson(*tChild, "Stencil", v.Stencil);
 		LoadJson(*tChild, "Blur", v.Blur);
+		LoadJson(*tChild, "Color", v.Color);
+		LoadJson(*tChild, "HealthColor", v.HealthColor);
+
+		if (auto tStops = tChild->get_child_optional("Stops"))
+		{
+			v.Stops.clear();
+			for (auto& [_, tEntry] : *tStops)
+			{
+				GlowStop_t tStop;
+				LoadJson(tEntry, "Pos", tStop.Pos);
+				LoadJson(tEntry, "Color", tStop.Color);
+				v.Stops.push_back(tStop);
+			}
+			std::sort(v.Stops.begin(), v.Stops.end(), [](const GlowStop_t& a, const GlowStop_t& b) { return a.Pos < b.Pos; });
+		}
 	}
 }
 

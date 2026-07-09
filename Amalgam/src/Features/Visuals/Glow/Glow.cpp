@@ -207,12 +207,13 @@ void CGlow::RenderSecond()
 	}
 }
 
-void CGlow::InitFlexBuffers(int iSize)
+void CGlow::InitFlexBuffers(int iW, int iH)
 {
-	if (m_pFlexBuffer1 && iSize == m_iFlexSize)
+	if (m_pFlexBuffer1 && iW == m_iFlexW && iH == m_iFlexH)
 		return;
 	UnloadFlexBuffers();
-	m_iFlexSize = iSize;
+	m_iFlexW = iW;
+	m_iFlexH = iH;
 
 	// Mirrors the RenderBuffer setup but face-sized and with its own depth (the
 	// framebuffer-shared depth is smaller than a face). The cleared separate
@@ -223,7 +224,7 @@ void CGlow::InitFlexBuffers(int iSize)
 		ITexture*& pBuffer = i ? m_pFlexBuffer2 : m_pFlexBuffer1;
 		pBuffer = I::MaterialSystem->CreateNamedRenderTargetTextureEx(
 			i ? "FlexFOVGlow2" : "FlexFOVGlow1",
-			iSize, iSize,
+			iW, iH,
 			RT_SIZE_LITERAL,
 			IMAGE_FORMAT_RGB888,
 			MATERIAL_RT_DEPTH_SEPARATE,
@@ -274,7 +275,7 @@ void CGlow::UnloadFlexBuffers()
 			*ppTex = nullptr;
 		}
 	}
-	m_iFlexSize = 0;
+	m_iFlexW = m_iFlexH = 0;
 }
 
 // Runs the full glow pipeline against the currently-bound FlexFOV face RT.
@@ -292,7 +293,13 @@ void CGlow::RenderOnFlexFace()
 	if (!pRenderContext || !m_pMatGlowColor)
 		return;
 
-	const int w = m_iFlexSize, h = m_iFlexSize;
+	const int w = m_iFlexW, h = m_iFlexH;
+
+	// The face RT's stencil survives across frames (the capture pass clears only
+	// color+depth) and FirstBegin stamps 1s into it every frame, so without this
+	// clear the accumulated mask eventually blocks the halo almost everywhere
+	// (glow "sometimes shining through" was the leftover unstamped pixels).
+	pRenderContext->ClearBuffers(false, false, true);
 
 	FirstBegin(pRenderContext);
 	for (auto& [tGlow, vInfo] : m_mEntities)

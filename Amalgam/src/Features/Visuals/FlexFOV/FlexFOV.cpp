@@ -25,6 +25,41 @@ static constexpr float FLEXFOV_FACE_FOV = 130.f;
 // equal to that reference for any FLEXFOV_FACE_FOV.
 static constexpr float FLEXFOV_REF_FACE_FOV = 95.f;
 
+// Wide rig: two 130(h) x 145(v) faces yawed +-WideYawDeg around the view up
+// axis (a single centered face when the yaw is 0, i.e. fov <= 120). Two passes
+// instead of the cube's three in the 130-245 range; the extra vertical fov is
+// what lets one face row cover the screen corners that forced the cube's
+// up/down faces at high fov.
+static constexpr float FLEXFOV_WIDE_FOV_V = 145.f;
+
+static constexpr float FLEXFOV_DEG2RAD = 3.14159265f / 180.f;
+
+static float CurrentFov()
+{
+	float flFovX = Vars::Visuals::UI::FieldOfView.Value;
+	if (flFovX < 90.f)
+		flFovX = 140.f;
+	return std::min(flFovX, 360.f);
+}
+
+// Yaw of the two wide faces. Face half-width is 65deg; keep a 5deg containment
+// margin inside it, so each face reaches fov/2 with room for boundary triangles.
+static float WideYawDeg(float flFovX)
+{
+	return std::max(0.f, flFovX * 0.5f - 60.f);
+}
+
+// The wide rig covers up to 2*(yaw+65) = 260 horizontally (capped 245 for
+// margin), but the screen corners also need vertical room: at a face's edge
+// its vertical reach shrinks to atan(tan(72.5)*cos(65)) ~ 57.5deg of latitude,
+// and the corner latitude of a Mercator view is atan(sinh((fov/2 rad)/aspect)).
+// That works out to roughly fov <= aspect*141deg (16:9 -> ~250). Narrower
+// aspects (4:3) fall back to the cube rig earlier.
+static bool UseWideRig(float flFovX, float flAspect)
+{
+	return flFovX <= std::min(245.f, flAspect * 141.f);
+}
+
 // --- Inverse projection math (ported from shaunlebron/flex-fov flex.fs) ------
 // Coordinate frame: forward = +z, right = +x, up = +y, then z is negated so the
 // front face looks down -z (matching the flex-fov camera-frame convention).
@@ -213,20 +248,37 @@ void CFlexFOV::ComputeFaceAngles(const Vec3& vViewAngles, Vec3 vOut[FACE_COUNT])
 	vOut[FACE_DOWN]  = AnglesFromBasis(-vU,  vL,  vF);
 }
 
-// Renders the scene into a single cube face render target.
-void CFlexFOV::RenderFace(void* rcx, const CViewSetup& pViewSetup, EFace eFace, const Vec3& vAngles)
+// The two wide-face orientations: the view basis yawed +-flYawDeg around the
+// view up axis (face 0 to the right, face 1 to the left).
+void CFlexFOV::ComputeWideAngles(const Vec3& vViewAngles, float flYawDeg, Vec3 vOut[2])
 {
-	ITexture* pTexture = m_pFaceTextures[eFace];
+	Vec3 vF, vR, vU;
+	Math::AngleVectors(vViewAngles, &vF, &vR, &vU);
+	const Vec3 vL = -vR;
+
+	const float s = std::sin(flYawDeg * FLEXFOV_DEG2RAD);
+	const float c = std::cos(flYawDeg * FLEXFOV_DEG2RAD);
+	// fwd' = F*c +- R*s; left' = -(R*c -+ F*s) = L*c +- F*s
+	vOut[0] = AnglesFromBasis(vF * c + vR * s, vL * c + vF * s, vU);
+	vOut[1] = AnglesFromBasis(vF * c - vR * s, vL * c - vF * s, vU);
+}
+
+// Renders the scene into a single face render target. fov is horizontal; the
+// engine derives the vertical fov from the aspect (tan(v/2) = tan(h/2)/aspect),
+// so the cube's square faces get 130x130 and the wide faces 130x145.
+void CFlexFOV::RenderFace(void* rcx, const CViewSetup& pViewSetup, int iFace, const Vec3& vAngles)
+{
+	ITexture* pTexture = m_pFaceTextures[iFace];
 	if (!pTexture)
 		return;
 
 	CViewSetup tViewSetup = pViewSetup;
 	tViewSetup.x = 0;
 	tViewSetup.y = 0;
-	tViewSetup.width = m_iFaceSize;
-	tViewSetup.height = m_iFaceSize;
-	tViewSetup.m_flAspectRatio = 1.f;
-	tViewSetup.fov = FLEXFOV_FACE_FOV;	// slightly oversized for seam overlap
+	tViewSetup.width = m_iFaceW;
+	tViewSetup.height = m_iFaceH;
+	tViewSetup.m_flAspectRatio = float(m_iFaceW) / float(m_iFaceH);
+	tViewSetup.fov = FLEXFOV_FACE_FOV;	// oversized for seam overlap
 	tViewSetup.angles = vAngles;
 	// origin left as the player's eye (pViewSetup.origin)
 
@@ -248,11 +300,19 @@ void CFlexFOV::RenderFace(void* rcx, const CViewSetup& pViewSetup, EFace eFace, 
 // scene-stripped main pass would leave a stale frame under the HUD.
 bool CFlexFOV::ShouldReplaceView()
 {
-	return m_bComposite
-		&& Vars::Visuals::UI::FlexFOVSkipMainView.Value
-		&& m_pFaceTextures[FACE_FRONT] && m_pFaceMaterials[FACE_FRONT]
-		&& I::EngineClient->IsInGame()
-		&& H::Entities.GetLocal();
+	if (!m_bComposite
+		|| !Vars::Visuals::UI::FlexFOVSkipMainView.Value
+		|| !m_pFaceTextures[FACE_FRONT] || !m_pFaceMaterials[FACE_FRONT]
+		|| !I::EngineClient->IsInGame()
+		|| !H::Entities.GetLocal())
+		return false;
+
+	// On a rig/size switch frame the composite skips drawing (textures are stale
+	// until CaptureGlobe rebuilds them at the end of the frame), so the main view
+	// must render normally or the screen would show a stale frame under the HUD.
+	bool bWide; int iW, iH;
+	ComputeRig(bWide, iW, iH);
+	return bWide == m_bWideRig && iW == m_iFaceW && iH == m_iFaceH;
 }
 
 // Scene-draw cvars zeroed for the cheap main pass. All are plain render gates
@@ -291,19 +351,21 @@ void CFlexFOV::EndCheapMainView()
 
 void CFlexFOV::CaptureGlobe(void* rcx, const CViewSetup& pViewSetup)
 {
-	if (!m_bActive || m_bDrawing || !m_pFaceTextures[0] || !I::EngineClient->IsInGame())
+	if (!m_bActive || m_bDrawing || !I::EngineClient->IsInGame())
 		return;
 
-	// If the quality slider changed the target face size, rebuild the RTs before
-	// capturing (cheap: only happens when the user drags the slider). Done here,
-	// outside m_bDrawing, so we never tear down textures mid-capture.
-	if (DesiredFaceSize() != m_iFaceSize)
+	// If the fov crossed the rig boundary or the quality slider changed the face
+	// size, rebuild the RTs before capturing (only happens on those changes).
+	// Done here, outside m_bDrawing, so we never tear down textures mid-capture.
+	bool bWide; int iW, iH;
+	ComputeRig(bWide, iW, iH);
+	if (bWide != m_bWideRig || iW != m_iFaceW || iH != m_iFaceH || !m_pFaceTextures[0])
 	{
 		Unload();
 		Initialize();
-		if (!m_pFaceTextures[0])
-			return;
 	}
+	if (!m_pFaceTextures[0])
+		return;
 
 	m_bDrawing = true;
 
@@ -315,7 +377,17 @@ void CFlexFOV::CaptureGlobe(void* rcx, const CViewSetup& pViewSetup)
 	Math::AngleVectors(m_vViewAngles, &m_vViewFwd, &m_vViewRight, &m_vViewUp);
 
 	Vec3 vFaceAngles[FACE_COUNT];
-	ComputeFaceAngles(pViewSetup.angles, vFaceAngles);
+	int nFaces;
+	if (m_bWideRig)
+	{
+		nFaces = 2;
+		ComputeWideAngles(pViewSetup.angles, WideYawDeg(CurrentFov()), vFaceAngles);
+	}
+	else
+	{
+		nFaces = FACE_COUNT;
+		ComputeFaceAngles(pViewSetup.angles, vFaceAngles);
+	}
 
 	// Per-pass work that's expensive and barely visible in the warp, dropped for
 	// the capture passes only: dynamic entity shadows (CPU per pass) and water
@@ -330,12 +402,12 @@ void CFlexFOV::CaptureGlobe(void* rcx, const CViewSetup& pViewSetup)
 		r_WaterDrawReflection->SetValue(0);
 
 	// Only render the faces the composite mesh actually samples at the current
-	// fov (recorded when the mesh was built). The debug tiles want all six.
+	// fov (recorded when the mesh was built). The debug tiles want all of them.
 	const bool bAllFaces = !m_bComposite || Vars::Visuals::UI::FlexFOVDebug.Value;
-	for (int i = 0; i < FACE_COUNT; i++)
+	for (int i = 0; i < nFaces; i++)
 	{
 		if (bAllFaces || m_bFaceNeeded[i])
-			RenderFace(rcx, pViewSetup, static_cast<EFace>(i), vFaceAngles[i]);
+			RenderFace(rcx, pViewSetup, i, vFaceAngles[i]);
 	}
 
 	if (r_shadows)
@@ -377,7 +449,7 @@ void CFlexFOV::DrawDebug()
 		pRenderContext->DrawScreenSpaceRectangle(
 			m_pFaceMaterials[i],
 			iX, iY, iTile, iTile,
-			0, 0, m_iFaceSize, m_iFaceSize,
+			0, 0, m_iFaceW, m_iFaceH,
 			m_pFaceTextures[i]->GetActualWidth(), m_pFaceTextures[i]->GetActualHeight(),
 			nullptr, 1, 1
 		);
@@ -402,11 +474,17 @@ void CFlexFOV::DrawComposite()
 	pRenderContext->GetWindowSize(sw, sh);
 	const float flAspect = sh ? float(sw) / float(sh) : (16.f / 9.f);
 	// Driven by the FOV slider; default to 140 when the slider is low/off.
-	float flFovX = Vars::Visuals::UI::FieldOfView.Value;
-	if (flFovX < 90.f)
-		flFovX = 140.f;
-	flFovX = std::min(flFovX, 360.f);
+	const float flFovX = CurrentFov();
 	const float flStrength = Vars::Visuals::UI::FlexFOVStrength.Value; // Panini compression d
+
+	// The mesh must match the rig the textures were captured with; on a rig
+	// switch frame skip drawing (CaptureGlobe rebuilds at the end of the frame,
+	// and ShouldReplaceView already fell back to the normal render).
+	if (UseWideRig(flFovX, flAspect) != m_bWideRig)
+	{
+		pRenderContext->Release();
+		return;
+	}
 
 	// Snapshot the projection inputs for WorldToScreen (single source of truth so
 	// overlays reproject with the exact same parameters as the mesh warp).
@@ -425,10 +503,49 @@ void CFlexFOV::DrawComposite()
 	{
 		s_flCacheFov = flFovX; s_flCacheStrength = flStrength; s_flCacheAspect = flAspect;
 
-		// UV scale for a face rendered at FLEXFOV_FACE_FOV degrees (square, aspect 1):
-		// 0.5 / tan(fov/2). This value gives geometrically correct, seamless stitching
-		// (confirmed clean in testing); the earlier aspect-scaled variant broke it.
-		const float d = 0.5f / std::tan(FLEXFOV_FACE_FOV * 0.5f * (3.14159265f / 180.f));
+		// Per-rig face set: bases in view-local ray space, per-axis UV scales
+		// (d = 0.5/tan(halfFov), the stitching invariant - per axis now that wide
+		// faces are taller than wide) and containment limits (tan(halfFov)*0.99).
+		Vec3 vBFwd[FACE_COUNT], vBRight[FACE_COUNT], vBUp[FACE_COUNT], vBBack[FACE_COUNT];
+		int iPriority[FACE_COUNT];
+		int nFaces;
+		const float flHalfW = FLEXFOV_FACE_FOV * 0.5f * FLEXFOV_DEG2RAD;
+		float flHalfH = flHalfW;
+		if (m_bWideRig)
+		{
+			flHalfH = FLEXFOV_WIDE_FOV_V * 0.5f * FLEXFOV_DEG2RAD;
+			const float flYaw = WideYawDeg(flFovX);
+			nFaces = flYaw > 0.f ? 2 : 1;
+			const float s = std::sin(flYaw * FLEXFOV_DEG2RAD);
+			const float c = std::cos(flYaw * FLEXFOV_DEG2RAD);
+			for (int f = 0; f < nFaces; f++)
+			{
+				const float sgn = f == 0 ? 1.f : -1.f; // face 0 right, face 1 left
+				vBFwd[f]   = Vec3(sgn * s, 0.f, -c);
+				vBRight[f] = Vec3(c, 0.f, sgn * s);
+				vBUp[f]    = Vec3(0.f, 1.f, 0.f);
+				vBBack[f]  = Vec3(-sgn * s, 0.f, c);
+				iPriority[f] = f;
+			}
+		}
+		else
+		{
+			nFaces = FACE_COUNT;
+			// Priority: front first, then sides, back last - pack triangles into
+			// the fewest (and cheapest-to-have) faces.
+			static const int s_iCubePriority[FACE_COUNT] =
+				{ FACE_FRONT, FACE_LEFT, FACE_RIGHT, FACE_UP, FACE_DOWN, FACE_BACK };
+			for (int f = 0; f < FACE_COUNT; f++)
+			{
+				vBFwd[f] = s_FaceFwd[f]; vBRight[f] = s_FaceRight[f];
+				vBUp[f] = s_FaceUp[f]; vBBack[f] = s_FaceBack[f];
+				iPriority[f] = s_iCubePriority[f];
+			}
+		}
+		const float dU = 0.5f / std::tan(flHalfW);
+		const float dV = 0.5f / std::tan(flHalfH);
+		const float flLimW = std::tan(flHalfW) * 0.99f;
+		const float flLimH = std::tan(flHalfH) * 0.99f;
 
 		const int nGrid = 96; // finer grid: peripheral triangles span less angle at wide FOV
 		const int nSide = nGrid + 1;
@@ -446,22 +563,12 @@ void CFlexFOV::DrawComposite()
 			}
 		}
 
-		// Bucket each triangle into the face its centroid looks at.
+		// Bucket each triangle into a face.
 		for (int f = 0; f < FACE_COUNT; f++)
 			vBuckets[f].clear();
 
 		auto ClipX = [&](int idx) { return -1.f + 2.f * (idx % nSide) / nGrid; };
 		auto ClipY = [&](int idx) { return -1.f + 2.f * (idx / nSide) / nGrid; };
-
-		// Containment limit: a ray is inside a face's usable UV area when
-		// |lx/lz| and |ly/lz| stay under tan(faceFov/2), shrunk 1% for filtering
-		// margin at the face edge.
-		const float flContain = std::tan(FLEXFOV_FACE_FOV * 0.5f * (3.14159265f / 180.f)) * 0.99f;
-		// Priority: front first, then sides, back last - so triangles pack into
-		// the fewest (and cheapest-to-have) faces and CaptureGlobe can skip
-		// whole scene passes for the unsampled ones.
-		static const int s_iFacePriority[FACE_COUNT] =
-			{ FACE_FRONT, FACE_LEFT, FACE_RIGHT, FACE_UP, FACE_DOWN, FACE_BACK };
 
 		auto EmitTri = [&](int a, int b, int c)
 		{
@@ -471,17 +578,17 @@ void CFlexFOV::DrawComposite()
 			// all three vertices. Nearest-face assignment would spread triangles
 			// across faces that the wide face fov makes unnecessary.
 			int iFace = -1;
-			for (int p = 0; p < FACE_COUNT && iFace < 0; p++)
+			for (int p = 0; p < nFaces && iFace < 0; p++)
 			{
-				const int f = s_iFacePriority[p];
+				const int f = iPriority[p];
 				bool bContained = true;
 				for (int t = 0; t < 3 && bContained; t++)
 				{
 					const Vec3& r = vRays[tri[t]];
-					const float lz = Dot3(r, s_FaceBack[f]);
+					const float lz = Dot3(r, vBBack[f]);
 					if (lz > -0.05f
-						|| std::fabs(Dot3(r, s_FaceRight[f])) > -lz * flContain
-						|| std::fabs(Dot3(r, s_FaceUp[f])) > -lz * flContain)
+						|| std::fabs(Dot3(r, vBRight[f])) > -lz * flLimW
+						|| std::fabs(Dot3(r, vBUp[f])) > -lz * flLimH)
 						bContained = false;
 				}
 				if (bContained)
@@ -494,11 +601,11 @@ void CFlexFOV::DrawComposite()
 			if (iFace < 0)
 			{
 				float flBestMin = -1e30f;
-				for (int f = 0; f < FACE_COUNT; f++)
+				for (int f = 0; f < nFaces; f++)
 				{
 					float flMin = 1e30f;
 					for (int t = 0; t < 3; t++)
-						flMin = std::min(flMin, Dot3(vRays[tri[t]], s_FaceFwd[f]));
+						flMin = std::min(flMin, Dot3(vRays[tri[t]], vBFwd[f]));
 					if (flMin > flBestMin) { flBestMin = flMin; iFace = f; }
 				}
 			}
@@ -506,17 +613,18 @@ void CFlexFOV::DrawComposite()
 			for (int t = 0; t < 3; t++)
 			{
 				const Vec3& r = vRays[tri[t]];
-				float lz = Dot3(r, s_FaceBack[iFace]); // < 0 for the owning face
+				float lz = Dot3(r, vBBack[iFace]); // < 0 for the owning face
 				if (lz > -0.2f)
 					lz = -0.2f; // guard: never let a straddling vertex blow the UV to infinity
-				const float lx = Dot3(r, s_FaceRight[iFace]);
-				const float ly = Dot3(r, s_FaceUp[iFace]);
+				const float lx = Dot3(r, vBRight[iFace]);
+				const float ly = Dot3(r, vBUp[iFace]);
 				FVert fv;
 				fv.x = ClipX(tri[t]); fv.y = ClipY(tri[t]); fv.z = 0.5f;
-				// No UV clamp: faces are captured oversized (FLEXFOV_FACE_FOV > 90) so
-				// boundary triangles sample the overlap region and stitch seamlessly.
-				fv.u = -lx / lz * d + 0.5f;
-				fv.v = 0.5f + ly / lz * d; // v flipped for D3D top-left origin
+				// No UV clamp: faces are captured oversized (fov > the area the
+				// containment assigns them) so boundary triangles sample the
+				// overlap region and stitch seamlessly.
+				fv.u = -lx / lz * dU + 0.5f;
+				fv.v = 0.5f + ly / lz * dV; // v flipped for D3D top-left origin
 				vBuckets[iFace].push_back(fv);
 			}
 		};
@@ -535,11 +643,10 @@ void CFlexFOV::DrawComposite()
 		}
 
 		// Record which faces the mesh actually samples so CaptureGlobe only
-		// renders those (BACK is never needed below ~180 fov; UP/DOWN often
-		// aren't at moderate fov). FRONT stays on as the pipeline's keystone.
+		// renders those. Face 0 (front / wide-right) stays on as the keystone.
 		for (int f = 0; f < FACE_COUNT; f++)
 			m_bFaceNeeded[f] = !vBuckets[f].empty();
-		m_bFaceNeeded[FACE_FRONT] = true;
+		m_bFaceNeeded[0] = true;
 	}
 
 	// Identity model/view/projection so vertex positions are clip coords.
@@ -658,7 +765,7 @@ bool CFlexFOV::WorldToScreen(const Vec3& vWorld, Vec3& vScreen, bool bAlways)
 	return false;
 }
 
-// Desired square face resolution. Pixels-per-radian at a face center is
+// Desired face width. Pixels-per-radian at a face center is
 // size * 0.5/tan(faceFov/2), so the wide 130deg faces scale their size up by
 // tan(faceFov/2)/tan(ref/2) (~1.96x at 130) to keep the same center fidelity
 // the original 95deg screen-height faces had. That extra size is GPU fill,
@@ -669,28 +776,55 @@ int CFlexFOV::DesiredFaceSize()
 	int iScreenW = 0, iScreenH = 0;
 	I::MaterialSystem->GetBackBufferDimensions(iScreenW, iScreenH);
 	const int iBase = iScreenH > 0 ? iScreenH : 1024;
-	const float flFidelity = std::tan(FLEXFOV_FACE_FOV * 0.5f * (3.14159265f / 180.f))
-		/ std::tan(FLEXFOV_REF_FACE_FOV * 0.5f * (3.14159265f / 180.f));
+	const float flFidelity = std::tan(FLEXFOV_FACE_FOV * 0.5f * FLEXFOV_DEG2RAD)
+		/ std::tan(FLEXFOV_REF_FACE_FOV * 0.5f * FLEXFOV_DEG2RAD);
 	const float flQuality = std::clamp(Vars::Visuals::UI::FlexFOVQuality.Value, 0.2f, 1.f);
 	return std::clamp(static_cast<int>(iBase * flFidelity * flQuality), 256, 4096);
 }
 
+void CFlexFOV::ComputeRig(bool& bWide, int& iW, int& iH)
+{
+	int iScreenW = 0, iScreenH = 0;
+	I::MaterialSystem->GetBackBufferDimensions(iScreenW, iScreenH);
+	const float flAspect = iScreenH > 0 ? float(iScreenW) / float(iScreenH) : (16.f / 9.f);
+
+	bWide = UseWideRig(CurrentFov(), flAspect);
+	iW = iH = DesiredFaceSize();
+	if (bWide)
+	{
+		// Square texels at the face center: H/W = tan(vfov/2)/tan(hfov/2)
+		// (~1.48). If that overflows the safe RT ceiling, shrink both axes so
+		// texels stay square.
+		float flW = float(iW);
+		float flH = flW * std::tan(FLEXFOV_WIDE_FOV_V * 0.5f * FLEXFOV_DEG2RAD)
+			/ std::tan(FLEXFOV_FACE_FOV * 0.5f * FLEXFOV_DEG2RAD);
+		if (flH > 4096.f)
+		{
+			flW *= 4096.f / flH;
+			flH = 4096.f;
+		}
+		iW = static_cast<int>(flW);
+		iH = static_cast<int>(flH);
+	}
+}
+
 void CFlexFOV::Initialize()
 {
-	m_iFaceSize = DesiredFaceSize();
+	ComputeRig(m_bWideRig, m_iFaceW, m_iFaceH);
 
 	// Face-sized glow buffers so outlines can be baked into the faces (they
 	// track the face size, so they're managed here rather than in CGlow).
-	F::Glow.InitFlexBuffers(m_iFaceSize);
+	F::Glow.InitFlexBuffers(m_iFaceW, m_iFaceH);
 
-	for (int i = 0; i < FACE_COUNT; i++)
+	const int nFaces = m_bWideRig ? 2 : FACE_COUNT;
+	for (int i = 0; i < nFaces; i++)
 	{
 		if (!m_pFaceTextures[i])
 		{
 			m_pFaceTextures[i] = I::MaterialSystem->CreateNamedRenderTargetTextureEx(
 				s_szFaceNames[i],
-				m_iFaceSize,
-				m_iFaceSize,
+				m_iFaceW,
+				m_iFaceH,
 				RT_SIZE_LITERAL,
 				IMAGE_FORMAT_RGB888,
 				// Own depth per face: the fidelity-scaled faces are larger than

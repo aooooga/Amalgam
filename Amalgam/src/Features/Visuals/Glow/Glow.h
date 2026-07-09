@@ -36,7 +36,7 @@ private:
 	IMaterial* m_pFlexBlurX = nullptr;
 	IMaterial* m_pFlexBlurY = nullptr;
 	IMaterialVar* m_pFlexBloomAmount = nullptr;
-	int m_iFlexSize = 0;
+	int m_iFlexW = 0, m_iFlexH = 0;
 
 
 
@@ -76,7 +76,7 @@ public:
 	// FlexFOV support: renders the glow outlines into the currently-bound cube
 	// face RT during a capture pass (face camera matrices active), so outlines
 	// are baked into the faces and warped by the composite like the scene.
-	void InitFlexBuffers(int iSize);
+	void InitFlexBuffers(int iW, int iH);
 	void UnloadFlexBuffers();
 	void RenderOnFlexFace();
 	void RenderHandler(const DrawModelState_t& pState, const ModelRenderInfo_t& pInfo, matrix3x4* pBoneToWorld);

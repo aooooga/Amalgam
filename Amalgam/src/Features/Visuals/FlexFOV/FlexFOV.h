@@ -24,17 +24,26 @@ public:
 	};
 
 private:
+	// Face RT slots. The cube rig uses all 6; the wide rig (two tall faces yawed
+	// left/right, used for fov <= ~245 on widescreen) uses slots 0..1 only.
 	ITexture* m_pFaceTextures[FACE_COUNT] = {};
 	IMaterial* m_pFaceMaterials[FACE_COUNT] = {};
 
-	int m_iFaceSize = 0; // square face resolution (px), set at Initialize from screen height
+	int m_iFaceW = 0, m_iFaceH = 0; // face RT resolution (cube: square, W == H)
+	bool m_bWideRig = false;        // rig the current textures were built for
 
-	void RenderFace(void* rcx, const CViewSetup& pViewSetup, EFace eFace, const Vec3& vAngles);
+	void RenderFace(void* rcx, const CViewSetup& pViewSetup, int iFace, const Vec3& vAngles);
 	void ComputeFaceAngles(const Vec3& vViewAngles, Vec3 vOut[FACE_COUNT]);
+	void ComputeWideAngles(const Vec3& vViewAngles, float flYawDeg, Vec3 vOut[2]);
 
 	// Target square face resolution for the current quality slider (screen height
-	// * quality). CaptureGlobe rebuilds the face RTs when this changes.
+	// * fidelity compensation * quality). Rebuilt when this changes.
 	int DesiredFaceSize();
+
+	// Decides the rig (wide vs cube) and face RT dims for the current fov,
+	// aspect and quality. Used identically by Initialize / CaptureGlobe /
+	// ShouldReplaceView so they always agree.
+	void ComputeRig(bool& bWide, int& iW, int& iH);
 
 public:
 	// Captures all 6 faces into their render targets. Called from the

@@ -230,13 +230,10 @@ void CFlexFOV::DrawComposite()
 	flFovX = std::min(flFovX, 360.f);
 	const float flStrength = Vars::Visuals::UI::FlexFOVStrength.Value; // Panini compression d
 
-	// UV scale for a face. Source renders a CViewSetup's fov as a 4:3-referenced
-	// horizontal fov scaled by (aspect / (4/3)); our faces are square (aspect 1),
-	// so the effective horizontal fov is narrower than the nominal value. Match d
-	// to the *effective* fov, else edge rays read central content (zoom-in crop).
-	const float flFaceHalf = FLEXFOV_FACE_FOV * 0.5f * (3.14159265f / 180.f);
-	const float flEffTan = std::tan(flFaceHalf) * (1.f / (4.f / 3.f));
-	const float d = 0.5f / flEffTan;
+	// UV scale for a face rendered at FLEXFOV_FACE_FOV degrees (square, aspect 1):
+	// 0.5 / tan(fov/2). This value gives geometrically correct, seamless stitching
+	// (confirmed clean in testing); the earlier aspect-scaled variant broke it.
+	const float d = 0.5f / std::tan(FLEXFOV_FACE_FOV * 0.5f * (3.14159265f / 180.f));
 
 	const int nGrid = 96; // finer grid: peripheral triangles span less angle at wide FOV
 	const int nSide = nGrid + 1;
@@ -283,13 +280,15 @@ void CFlexFOV::DrawComposite()
 			const Vec3& r = vRays[tri[t]];
 			float lz = Dot3(r, s_FaceBack[iFace]); // < 0 for the owning face
 			if (lz > -0.2f)
-				lz = -0.2f; // guard: never let a straddling vertex blow the UV up
+				lz = -0.2f; // guard: never let a straddling vertex blow the UV to infinity
 			const float lx = Dot3(r, s_FaceRight[iFace]);
 			const float ly = Dot3(r, s_FaceUp[iFace]);
 			FVert fv;
 			fv.x = ClipX(tri[t]); fv.y = ClipY(tri[t]); fv.z = 0.5f;
-			fv.u = std::clamp(-lx / lz * d + 0.5f, 0.f, 1.f);
-			fv.v = std::clamp(0.5f + ly / lz * d, 0.f, 1.f); // v flipped for D3D top-left origin
+			// No UV clamp: faces are captured oversized (FLEXFOV_FACE_FOV > 90) so
+			// boundary triangles sample the overlap region and stitch seamlessly.
+			fv.u = -lx / lz * d + 0.5f;
+			fv.v = 0.5f + ly / lz * d; // v flipped for D3D top-left origin
 			vBuckets[iFace].push_back(fv);
 		}
 	};

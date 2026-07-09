@@ -7,9 +7,22 @@
 #include <algorithm>
 #include <vector>
 
-// Faces are rendered slightly wider than 90 deg so adjacent faces overlap and
-// triangles straddling a face boundary still sample valid UVs (hides seams).
-static constexpr float FLEXFOV_FACE_FOV = 95.f;
+// Face fov. Originally 95 (just enough overlap to hide seams); widened to 130
+// because the frame cost is CPU-bound on the NUMBER of scene passes, not their
+// resolution (lowering face resolution to 0.35x changed nothing in testing).
+// At 130 the front face alone contains everything up to ~115 total fov (ONE
+// scene pass), and front+left+right cover ~250 fov (three passes) - the
+// composite's triangle assignment prefers the fewest faces and CaptureGlobe
+// skips unsampled ones. The wider frustum costs center resolution, which
+// DesiredFaceSize compensates by scaling the face RTs up (GPU fill is free per
+// the same test). Stitching invariant: d = 0.5/tan(FLEXFOV_FACE_FOV/2)
+// everywhere, no UV clamp - fully parametric in this constant.
+static constexpr float FLEXFOV_FACE_FOV = 130.f;
+
+// Reference fidelity: a 95deg face at size == screen height (the original
+// tuning, confirmed sharp). DesiredFaceSize keeps center pixels-per-radian
+// equal to that reference for any FLEXFOV_FACE_FOV.
+static constexpr float FLEXFOV_REF_FACE_FOV = 95.f;
 
 // --- Inverse projection math (ported from shaunlebron/flex-fov flex.fs) ------
 // Coordinate frame: forward = +z, right = +x, up = +y, then z is negated so the
@@ -303,6 +316,13 @@ void CFlexFOV::CaptureGlobe(void* rcx, const CViewSetup& pViewSetup)
 	Vec3 vFaceAngles[FACE_COUNT];
 	ComputeFaceAngles(pViewSetup.angles, vFaceAngles);
 
+	// Dynamic entity shadows re-render per pass and are CPU work barely visible
+	// in the warped periphery; drop them for the capture passes only.
+	static auto r_shadows = H::ConVars.FindVar("r_shadows");
+	const int iShadows = r_shadows ? r_shadows->GetInt() : 0;
+	if (r_shadows)
+		r_shadows->SetValue(0);
+
 	// Only render the faces the composite mesh actually samples at the current
 	// fov (recorded when the mesh was built). The debug tiles want all six.
 	const bool bAllFaces = !m_bComposite || Vars::Visuals::UI::FlexFOVDebug.Value;
@@ -311,6 +331,9 @@ void CFlexFOV::CaptureGlobe(void* rcx, const CViewSetup& pViewSetup)
 		if (bAllFaces || m_bFaceNeeded[i])
 			RenderFace(rcx, pViewSetup, static_cast<EFace>(i), vFaceAngles[i]);
 	}
+
+	if (r_shadows)
+		r_shadows->SetValue(iShadows);
 
 	m_bDrawing = false;
 }
@@ -422,20 +445,54 @@ void CFlexFOV::DrawComposite()
 		auto ClipX = [&](int idx) { return -1.f + 2.f * (idx % nSide) / nGrid; };
 		auto ClipY = [&](int idx) { return -1.f + 2.f * (idx / nSide) / nGrid; };
 
+		// Containment limit: a ray is inside a face's usable UV area when
+		// |lx/lz| and |ly/lz| stay under tan(faceFov/2), shrunk 1% for filtering
+		// margin at the face edge.
+		const float flContain = std::tan(FLEXFOV_FACE_FOV * 0.5f * (3.14159265f / 180.f)) * 0.99f;
+		// Priority: front first, then sides, back last - so triangles pack into
+		// the fewest (and cheapest-to-have) faces and CaptureGlobe can skip
+		// whole scene passes for the unsampled ones.
+		static const int s_iFacePriority[FACE_COUNT] =
+			{ FACE_FRONT, FACE_LEFT, FACE_RIGHT, FACE_UP, FACE_DOWN, FACE_BACK };
+
 		auto EmitTri = [&](int a, int b, int c)
 		{
 			const int tri[3] = { a, b, c };
 
-			// Assign the triangle to the face that best contains its *worst* vertex
-			// (max over faces of the min per-vertex alignment). Far more robust than
-			// a centroid test when a triangle straddles a face boundary at wide FOV.
-			int iFace = 0; float flBestMin = -1e30f;
-			for (int f = 0; f < FACE_COUNT; f++)
+			// Assign the triangle to the highest-priority face that fully contains
+			// all three vertices. Nearest-face assignment would spread triangles
+			// across faces that the wide face fov makes unnecessary.
+			int iFace = -1;
+			for (int p = 0; p < FACE_COUNT && iFace < 0; p++)
 			{
-				float flMin = 1e30f;
-				for (int t = 0; t < 3; t++)
-					flMin = std::min(flMin, Dot3(vRays[tri[t]], s_FaceFwd[f]));
-				if (flMin > flBestMin) { flBestMin = flMin; iFace = f; }
+				const int f = s_iFacePriority[p];
+				bool bContained = true;
+				for (int t = 0; t < 3 && bContained; t++)
+				{
+					const Vec3& r = vRays[tri[t]];
+					const float lz = Dot3(r, s_FaceBack[f]);
+					if (lz > -0.05f
+						|| std::fabs(Dot3(r, s_FaceRight[f])) > -lz * flContain
+						|| std::fabs(Dot3(r, s_FaceUp[f])) > -lz * flContain)
+						bContained = false;
+				}
+				if (bContained)
+					iFace = f;
+			}
+
+			// Fallback for triangles no face fully contains (extreme-periphery
+			// smear regions): the face that best contains the *worst* vertex
+			// (max over faces of the min per-vertex alignment).
+			if (iFace < 0)
+			{
+				float flBestMin = -1e30f;
+				for (int f = 0; f < FACE_COUNT; f++)
+				{
+					float flMin = 1e30f;
+					for (int t = 0; t < 3; t++)
+						flMin = std::min(flMin, Dot3(vRays[tri[t]], s_FaceFwd[f]));
+					if (flMin > flBestMin) { flBestMin = flMin; iFace = f; }
+				}
 			}
 
 			for (int t = 0; t < 3; t++)
@@ -593,18 +650,21 @@ bool CFlexFOV::WorldToScreen(const Vec3& vWorld, Vec3& vScreen, bool bAlways)
 	return false;
 }
 
-// Desired square face resolution = screen height * quality slider. The face
-// render passes are the dominant FlexFOV cost (each is a full scene render at
-// this resolution), so this is the primary FPS lever: lower quality -> smaller
-// face RTs -> less fill and shader work per face. Clamped so it never degenerates
-// or exceeds the screen (which would only cost fill for no fidelity gain).
+// Desired square face resolution. Pixels-per-radian at a face center is
+// size * 0.5/tan(faceFov/2), so the wide 130deg faces scale their size up by
+// tan(faceFov/2)/tan(ref/2) (~1.96x at 130) to keep the same center fidelity
+// the original 95deg screen-height faces had. That extra size is GPU fill,
+// which testing showed is free (the cost is CPU per scene pass); the quality
+// slider still scales it down for GPU-limited machines.
 int CFlexFOV::DesiredFaceSize()
 {
 	int iScreenW = 0, iScreenH = 0;
 	I::MaterialSystem->GetBackBufferDimensions(iScreenW, iScreenH);
 	const int iBase = iScreenH > 0 ? iScreenH : 1024;
+	const float flFidelity = std::tan(FLEXFOV_FACE_FOV * 0.5f * (3.14159265f / 180.f))
+		/ std::tan(FLEXFOV_REF_FACE_FOV * 0.5f * (3.14159265f / 180.f));
 	const float flQuality = std::clamp(Vars::Visuals::UI::FlexFOVQuality.Value, 0.2f, 1.f);
-	return std::clamp(static_cast<int>(iBase * flQuality), 256, iBase);
+	return std::clamp(static_cast<int>(iBase * flFidelity * flQuality), 256, 4096);
 }
 
 void CFlexFOV::Initialize()
@@ -621,7 +681,9 @@ void CFlexFOV::Initialize()
 				m_iFaceSize,
 				RT_SIZE_LITERAL,
 				IMAGE_FORMAT_RGB888,
-				MATERIAL_RT_DEPTH_SHARED,
+				// Own depth per face: the fidelity-scaled faces are larger than
+				// the screen, so the shared (framebuffer-sized) depth no longer fits.
+				MATERIAL_RT_DEPTH_SEPARATE,
 				TEXTUREFLAGS_CLAMPS | TEXTUREFLAGS_CLAMPT,
 				// Auto-mipmap so the reprojection samples with trilinear filtering
 				// (reduces aliasing where faces are minified toward the edges).

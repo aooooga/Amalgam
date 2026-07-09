@@ -26,6 +26,18 @@ private:
 	IMaterial* m_pMatBlurY;
 	IMaterialVar* m_pBloomAmount;
 
+	// Face-sized twins of the glow pipeline for the FlexFOV composite: the
+	// fidelity-scaled cube faces are larger than the screen, so the screen-sized
+	// RenderBuffers can't hold a face's silhouette pass. Created/destroyed by
+	// CFlexFOV alongside the face RTs (InitFlexBuffers/UnloadFlexBuffers).
+	ITexture* m_pFlexBuffer1 = nullptr;
+	ITexture* m_pFlexBuffer2 = nullptr;
+	IMaterial* m_pFlexHalo = nullptr;
+	IMaterial* m_pFlexBlurX = nullptr;
+	IMaterial* m_pFlexBlurY = nullptr;
+	IMaterialVar* m_pFlexBloomAmount = nullptr;
+	int m_iFlexSize = 0;
+
 
 
 	struct GlowHasher_t
@@ -60,6 +72,13 @@ public:
 	void Store(CTFPlayer* pLocal);
 	void RenderFirst();
 	void RenderSecond();
+
+	// FlexFOV support: renders the glow outlines into the currently-bound cube
+	// face RT during a capture pass (face camera matrices active), so outlines
+	// are baked into the faces and warped by the composite like the scene.
+	void InitFlexBuffers(int iSize);
+	void UnloadFlexBuffers();
+	void RenderOnFlexFace();
 	void RenderHandler(const DrawModelState_t& pState, const ModelRenderInfo_t& pInfo, matrix3x4* pBoneToWorld);
 
 	void RenderViewmodel(void* rcx, int flags);

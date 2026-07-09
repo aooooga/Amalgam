@@ -24,13 +24,16 @@ MAKE_HOOK(CClientModeShared_DoPostScreenSpaceEffects, U::Memory.GetVirtual(I::Cl
 	if (F::CameraWindow.m_bDrawing || F::FlexFOV.m_bReplacingView)
 		return CALL_ORIGINAL(rcx, pSetup);
 
-	// FlexFOV face capture: render chams into the cube faces so they survive the
-	// composite (otherwise they only exist in the covered main view). Glow stays
-	// off here - its screen-sized buffers don't match the square face RTs.
+	// FlexFOV face capture: render chams and glow outlines into the cube faces
+	// so they survive the composite (otherwise they only exist in the covered
+	// main view). Glow uses its face-sized flex buffers here.
 	if (F::FlexFOV.m_bDrawing)
 	{
 		if (!I::EngineVGui->IsGameUIVisible() && F::Materials.m_bLoaded)
+		{
 			F::Chams.RenderMain();
+			F::Glow.RenderOnFlexFace();
+		}
 		return CALL_ORIGINAL(rcx, pSetup);
 	}
 

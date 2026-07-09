@@ -1,6 +1,7 @@
 #include "FlexFOV.h"
 
 #include "../Materials/Materials.h"
+#include "../Glow/Glow.h"
 #include "../../../SDK/Definitions/Main/IMesh.h"
 
 #include <cmath>
@@ -316,12 +317,17 @@ void CFlexFOV::CaptureGlobe(void* rcx, const CViewSetup& pViewSetup)
 	Vec3 vFaceAngles[FACE_COUNT];
 	ComputeFaceAngles(pViewSetup.angles, vFaceAngles);
 
-	// Dynamic entity shadows re-render per pass and are CPU work barely visible
-	// in the warped periphery; drop them for the capture passes only.
+	// Per-pass work that's expensive and barely visible in the warp, dropped for
+	// the capture passes only: dynamic entity shadows (CPU per pass) and water
+	// reflection (a whole extra scene render per face on water maps).
 	static auto r_shadows = H::ConVars.FindVar("r_shadows");
+	static auto r_WaterDrawReflection = H::ConVars.FindVar("r_WaterDrawReflection");
 	const int iShadows = r_shadows ? r_shadows->GetInt() : 0;
+	const int iWaterReflect = r_WaterDrawReflection ? r_WaterDrawReflection->GetInt() : 0;
 	if (r_shadows)
 		r_shadows->SetValue(0);
+	if (r_WaterDrawReflection)
+		r_WaterDrawReflection->SetValue(0);
 
 	// Only render the faces the composite mesh actually samples at the current
 	// fov (recorded when the mesh was built). The debug tiles want all six.
@@ -334,6 +340,8 @@ void CFlexFOV::CaptureGlobe(void* rcx, const CViewSetup& pViewSetup)
 
 	if (r_shadows)
 		r_shadows->SetValue(iShadows);
+	if (r_WaterDrawReflection)
+		r_WaterDrawReflection->SetValue(iWaterReflect);
 
 	m_bDrawing = false;
 }
@@ -671,6 +679,10 @@ void CFlexFOV::Initialize()
 {
 	m_iFaceSize = DesiredFaceSize();
 
+	// Face-sized glow buffers so outlines can be baked into the faces (they
+	// track the face size, so they're managed here rather than in CGlow).
+	F::Glow.InitFlexBuffers(m_iFaceSize);
+
 	for (int i = 0; i < FACE_COUNT; i++)
 	{
 		if (!m_pFaceTextures[i])
@@ -706,6 +718,8 @@ void CFlexFOV::Initialize()
 
 void CFlexFOV::Unload()
 {
+	F::Glow.UnloadFlexBuffers();
+
 	for (int i = 0; i < FACE_COUNT; i++)
 	{
 		if (m_pFaceMaterials[i])

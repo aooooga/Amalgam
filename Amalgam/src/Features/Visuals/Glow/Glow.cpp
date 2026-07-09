@@ -207,6 +207,174 @@ void CGlow::RenderSecond()
 	}
 }
 
+void CGlow::InitFlexBuffers(int iSize)
+{
+	if (m_pFlexBuffer1 && iSize == m_iFlexSize)
+		return;
+	UnloadFlexBuffers();
+	m_iFlexSize = iSize;
+
+	// Mirrors the RenderBuffer setup but face-sized and with its own depth (the
+	// framebuffer-shared depth is smaller than a face). The cleared separate
+	// depth means the silhouette pass has no world occlusion - face glow is
+	// through-walls by construction.
+	for (int i = 0; i < 2; i++)
+	{
+		ITexture*& pBuffer = i ? m_pFlexBuffer2 : m_pFlexBuffer1;
+		pBuffer = I::MaterialSystem->CreateNamedRenderTargetTextureEx(
+			i ? "FlexFOVGlow2" : "FlexFOVGlow1",
+			iSize, iSize,
+			RT_SIZE_LITERAL,
+			IMAGE_FORMAT_RGB888,
+			MATERIAL_RT_DEPTH_SEPARATE,
+			TEXTUREFLAGS_CLAMPS | TEXTUREFLAGS_CLAMPT | TEXTUREFLAGS_EIGHTBITALPHA,
+			CREATERENDERTARGETFLAGS_HDR
+		);
+		pBuffer->IncrementReferenceCount();
+	}
+
+	{
+		KeyValues* kv = new KeyValues("UnlitGeneric");
+		kv->SetString("$basetexture", "FlexFOVGlow1");
+		kv->SetString("$additive", "1");
+		m_pFlexHalo = F::Materials.Create("FlexFOVGlowHalo", kv);
+	}
+	{
+		KeyValues* kv = new KeyValues("BlurFilterX");
+		kv->SetString("$basetexture", "FlexFOVGlow1");
+		m_pFlexBlurX = F::Materials.Create("FlexFOVGlowBlurX", kv);
+	}
+	{
+		KeyValues* kv = new KeyValues("BlurFilterY");
+		kv->SetString("$basetexture", "FlexFOVGlow2");
+		m_pFlexBlurY = F::Materials.Create("FlexFOVGlowBlurY", kv);
+		m_pFlexBloomAmount = m_pFlexBlurY->FindVar("$bloomamount", nullptr);
+	}
+}
+
+void CGlow::UnloadFlexBuffers()
+{
+	for (IMaterial** ppMat : { &m_pFlexHalo, &m_pFlexBlurX, &m_pFlexBlurY })
+	{
+		if (*ppMat)
+		{
+			(*ppMat)->DecrementReferenceCount();
+			(*ppMat)->DeleteIfUnreferenced();
+			*ppMat = nullptr;
+		}
+	}
+	m_pFlexBloomAmount = nullptr;
+
+	for (ITexture** ppTex : { &m_pFlexBuffer1, &m_pFlexBuffer2 })
+	{
+		if (*ppTex)
+		{
+			(*ppTex)->DecrementReferenceCount();
+			(*ppTex)->DeleteIfUnreferenced();
+			*ppTex = nullptr;
+		}
+	}
+	m_iFlexSize = 0;
+}
+
+// Runs the full glow pipeline against the currently-bound FlexFOV face RT.
+// Called from DoPostScreenSpaceEffects during a face capture pass, where the
+// face camera's matrices are active, so the silhouettes project into the face
+// and the composite warps the outlines exactly like the scene. Structure
+// mirrors RenderFirst + RenderSecond with face-sized buffers/dims; the interior
+// stencil mask lands in the face RT's own depth-stencil.
+void CGlow::RenderOnFlexFace()
+{
+	if (m_mEntities.empty() || !m_pFlexBuffer1 || !m_pFlexBuffer2 || !m_pFlexHalo || !m_pFlexBlurX || !m_pFlexBlurY)
+		return;
+
+	auto pRenderContext = I::MaterialSystem->GetRenderContext();
+	if (!pRenderContext || !m_pMatGlowColor)
+		return;
+
+	const int w = m_iFlexSize, h = m_iFlexSize;
+
+	FirstBegin(pRenderContext);
+	for (auto& [tGlow, vInfo] : m_mEntities)
+	{
+		for (auto& tInfo : vInfo)
+		{
+			m_iFlags = tInfo.m_iFlags;
+			DrawModel(tInfo.m_pEntity);
+			m_iFlags = false;
+		}
+	}
+	FirstEnd(pRenderContext);
+
+	for (auto& [tGlow, vInfo] : m_mEntities)
+	{
+		// Colored silhouettes into the flex buffer (SecondBegin, face-sized).
+		// Depth is cleared, not shared with the scene: face glow is through-walls.
+		Begin();
+		pRenderContext->PushRenderTargetAndViewport();
+		pRenderContext->SetRenderTarget(m_pFlexBuffer1);
+		pRenderContext->Viewport(0, 0, w, h);
+		pRenderContext->ClearColor4ub(0, 0, 0, 0);
+		pRenderContext->ClearBuffers(true, true, false);
+		for (auto& tInfo : vInfo)
+		{
+			I::RenderView->SetColorModulation(tInfo.m_cColor);
+			I::RenderView->SetBlend(tInfo.m_cColor.a / 255.f);
+
+			m_iFlags = tInfo.m_iFlags;
+			DrawModel(tInfo.m_pEntity);
+			m_iFlags = false;
+		}
+		pRenderContext->PopRenderTargetAndViewport();
+
+		if (tGlow.Blur)
+		{
+			m_pFlexBloomAmount->SetFloatValue(tGlow.Blur);
+
+			pRenderContext->PushRenderTargetAndViewport();
+			{
+				pRenderContext->Viewport(0, 0, w, h);
+				pRenderContext->SetRenderTarget(m_pFlexBuffer2);
+				pRenderContext->DrawScreenSpaceRectangle(m_pFlexBlurX, 0, 0, w, h, 0.f, 0.f, w - 1, h - 1, w, h);
+				pRenderContext->SetRenderTarget(m_pFlexBuffer1);
+				pRenderContext->DrawScreenSpaceRectangle(m_pFlexBlurY, 0, 0, w, h, 0.f, 0.f, w - 1, h - 1, w, h);
+			}
+			pRenderContext->PopRenderTargetAndViewport();
+		}
+
+		pRenderContext->SetStencilEnable(true);
+		pRenderContext->SetStencilCompareFunction(STENCILCOMPARISONFUNCTION_EQUAL);
+		pRenderContext->SetStencilPassOperation(STENCILOPERATION_KEEP);
+		pRenderContext->SetStencilFailOperation(STENCILOPERATION_KEEP);
+		pRenderContext->SetStencilZFailOperation(STENCILOPERATION_KEEP);
+		pRenderContext->SetStencilReferenceValue(0);
+		pRenderContext->SetStencilWriteMask(0x0);
+		pRenderContext->SetStencilTestMask(0xFF);
+
+		if (tGlow.Stencil)
+		{
+			int iSide = (tGlow.Stencil + 1) / 2.f;
+			pRenderContext->DrawScreenSpaceRectangle(m_pFlexHalo, -iSide, 0, w, h, 0.f, 0.f, w - 1, h - 1, w, h);
+			pRenderContext->DrawScreenSpaceRectangle(m_pFlexHalo, 0, -iSide, w, h, 0.f, 0.f, w - 1, h - 1, w, h);
+			pRenderContext->DrawScreenSpaceRectangle(m_pFlexHalo, iSide, 0, w, h, 0.f, 0.f, w - 1, h - 1, w, h);
+			pRenderContext->DrawScreenSpaceRectangle(m_pFlexHalo, 0, iSide, w, h, 0.f, 0.f, w - 1, h - 1, w, h);
+			if (int iCorner = tGlow.Stencil / 2.f)
+			{
+				pRenderContext->DrawScreenSpaceRectangle(m_pFlexHalo, -iCorner, -iCorner, w, h, 0.f, 0.f, w - 1, h - 1, w, h);
+				pRenderContext->DrawScreenSpaceRectangle(m_pFlexHalo, iCorner, iCorner, w, h, 0.f, 0.f, w - 1, h - 1, w, h);
+				pRenderContext->DrawScreenSpaceRectangle(m_pFlexHalo, iCorner, -iCorner, w, h, 0.f, 0.f, w - 1, h - 1, w, h);
+				pRenderContext->DrawScreenSpaceRectangle(m_pFlexHalo, -iCorner, iCorner, w, h, 0.f, 0.f, w - 1, h - 1, w, h);
+			}
+		}
+		if (tGlow.Blur)
+			pRenderContext->DrawScreenSpaceRectangle(m_pFlexHalo, 0, 0, w, h, 0.f, 0.f, w - 1, h - 1, w, h);
+
+		pRenderContext->SetStencilEnable(false);
+
+		End();
+	}
+}
+
 void CGlow::RenderBacktrack(const DrawModelState_t& pState, const ModelRenderInfo_t& pInfo)
 {
 	auto pEntity = I::ClientEntityList->GetClientEntity(pInfo.entity_index)->As<CTFPlayer>();
@@ -401,6 +569,8 @@ void CGlow::Initialize()
 
 void CGlow::Unload()
 {
+	UnloadFlexBuffers();
+
 	if (m_pMatGlowColor)
 	{
 		m_pMatGlowColor->DecrementReferenceCount();

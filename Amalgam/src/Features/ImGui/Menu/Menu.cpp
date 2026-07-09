@@ -1126,6 +1126,7 @@ void CMenu::MenuVisuals(int iTab)
 					{
 						FSlider(Vars::Visuals::UI::FlexFOVStrength);
 						FSlider(Vars::Visuals::UI::FlexFOVQuality);
+						FSlider(Vars::Visuals::UI::FlexFOVViewmodelFOV);
 						FToggle(Vars::Visuals::UI::FlexFOVSkipMainView);
 					}
 					PopTransparent();

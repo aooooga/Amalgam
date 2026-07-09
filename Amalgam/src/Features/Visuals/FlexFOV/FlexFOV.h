@@ -1,5 +1,6 @@
 #pragma once
 #include "../../../SDK/SDK.h"
+#include "../../../SDK/Definitions/Misc/CViewSetup.h"
 
 // Wide-angle FOV via globe reprojection (blinky / flex-fov technique).
 //
@@ -29,7 +30,6 @@ private:
 	ITexture* m_pFaceTextures[FACE_COUNT] = {};
 	IMaterial* m_pFaceMaterials[FACE_COUNT] = {};
 
-	int m_iFaceW = 0, m_iFaceH = 0; // face RT resolution (cube: square, W == H)
 	bool m_bWideRig = false;        // rig the current textures were built for
 
 	void RenderFace(void* rcx, const CViewSetup& pViewSetup, int iFace, const Vec3& vAngles);
@@ -72,6 +72,12 @@ public:
 	// Called from IEngineVGui_Paint.
 	void DrawComposite();
 
+	// Draws the viewmodels on top of the composite at their native (unwarped)
+	// projection, since the capture faces don't contain them (a 130 deg face
+	// would warp them badly) and the composite paints over the main pass's.
+	// Called from IEngineVGui_Paint right after DrawComposite.
+	void DrawViewmodel();
+
 	// Forward flex-FOV projection: maps a world position to its pixel position in
 	// the reprojected composite (the exact inverse of DrawComposite's ScreenToRay).
 	// Used by SDK::W2S while the composite is active so ESP / overlays land on top
@@ -87,6 +93,23 @@ public:
 	// camera window skip themselves during the capture pass; chams deliberately
 	// do NOT (they must be baked into the faces or the composite covers them).
 	bool m_bDrawing = false;
+
+	int m_iFaceW = 0, m_iFaceH = 0; // face RT resolution (cube: square, W == H)
+
+	// Frustum of the face currently being captured (valid while m_bDrawing):
+	// world-space forward of the face camera and its half-diagonal angle in
+	// radians. Glow uses these to skip entities the face can't see.
+	Vec3 m_vCaptureFwd = {};
+	float m_flCaptureHalfAngle = 0.f;
+
+	// True when DrawComposite actually repainted the screen this paint, so
+	// DrawViewmodel knows the viewmodels need re-drawing on top.
+	bool m_bPaintedComposite = false;
+
+	// Main-view setup latched in CaptureGlobe (same vintage as the face textures
+	// the composite shows), used to re-render viewmodels after the composite.
+	CViewSetup m_tViewSetup = {};
+	bool m_bViewSetupValid = false;
 
 	// True while the cheap (scene-stripped) main-view pass is running, so chams /
 	// glow / screen effects can skip work the composite would paint over anyway.

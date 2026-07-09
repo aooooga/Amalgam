@@ -40,6 +40,7 @@ MAKE_HOOK(IEngineVGui_Paint, U::Memory.GetVirtual(I::EngineVGui, 14), void,
 			// should stay visible (camera window, debug tiles, ESP below) must
 			// draw after it.
 			F::FlexFOV.DrawComposite();
+			F::FlexFOV.DrawViewmodel();
 			F::FlexFOV.DrawDebug();
 			F::CameraWindow.Draw();
 

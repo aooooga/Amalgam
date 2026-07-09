@@ -376,6 +376,11 @@ void CFlexFOV::CaptureGlobe(void* rcx, const CViewSetup& pViewSetup)
 	m_vViewAngles = pViewSetup.angles;
 	Math::AngleVectors(m_vViewAngles, &m_vViewFwd, &m_vViewRight, &m_vViewUp);
 
+	// Latch the whole view setup for DrawViewmodel (same vintage as the faces
+	// the next composite will show, so the viewmodel tracks the warped world).
+	m_tViewSetup = pViewSetup;
+	m_bViewSetupValid = true;
+
 	Vec3 vFaceAngles[FACE_COUNT];
 	int nFaces;
 	if (m_bWideRig)
@@ -401,13 +406,25 @@ void CFlexFOV::CaptureGlobe(void* rcx, const CViewSetup& pViewSetup)
 	if (r_WaterDrawReflection)
 		r_WaterDrawReflection->SetValue(0);
 
+	// Half-diagonal of the face frustum (corner angle from the face axis), used
+	// by the glow pass to cull entities this face can't see. Same for every
+	// face of a rig: atan(sqrt(tan(hfov/2)^2 + tan(vfov/2)^2)).
+	{
+		const float tw = std::tan(FLEXFOV_FACE_FOV * 0.5f * FLEXFOV_DEG2RAD);
+		const float th = m_bWideRig ? std::tan(FLEXFOV_WIDE_FOV_V * 0.5f * FLEXFOV_DEG2RAD) : tw;
+		m_flCaptureHalfAngle = std::atan(std::sqrt(tw * tw + th * th));
+	}
+
 	// Only render the faces the composite mesh actually samples at the current
 	// fov (recorded when the mesh was built). The debug tiles want all of them.
 	const bool bAllFaces = !m_bComposite || Vars::Visuals::UI::FlexFOVDebug.Value;
 	for (int i = 0; i < nFaces; i++)
 	{
 		if (bAllFaces || m_bFaceNeeded[i])
+		{
+			Math::AngleVectors(vFaceAngles[i], &m_vCaptureFwd);
 			RenderFace(rcx, pViewSetup, i, vFaceAngles[i]);
+		}
 	}
 
 	if (r_shadows)
@@ -465,6 +482,7 @@ void CFlexFOV::DrawDebug()
 // slightly oversized so boundary triangles still have valid UVs -> no seams.
 void CFlexFOV::DrawComposite()
 {
+	m_bPaintedComposite = false;
 	if (!m_bComposite || !m_pFaceMaterials[FACE_FRONT] || !I::EngineClient->IsInGame())
 		return;
 
@@ -719,6 +737,32 @@ void CFlexFOV::DrawComposite()
 	pRenderContext->PopMatrix();
 
 	pRenderContext->Release();
+
+	m_bPaintedComposite = true;
+}
+
+// The composite covers every pixel of the main pass, including its viewmodels
+// (and the cheap pass strips r_drawviewmodel anyway), so redraw them here on
+// top of the composite at their native rectilinear projection - visually
+// correct too, since viewmodels shouldn't take part in the globe warp. Depth is
+// cleared first: the backbuffer depth still holds whatever the main pass left
+// (composite draws with $ignorez), and viewmodels render in the near depth
+// range expecting a fresh buffer.
+void CFlexFOV::DrawViewmodel()
+{
+	if (!m_bPaintedComposite || !m_bViewSetupValid)
+		return;
+
+	CViewSetup tViewSetup = m_tViewSetup;
+	if (Vars::Visuals::UI::FlexFOVViewmodelFOV.Value)
+		tViewSetup.fovViewmodel = Vars::Visuals::UI::FlexFOVViewmodelFOV.Value;
+
+	auto pRenderContext = I::MaterialSystem->GetRenderContext();
+	pRenderContext->ClearBuffers(false, true, false);
+	pRenderContext->Release();
+
+	static auto CViewRender_DrawViewModels = U::Hooks.m_mHooks["CViewRender_DrawViewModels"];
+	CViewRender_DrawViewModels->Call<void>(I::ViewRender, tViewSetup, true);
 }
 
 // Forward flex-FOV projection used by SDK::W2S while the composite is active.
@@ -812,9 +856,15 @@ void CFlexFOV::Initialize()
 {
 	ComputeRig(m_bWideRig, m_iFaceW, m_iFaceH);
 
-	// Face-sized glow buffers so outlines can be baked into the faces (they
-	// track the face size, so they're managed here rather than in CGlow).
-	F::Glow.InitFlexBuffers(m_iFaceW, m_iFaceH);
+	// Glow silhouette/blur buffers for the face passes. Screen-sized, NOT
+	// face-sized: outlines are low-frequency, so rendering them at face
+	// resolution (~2x screen per axis) tripled the fill cost of every blur and
+	// halo blit for no visible gain. The halo blit upscales into the face.
+	{
+		int iScreenW = 0, iScreenH = 0;
+		I::MaterialSystem->GetBackBufferDimensions(iScreenW, iScreenH);
+		F::Glow.InitFlexBuffers(std::max(iScreenW, 640), std::max(iScreenH, 480));
+	}
 
 	const int nFaces = m_bWideRig ? 2 : FACE_COUNT;
 	for (int i = 0; i < nFaces; i++)

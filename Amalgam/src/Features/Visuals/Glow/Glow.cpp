@@ -3,7 +3,11 @@
 #include "../Groups/Groups.h"
 #include "../Materials/Materials.h"
 #include "../FakeAngle/FakeAngle.h"
+#include "../FlexFOV/FlexFOV.h"
 #include "../../Backtrack/Backtrack.h"
+
+#include <algorithm>
+#include <cmath>
 
 void CGlow::Begin()
 {
@@ -293,7 +297,28 @@ void CGlow::RenderOnFlexFace()
 	if (!pRenderContext || !m_pMatGlowColor)
 		return;
 
-	const int w = m_iFlexW, h = m_iFlexH;
+	// Silhouettes/blur render into the screen-sized flex buffers (bw x bh); the
+	// halo blits upscale them into the face RT (fw x fh). Face-sized buffers cost
+	// ~3x the fill for no visible gain on a low-frequency outline.
+	const int bw = m_iFlexW, bh = m_iFlexH;
+	const int fw = F::FlexFOV.m_iFaceW, fh = F::FlexFOV.m_iFaceH;
+	if (fw <= 0 || fh <= 0)
+		return;
+
+	// Skip entities the face being captured can't see: everything here (stencil
+	// mask + colored silhouette) is 2 model draws per entity per face, and at
+	// 245 fov half the glow set is behind any given face. Angular test against
+	// the face axis with slack for the entity's own extent.
+	auto FaceVisible = [&](CBaseEntity* pEntity)
+	{
+		Vec3 vDelta = pEntity->GetAbsOrigin() - F::FlexFOV.m_vEyeOrigin;
+		const float flDist = vDelta.Length();
+		if (flDist < 150.f) // close enough that the bbox can wrap any frustum
+			return true;
+		const float flSlack = std::asin(std::min(1.f, 100.f / flDist));
+		const float flCos = std::cos(std::min(3.14159f, F::FlexFOV.m_flCaptureHalfAngle + flSlack));
+		return vDelta.Dot(F::FlexFOV.m_vCaptureFwd) > flCos * flDist;
+	};
 
 	// The face RT's stencil survives across frames (the capture pass clears only
 	// color+depth) and FirstBegin stamps 1s into it every frame, so without this
@@ -306,6 +331,8 @@ void CGlow::RenderOnFlexFace()
 	{
 		for (auto& tInfo : vInfo)
 		{
+			if (!FaceVisible(tInfo.m_pEntity))
+				continue;
 			m_iFlags = tInfo.m_iFlags;
 			DrawModel(tInfo.m_pEntity);
 			m_iFlags = false;
@@ -315,16 +342,33 @@ void CGlow::RenderOnFlexFace()
 
 	for (auto& [tGlow, vInfo] : m_mEntities)
 	{
-		// Colored silhouettes into the flex buffer (SecondBegin, face-sized).
-		// Depth is cleared, not shared with the scene: face glow is through-walls.
+		// Skip the whole silhouette + blit pass when nothing in this group is
+		// visible in the face (clears + up to 5 full-face blits saved).
+		bool bAnyVisible = false;
+		for (auto& tInfo : vInfo)
+		{
+			if (FaceVisible(tInfo.m_pEntity))
+			{
+				bAnyVisible = true;
+				break;
+			}
+		}
+		if (!bAnyVisible)
+			continue;
+
+		// Colored silhouettes into the flex buffer. Depth is cleared, not shared
+		// with the scene: face glow is through-walls.
 		Begin();
 		pRenderContext->PushRenderTargetAndViewport();
 		pRenderContext->SetRenderTarget(m_pFlexBuffer1);
-		pRenderContext->Viewport(0, 0, w, h);
+		pRenderContext->Viewport(0, 0, bw, bh);
 		pRenderContext->ClearColor4ub(0, 0, 0, 0);
 		pRenderContext->ClearBuffers(true, true, false);
 		for (auto& tInfo : vInfo)
 		{
+			if (!FaceVisible(tInfo.m_pEntity))
+				continue;
+
 			I::RenderView->SetColorModulation(tInfo.m_cColor);
 			I::RenderView->SetBlend(tInfo.m_cColor.a / 255.f);
 
@@ -340,11 +384,11 @@ void CGlow::RenderOnFlexFace()
 
 			pRenderContext->PushRenderTargetAndViewport();
 			{
-				pRenderContext->Viewport(0, 0, w, h);
+				pRenderContext->Viewport(0, 0, bw, bh);
 				pRenderContext->SetRenderTarget(m_pFlexBuffer2);
-				pRenderContext->DrawScreenSpaceRectangle(m_pFlexBlurX, 0, 0, w, h, 0.f, 0.f, w - 1, h - 1, w, h);
+				pRenderContext->DrawScreenSpaceRectangle(m_pFlexBlurX, 0, 0, bw, bh, 0.f, 0.f, bw - 1, bh - 1, bw, bh);
 				pRenderContext->SetRenderTarget(m_pFlexBuffer1);
-				pRenderContext->DrawScreenSpaceRectangle(m_pFlexBlurY, 0, 0, w, h, 0.f, 0.f, w - 1, h - 1, w, h);
+				pRenderContext->DrawScreenSpaceRectangle(m_pFlexBlurY, 0, 0, bw, bh, 0.f, 0.f, bw - 1, bh - 1, bw, bh);
 			}
 			pRenderContext->PopRenderTargetAndViewport();
 		}
@@ -360,21 +404,19 @@ void CGlow::RenderOnFlexFace()
 
 		if (tGlow.Stencil)
 		{
-			int iSide = (tGlow.Stencil + 1) / 2.f;
-			pRenderContext->DrawScreenSpaceRectangle(m_pFlexHalo, -iSide, 0, w, h, 0.f, 0.f, w - 1, h - 1, w, h);
-			pRenderContext->DrawScreenSpaceRectangle(m_pFlexHalo, 0, -iSide, w, h, 0.f, 0.f, w - 1, h - 1, w, h);
-			pRenderContext->DrawScreenSpaceRectangle(m_pFlexHalo, iSide, 0, w, h, 0.f, 0.f, w - 1, h - 1, w, h);
-			pRenderContext->DrawScreenSpaceRectangle(m_pFlexHalo, 0, iSide, w, h, 0.f, 0.f, w - 1, h - 1, w, h);
-			if (int iCorner = tGlow.Stencil / 2.f)
-			{
-				pRenderContext->DrawScreenSpaceRectangle(m_pFlexHalo, -iCorner, -iCorner, w, h, 0.f, 0.f, w - 1, h - 1, w, h);
-				pRenderContext->DrawScreenSpaceRectangle(m_pFlexHalo, iCorner, iCorner, w, h, 0.f, 0.f, w - 1, h - 1, w, h);
-				pRenderContext->DrawScreenSpaceRectangle(m_pFlexHalo, iCorner, -iCorner, w, h, 0.f, 0.f, w - 1, h - 1, w, h);
-				pRenderContext->DrawScreenSpaceRectangle(m_pFlexHalo, -iCorner, iCorner, w, h, 0.f, 0.f, w - 1, h - 1, w, h);
-			}
+			// 4 cardinal offset blits only (the 4 corner blits of the screen path
+			// are dropped - at face scale the difference is invisible and each
+			// blit is a full-face additive fill). Offsets are in face pixels, so
+			// scale by the face/buffer ratio to keep the on-screen width.
+			const float flScale = float(fh) / float(bh);
+			int iSide = std::max(1, static_cast<int>((tGlow.Stencil + 1) / 2.f * flScale));
+			pRenderContext->DrawScreenSpaceRectangle(m_pFlexHalo, -iSide, 0, fw, fh, 0.f, 0.f, bw - 1, bh - 1, bw, bh);
+			pRenderContext->DrawScreenSpaceRectangle(m_pFlexHalo, 0, -iSide, fw, fh, 0.f, 0.f, bw - 1, bh - 1, bw, bh);
+			pRenderContext->DrawScreenSpaceRectangle(m_pFlexHalo, iSide, 0, fw, fh, 0.f, 0.f, bw - 1, bh - 1, bw, bh);
+			pRenderContext->DrawScreenSpaceRectangle(m_pFlexHalo, 0, iSide, fw, fh, 0.f, 0.f, bw - 1, bh - 1, bw, bh);
 		}
 		if (tGlow.Blur)
-			pRenderContext->DrawScreenSpaceRectangle(m_pFlexHalo, 0, 0, w, h, 0.f, 0.f, w - 1, h - 1, w, h);
+			pRenderContext->DrawScreenSpaceRectangle(m_pFlexHalo, 0, 0, fw, fh, 0.f, 0.f, bw - 1, bh - 1, bw, bh);
 
 		pRenderContext->SetStencilEnable(false);
 

@@ -37,6 +37,11 @@ public:
 	// CViewRender_RenderView hook (after the original main-view render).
 	void CaptureGlobe(void* rcx, const CViewSetup& pViewSetup);
 
+	// True when the composite is active and fully able to render this frame, so
+	// the CViewRender_RenderView hook can skip the normal main-view render (the
+	// composite covers every pixel anyway) to save the extra full-scene pass.
+	bool ShouldReplaceView();
+
 	// Blits the 6 captured faces as debug thumbnails over the current screen.
 	// Called from IEngineVGui_Paint.
 	void DrawDebug();
@@ -44,6 +49,14 @@ public:
 	// Mesh-ladder composite (currently M1: fullscreen FRONT-face quad).
 	// Called from IEngineVGui_Paint.
 	void DrawComposite();
+
+	// Forward flex-FOV projection: maps a world position to its pixel position in
+	// the reprojected composite (the exact inverse of DrawComposite's ScreenToRay).
+	// Used by SDK::W2S while the composite is active so ESP / overlays land on top
+	// of the warped view and track enemies revealed outside the normal 90 cone.
+	// Returns true when the point falls within the on-screen [-1,1] clip bounds.
+	// bAlways fills vScreen with a best-effort direction even when off-screen.
+	bool WorldToScreen(const Vec3& vWorld, Vec3& vScreen, bool bAlways = false);
 
 	void Initialize();
 	void Unload();
@@ -58,6 +71,21 @@ public:
 
 	// Draw the mesh composite (M-ladder) instead of / on top of the tiles.
 	bool m_bComposite = false;
+
+	// Per-frame snapshot of the exact projection inputs used to build the
+	// composite this frame. WorldToScreen must read the identical values so ESP /
+	// overlays stay pixel-aligned with the warp. Eye/angles are latched in
+	// CaptureGlobe (from the real view setup); fov/aspect/strength in DrawComposite.
+	Vec3 m_vEyeOrigin = {};
+	Vec3 m_vViewAngles = {};
+	// View basis derived from m_vViewAngles, cached once per frame in CaptureGlobe
+	// so WorldToScreen (called hundreds+ times/frame) skips the per-call trig.
+	Vec3 m_vViewFwd = { 0, 0, 1 };
+	Vec3 m_vViewRight = { 1, 0, 0 };
+	Vec3 m_vViewUp = { 0, 0, 1 };
+	float m_flFovX = 140.f;
+	float m_flAspect = 16.f / 9.f;
+	float m_flStrength = 1.f;
 };
 
 ADD_FEATURE(CFlexFOV, FlexFOV);

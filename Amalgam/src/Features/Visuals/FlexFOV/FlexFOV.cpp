@@ -80,6 +80,79 @@ static Vec3 ScreenToRay(float sx, float sy, float flFovXDeg, float flStrength)
 	return m;
 }
 
+// --- Forward projection (inverse of ScreenToRay) -----------------------------
+// Given a ray in the flex-fov native frame (fx = right, fy = up, fz = forward,
+// forward = +z), returns the normalized screen coords (sx, sy) that ScreenToRay
+// consumes (sy is the pre-aspect value, i.e. clip.y / aspect). Mirrors the closed
+// forms in PaniniRay / MercatorRay exactly so the round-trip is the identity.
+
+static bool PaniniForwardScreen(float fx, float fy, float fz, float flFovXDeg, float d, float& sx, float& sy)
+{
+	const float flLon = std::atan2(fx, fz);
+	const float flClon = std::cos(flLon);
+	// S = (d+1)/(d+cos lon) blows up / flips sign as the point swings behind; reject.
+	if (flClon <= -d + 1e-3f)
+		return false;
+	const float flLat = std::asin(std::clamp(fy, -0.9999f, 0.9999f));
+	const float S = (d + 1.f) / (d + flClon);
+	const float lx = S * std::sin(flLon);
+	const float ly = S * std::tan(flLat);
+
+	// flScale exactly as PaniniRay derives it from the half-fov (panini_forward(0,fovx/2).x).
+	const float flHalfLon = flFovXDeg * (3.14159265f / 180.f) * 0.5f;
+	const float Sedge = (d + 1.f) / (d + std::cos(flHalfLon));
+	const float flScale = Sedge * std::sin(flHalfLon);
+	if (flScale < 1e-6f)
+		return false;
+
+	sx = lx / flScale;
+	sy = ly / flScale;
+	return true;
+}
+
+static bool MercatorForwardScreen(float fx, float fy, float fz, float flFovXDeg, float& sx, float& sy)
+{
+	const float flScale = flFovXDeg * (3.14159265f / 180.f) * 0.5f;
+	if (flScale < 1e-6f)
+		return false;
+	const float flLon = std::atan2(fx, fz);
+	const float flLat = std::asin(std::clamp(fy, -0.9999f, 0.9999f));
+	sx = flLon / flScale;
+	sy = std::asinh(std::tan(flLat)) / flScale; // inverse of flLat = atan(sinh(sy*scale))
+	return true;
+}
+
+// Tier selection mirroring ScreenToRay: Panini below 180, Mercator above, blended
+// across 170-190 (blending forward screen-coords is a sub-pixel approximation of
+// inverting the ray-blend; fine for point overlays). Fills the pre-aspect (sx,sy).
+static bool ForwardProject(float fx, float fy, float fz, float flFovXDeg, float flStrength, float& sx, float& sy)
+{
+	const float flLo = 170.f, flHi = 190.f;
+
+	float sxP = 0.f, syP = 0.f, sxM = 0.f, syM = 0.f;
+	const bool bP = (flFovXDeg <= flHi) && PaniniForwardScreen(fx, fy, fz, flFovXDeg, flStrength, sxP, syP);
+	const bool bM = (flFovXDeg >= flLo) && MercatorForwardScreen(fx, fy, fz, flFovXDeg, sxM, syM);
+
+	if (flFovXDeg <= flLo)
+	{
+		if (!bP) return false;
+		sx = sxP; sy = syP;
+	}
+	else if (flFovXDeg >= flHi)
+	{
+		if (!bM) return false;
+		sx = sxM; sy = syM;
+	}
+	else
+	{
+		if (!bP || !bM) return false;
+		const float t = (flFovXDeg - flLo) / (flHi - flLo);
+		sx = sxP + (sxM - sxP) * t;
+		sy = syP + (syM - syP) * t;
+	}
+	return true;
+}
+
 // Cube-face bases in view-local ray coords (x = right, y = up, forward = -z),
 // consistent with CFlexFOV::ComputeFaceAngles. Order: FRONT,BACK,LEFT,RIGHT,UP,DOWN.
 // Fwd = look direction; Right/Up/Back define the face camera (looks along -Back).
@@ -154,12 +227,30 @@ void CFlexFOV::RenderFace(void* rcx, const CViewSetup& pViewSetup, EFace eFace, 
 	pRenderContext->Release();
 }
 
+// Only claim to replace the main view when the composite is on AND everything it
+// needs to paint a full-screen result exists; otherwise the caller must still
+// render the normal view or the frame would be left blank.
+bool CFlexFOV::ShouldReplaceView()
+{
+	return m_bComposite
+		&& Vars::Visuals::UI::FlexFOVSkipMainView.Value
+		&& m_pFaceTextures[FACE_FRONT] && m_pFaceMaterials[FACE_FRONT]
+		&& I::EngineClient->IsInGame();
+}
+
 void CFlexFOV::CaptureGlobe(void* rcx, const CViewSetup& pViewSetup)
 {
 	if (!m_bActive || m_bDrawing || !m_pFaceTextures[0] || !I::EngineClient->IsInGame())
 		return;
 
 	m_bDrawing = true;
+
+	// Latch the exact eye/angles this composite frame is built from so the forward
+	// projection (WorldToScreen) reprojects overlays with the same view basis, and
+	// cache the basis vectors so WorldToScreen doesn't redo AngleVectors per call.
+	m_vEyeOrigin = pViewSetup.origin;
+	m_vViewAngles = pViewSetup.angles;
+	Math::AngleVectors(m_vViewAngles, &m_vViewFwd, &m_vViewRight, &m_vViewUp);
 
 	Vec3 vFaceAngles[FACE_COUNT];
 	ComputeFaceAngles(pViewSetup.angles, vFaceAngles);
@@ -229,6 +320,12 @@ void CFlexFOV::DrawComposite()
 		flFovX = 140.f;
 	flFovX = std::min(flFovX, 360.f);
 	const float flStrength = Vars::Visuals::UI::FlexFOVStrength.Value; // Panini compression d
+
+	// Snapshot the projection inputs for WorldToScreen (single source of truth so
+	// overlays reproject with the exact same parameters as the mesh warp).
+	m_flAspect = flAspect;
+	m_flFovX = flFovX;
+	m_flStrength = flStrength;
 
 	// UV scale for a face rendered at FLEXFOV_FACE_FOV degrees (square, aspect 1):
 	// 0.5 / tan(fov/2). This value gives geometrically correct, seamless stitching
@@ -376,6 +473,50 @@ void CFlexFOV::DrawComposite()
 	pRenderContext->PopMatrix();
 
 	pRenderContext->Release();
+}
+
+// Forward flex-FOV projection used by SDK::W2S while the composite is active.
+// world point -> view-local ray -> forward Panini/Mercator -> clip -> pixel.
+bool CFlexFOV::WorldToScreen(const Vec3& vWorld, Vec3& vScreen, bool bAlways)
+{
+	vScreen.z = 0.f;
+
+	// Ray from the (snapshotted) eye to the target, in the cached view basis.
+	Vec3 vDir = vWorld - m_vEyeOrigin;
+	const float flLen = std::sqrt(Dot3(vDir, vDir));
+	if (flLen < 1e-4f)
+		return false;
+	vDir.x /= flLen; vDir.y /= flLen; vDir.z /= flLen;
+
+	// Native flex-fov frame: fx = right, fy = up, fz = forward (forward = +z).
+	const float fx = Dot3(vDir, m_vViewRight);
+	const float fy = Dot3(vDir, m_vViewUp);
+	const float fz = Dot3(vDir, m_vViewFwd);
+
+	float sx = 0.f, sy = 0.f;
+	if (ForwardProject(fx, fy, fz, m_flFovX, m_flStrength, sx, sy))
+	{
+		const float cx = sx;                 // clip x (-1..1)
+		const float cy = sy * m_flAspect;    // undo ScreenToRay's cy/aspect
+		// clip -> pixel, matching SDK::W2S's screen convention (y down).
+		vScreen.x = (0.5f + 0.5f * cx) * H::Draw.m_nScreenW;
+		vScreen.y = (0.5f - 0.5f * cy) * H::Draw.m_nScreenH;
+		return cx >= -1.f && cx <= 1.f && cy >= -1.f && cy <= 1.f;
+	}
+
+	// Behind / outside the projectable domain. For bAlways (offscreen arrows) emit
+	// a best-effort off-screen direction from the raw angles so the arrow still points.
+	if (bAlways)
+	{
+		const float flLon = std::atan2(fx, fz);
+		const float flLat = std::asin(std::clamp(fy, -0.9999f, 0.9999f));
+		const float flHalf = std::max(m_flFovX, 1.f) * (3.14159265f / 180.f) * 0.5f;
+		const float cx = std::clamp(flLon / flHalf, -8.f, 8.f);
+		const float cy = std::clamp(flLat / flHalf * m_flAspect, -8.f, 8.f);
+		vScreen.x = (0.5f + 0.5f * cx) * H::Draw.m_nScreenW;
+		vScreen.y = (0.5f - 0.5f * cy) * H::Draw.m_nScreenH;
+	}
+	return false;
 }
 
 void CFlexFOV::Initialize()

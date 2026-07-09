@@ -4,6 +4,7 @@
 #include "../Features/ImGui/Menu/Menu.h"
 #include "../Features/EnginePrediction/EnginePrediction.h"
 #include "../Features/Ticks/Ticks.h"
+#include "../Features/Visuals/FlexFOV/FlexFOV.h"
 
 #pragma warning (disable : 6385)
 
@@ -213,6 +214,14 @@ double SDK::PlatFloatTime()
 
 bool SDK::W2S(const Vec3& vOrigin, Vec3& vScreen, bool bAlways)
 {
+	// While the FlexFOV composite owns the screen, the on-screen view is the
+	// nonlinear Panini/Mercator warp - which can't be expressed as the linear
+	// m_mWorldToProjection matrix. Route every overlay through the forward flex
+	// projection so ESP / arrows / etc. land on the reprojected view and track
+	// enemies revealed outside the normal 90 cone.
+	if (F::FlexFOV.m_bComposite)
+		return F::FlexFOV.WorldToScreen(vOrigin, vScreen, bAlways);
+
 	const auto& worldToScreen = H::Draw.m_mWorldToProjection.As3x4();
 
 	float flW = worldToScreen[3][0] * vOrigin.x + worldToScreen[3][1] * vOrigin.y + worldToScreen[3][2] * vOrigin.z + worldToScreen[3][3];

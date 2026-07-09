@@ -280,6 +280,17 @@ void CFlexFOV::CaptureGlobe(void* rcx, const CViewSetup& pViewSetup)
 	if (!m_bActive || m_bDrawing || !m_pFaceTextures[0] || !I::EngineClient->IsInGame())
 		return;
 
+	// If the quality slider changed the target face size, rebuild the RTs before
+	// capturing (cheap: only happens when the user drags the slider). Done here,
+	// outside m_bDrawing, so we never tear down textures mid-capture.
+	if (DesiredFaceSize() != m_iFaceSize)
+	{
+		Unload();
+		Initialize();
+		if (!m_pFaceTextures[0])
+			return;
+	}
+
 	m_bDrawing = true;
 
 	// Latch the exact eye/angles this composite frame is built from so the forward
@@ -305,9 +316,11 @@ void CFlexFOV::CaptureGlobe(void* rcx, const CViewSetup& pViewSetup)
 }
 
 // Debug: blit the 6 faces as a 3x2 grid of thumbnails in the top-left corner.
+// Gated on the debug toggle specifically (NOT m_bActive, which is also set by the
+// composite) so the tiles don't show whenever the composite alone is enabled.
 void CFlexFOV::DrawDebug()
 {
-	if (!m_bActive || !m_pFaceMaterials[0] || !I::EngineClient->IsInGame())
+	if (!Vars::Visuals::UI::FlexFOVDebug.Value || !m_pFaceMaterials[0] || !I::EngineClient->IsInGame())
 		return;
 
 	auto pRenderContext = I::MaterialSystem->GetRenderContext();
@@ -580,12 +593,23 @@ bool CFlexFOV::WorldToScreen(const Vec3& vWorld, Vec3& vScreen, bool bAlways)
 	return false;
 }
 
-void CFlexFOV::Initialize()
+// Desired square face resolution = screen height * quality slider. The face
+// render passes are the dominant FlexFOV cost (each is a full scene render at
+// this resolution), so this is the primary FPS lever: lower quality -> smaller
+// face RTs -> less fill and shader work per face. Clamped so it never degenerates
+// or exceeds the screen (which would only cost fill for no fidelity gain).
+int CFlexFOV::DesiredFaceSize()
 {
-	// Square faces sized to screen height.
 	int iScreenW = 0, iScreenH = 0;
 	I::MaterialSystem->GetBackBufferDimensions(iScreenW, iScreenH);
-	m_iFaceSize = iScreenH > 0 ? iScreenH : 1024;
+	const int iBase = iScreenH > 0 ? iScreenH : 1024;
+	const float flQuality = std::clamp(Vars::Visuals::UI::FlexFOVQuality.Value, 0.2f, 1.f);
+	return std::clamp(static_cast<int>(iBase * flQuality), 256, iBase);
+}
+
+void CFlexFOV::Initialize()
+{
+	m_iFaceSize = DesiredFaceSize();
 
 	for (int i = 0; i < FACE_COUNT; i++)
 	{

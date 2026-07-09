@@ -32,6 +32,10 @@ private:
 	void RenderFace(void* rcx, const CViewSetup& pViewSetup, EFace eFace, const Vec3& vAngles);
 	void ComputeFaceAngles(const Vec3& vViewAngles, Vec3 vOut[FACE_COUNT]);
 
+	// Target square face resolution for the current quality slider (screen height
+	// * quality). CaptureGlobe rebuilds the face RTs when this changes.
+	int DesiredFaceSize();
+
 public:
 	// Captures all 6 faces into their render targets. Called from the
 	// CViewRender_RenderView hook (after the original main-view render).

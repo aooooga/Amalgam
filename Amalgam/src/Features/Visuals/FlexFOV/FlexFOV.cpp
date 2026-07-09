@@ -24,10 +24,10 @@ static Vec3 LatLonToRay(float flLat, float flLon)
 	);
 }
 
-// Panini inverse (compression d = 1). lenscoord already scaled to the fov.
-static Vec3 PaniniInverse(float x, float y)
+// Panini inverse with compression parameter d (0 = rectilinear, 1 = Panini,
+// higher = more cylindrical). lenscoord already scaled to the fov.
+static Vec3 PaniniInverse(float x, float y, float d)
 {
-	const float d = 1.f;
 	const float k = x * x / ((d + 1.f) * (d + 1.f));
 	const float dscr = k * k * d * d - (k + 1.f) * (k * d * d - 1.f);
 	const float clon = (-k * d + std::sqrt(dscr)) / (k + 1.f);
@@ -38,13 +38,12 @@ static Vec3 PaniniInverse(float x, float y)
 }
 
 // screen (sx in [-1,1], sy = clip.y/aspect) -> view-space ray (forward = -z).
-static Vec3 PaniniRay(float sx, float sy, float flFovXDeg)
+static Vec3 PaniniRay(float sx, float sy, float flFovXDeg, float d)
 {
 	const float flLon = flFovXDeg * (3.14159265f / 180.f) * 0.5f; // half-fov, radians
-	const float d = 1.f;
 	const float S = (d + 1.f) / (d + std::cos(flLon));
 	const float flScale = S * std::sin(flLon); // panini_forward(0, fovx/2).x
-	Vec3 vRay = PaniniInverse(sx * flScale, sy * flScale);
+	Vec3 vRay = PaniniInverse(sx * flScale, sy * flScale, d);
 	vRay.z = -vRay.z;
 	return vRay;
 }
@@ -63,17 +62,17 @@ static Vec3 MercatorRay(float sx, float sy, float flFovXDeg)
 // Tier selection (per the project's chosen boundaries): Panini below 180 deg,
 // Mercator above, blended across a band around 180 to avoid a visible pop.
 // (270-360 clamps to Mercator for now; Winkel-Tripel deferred.)
-static Vec3 ScreenToRay(float sx, float sy, float flFovXDeg)
+static Vec3 ScreenToRay(float sx, float sy, float flFovXDeg, float flStrength)
 {
 	const float flLo = 170.f, flHi = 190.f;
 	if (flFovXDeg <= flLo)
-		return PaniniRay(sx, sy, flFovXDeg);
+		return PaniniRay(sx, sy, flFovXDeg, flStrength);
 	if (flFovXDeg >= flHi)
 		return MercatorRay(sx, sy, flFovXDeg);
 
 	// Blend the two ray directions and renormalize.
 	const float t = (flFovXDeg - flLo) / (flHi - flLo);
-	const Vec3 a = PaniniRay(sx, sy, flFovXDeg);
+	const Vec3 a = PaniniRay(sx, sy, flFovXDeg, flStrength);
 	const Vec3 b = MercatorRay(sx, sy, flFovXDeg);
 	Vec3 m(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t);
 	const float len = std::sqrt(m.x * m.x + m.y * m.y + m.z * m.z);
@@ -229,6 +228,7 @@ void CFlexFOV::DrawComposite()
 	if (flFovX < 90.f)
 		flFovX = 140.f;
 	flFovX = std::min(flFovX, 360.f);
+	const float flStrength = Vars::Visuals::UI::FlexFOVStrength.Value; // Panini compression d
 
 	// UV scale for a face. Source renders a CViewSetup's fov as a 4:3-referenced
 	// horizontal fov scaled by (aspect / (4/3)); our faces are square (aspect 1),
@@ -238,7 +238,7 @@ void CFlexFOV::DrawComposite()
 	const float flEffTan = std::tan(flFaceHalf) * (1.f / (4.f / 3.f));
 	const float d = 0.5f / flEffTan;
 
-	const int nGrid = 64;
+	const int nGrid = 96; // finer grid: peripheral triangles span less angle at wide FOV
 	const int nSide = nGrid + 1;
 
 	// Per-vertex rays and clip positions.
@@ -250,7 +250,7 @@ void CFlexFOV::DrawComposite()
 		{
 			const float cx = -1.f + 2.f * i / nGrid;
 			const float cy = -1.f + 2.f * j / nGrid;
-			vRays[j * nSide + i] = ScreenToRay(cx, cy / flAspect, flFovX);
+			vRays[j * nSide + i] = ScreenToRay(cx, cy / flAspect, flFovX, flStrength);
 		}
 	}
 
@@ -264,27 +264,32 @@ void CFlexFOV::DrawComposite()
 
 	auto EmitTri = [&](int a, int b, int c)
 	{
-		const Vec3& ra = vRays[a]; const Vec3& rb = vRays[b]; const Vec3& rc = vRays[c];
-		const Vec3 vCentroid(ra.x + rb.x + rc.x, ra.y + rb.y + rc.y, ra.z + rb.z + rc.z);
+		const int tri[3] = { a, b, c };
 
-		int iFace = 0; float flBest = -1e30f;
+		// Assign the triangle to the face that best contains its *worst* vertex
+		// (max over faces of the min per-vertex alignment). Far more robust than
+		// a centroid test when a triangle straddles a face boundary at wide FOV.
+		int iFace = 0; float flBestMin = -1e30f;
 		for (int f = 0; f < FACE_COUNT; f++)
 		{
-			const float dd = Dot3(vCentroid, s_FaceFwd[f]);
-			if (dd > flBest) { flBest = dd; iFace = f; }
+			float flMin = 1e30f;
+			for (int t = 0; t < 3; t++)
+				flMin = std::min(flMin, Dot3(vRays[tri[t]], s_FaceFwd[f]));
+			if (flMin > flBestMin) { flBestMin = flMin; iFace = f; }
 		}
 
-		const int tri[3] = { a, b, c };
 		for (int t = 0; t < 3; t++)
 		{
 			const Vec3& r = vRays[tri[t]];
-			const float lz = Dot3(r, s_FaceBack[iFace]); // < 0 for the owning face
+			float lz = Dot3(r, s_FaceBack[iFace]); // < 0 for the owning face
+			if (lz > -0.2f)
+				lz = -0.2f; // guard: never let a straddling vertex blow the UV up
 			const float lx = Dot3(r, s_FaceRight[iFace]);
 			const float ly = Dot3(r, s_FaceUp[iFace]);
 			FVert fv;
 			fv.x = ClipX(tri[t]); fv.y = ClipY(tri[t]); fv.z = 0.5f;
-			fv.u = -lx / lz * d + 0.5f;
-			fv.v = 0.5f + ly / lz * d; // v flipped vs flex-fov (D3D top-left origin)
+			fv.u = std::clamp(-lx / lz * d + 0.5f, 0.f, 1.f);
+			fv.v = std::clamp(0.5f + ly / lz * d, 0.f, 1.f); // v flipped for D3D top-left origin
 			vBuckets[iFace].push_back(fv);
 		}
 	};

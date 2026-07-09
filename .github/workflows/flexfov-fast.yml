@@ -15,6 +15,13 @@ jobs:
     - name: Add MSBuild to PATH
       uses: microsoft/setup-msbuild@v2
 
+    - name: Cache NuGet packages
+      uses: actions/cache@v4
+      with:
+        path: packages
+        key: nuget-${{ runner.os }}-boost187
+        restore-keys: nuget-${{ runner.os }}-
+
     - name: Restore NuGet packages
       run: nuget restore
 

@@ -1122,6 +1122,11 @@ void CMenu::MenuVisuals(int iTab)
 					PopTransparent();
 					FToggle(Vars::Visuals::UI::FlexFOVDebug, FToggleEnum::Left);
 					FToggle(Vars::Visuals::UI::FlexFOVComposite, FToggleEnum::Right);
+					PushTransparent(!Vars::Visuals::UI::FlexFOVComposite.Value);
+					{
+						FSlider(Vars::Visuals::UI::FlexFOVStrength);
+					}
+					PopTransparent();
 					/*
 					PushTransparent(!Vars::Visuals::UI::AspectRatio.Value);
 					{

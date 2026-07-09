@@ -523,7 +523,11 @@ void CVisuals::FOV(CTFPlayer* pLocal, CViewSetup* pView)
 	float flRegularFOV = fov_desired->GetFloat();
 	float flZoomFOV = TF_WEAPON_ZOOM_FOV;
 
-	float flRegularOverride = Vars::Visuals::UI::FieldOfView.Value;
+	// When the FlexFOV composite is active it consumes the FOV slider itself and
+	// renders the wide view independently, so keep the game's own view/FOV at
+	// normal. Otherwise pushing m_iFOV / default_fov high makes the engine scale
+	// mouse sensitivity down (a 180 turn takes more mouse travel).
+	float flRegularOverride = Vars::Visuals::UI::FlexFOVComposite.Value ? 0.f : Vars::Visuals::UI::FieldOfView.Value;
 	float flZoomOverride = Vars::Visuals::UI::ZoomFieldOfView.Value;
 	if (SDK::CleanScreenshot())
 		flRegularOverride = flZoomOverride = 0.f;

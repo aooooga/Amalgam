@@ -45,23 +45,21 @@ static void FGlowGradient(const char* sLabel, std::vector<GlowStop_t>& vStops)
 
 	auto ColU32 = [](const Color_t& c) { return IM_COL32(c.r, c.g, c.b, c.a); };
 
-	// Gradient bar (sorted copy so drawing is right even mid-drag). Flat runs
-	// before the first / after the last stop, interpolated between stops.
+	// Gradient bar (sorted copy so drawing is right even mid-drag), rendered by
+	// sampling EvalGlowStops in slices so easing/constant segments show exactly
+	// as they will in game.
 	auto vSorted = vStops;
 	std::sort(vSorted.begin(), vSorted.end(), [](const GlowStop_t& a, const GlowStop_t& b) { return a.Pos < b.Pos; });
 	const float y0 = vPos.y, y1 = vPos.y + flBarH;
 	auto StopX = [&](float flPos) { return vPos.x + std::clamp(flPos, 0.f, 1.f) * flWidth; };
 	{
-		const float xFirst = StopX(vSorted.front().Pos), xLast = StopX(vSorted.back().Pos);
-		if (xFirst > vPos.x)
-			pDrawList->AddRectFilled({ vPos.x, y0 }, { xFirst, y1 }, ColU32(vSorted.front().Color));
-		for (size_t i = 1; i < vSorted.size(); i++)
+		const int nSlices = 96;
+		for (int i = 0; i < nSlices; i++)
 		{
-			const ImU32 c0 = ColU32(vSorted[i - 1].Color), c1 = ColU32(vSorted[i].Color);
-			pDrawList->AddRectFilledMultiColor({ StopX(vSorted[i - 1].Pos), y0 }, { StopX(vSorted[i].Pos), y1 }, c0, c1, c1, c0);
+			const float t0 = float(i) / nSlices, t1 = float(i + 1) / nSlices;
+			const ImU32 c0 = ColU32(EvalGlowStops(vSorted, t0)), c1 = ColU32(EvalGlowStops(vSorted, t1));
+			pDrawList->AddRectFilledMultiColor({ vPos.x + t0 * flWidth, y0 }, { vPos.x + t1 * flWidth, y1 }, c0, c1, c1, c0);
 		}
-		if (xLast < vPos.x + flWidth)
-			pDrawList->AddRectFilled({ xLast, y0 }, { vPos.x + flWidth, y1 }, ColU32(vSorted.back().Color));
 		pDrawList->AddRect({ vPos.x, y0 }, { vPos.x + flWidth, y1 }, IM_COL32(0, 0, 0, 160));
 	}
 
@@ -111,14 +109,26 @@ static void FGlowGradient(const char* sLabel, std::vector<GlowStop_t>& vStops)
 
 		if (BeginPopup("StopPicker"))
 		{
+			// Full picker with manual RGBA/hex inputs.
 			ImVec4 vColor = { tStop.Color.r / 255.f, tStop.Color.g / 255.f, tStop.Color.b / 255.f, tStop.Color.a / 255.f };
-			if (ColorPicker4("##StopColor", &vColor.x, ImGuiColorEditFlags_AlphaBar | ImGuiColorEditFlags_NoInputs))
+			if (ColorPicker4("##StopColor", &vColor.x, ImGuiColorEditFlags_AlphaBar | ImGuiColorEditFlags_DisplayRGB | ImGuiColorEditFlags_DisplayHex))
 			{
 				tStop.Color = {
 					byte(std::clamp(vColor.x, 0.f, 1.f) * 255.f), byte(std::clamp(vColor.y, 0.f, 1.f) * 255.f),
 					byte(std::clamp(vColor.z, 0.f, 1.f) * 255.f), byte(std::clamp(vColor.w, 0.f, 1.f) * 255.f)
 				};
 			}
+
+			// Exact handle position along the 0-100% HP range.
+			float flPct = tStop.Pos * 100.f;
+			SetNextItemWidth(H::Draw.Scale(180));
+			if (SliderFloat("Position", &flPct, 0.f, 100.f, "%.0f%%"))
+				tStop.Pos = std::clamp(flPct / 100.f, 0.f, 1.f);
+
+			// Easing toward the next stop.
+			SetNextItemWidth(H::Draw.Scale(180));
+			Combo("Easing", &tStop.Ease, "Linear\0Ease in\0Ease out\0Ease in/out\0Constant\0");
+
 			EndPopup();
 		}
 		PopID();
@@ -1255,13 +1265,17 @@ void CMenu::MenuVisuals(int iTab)
 						FSlider(Vars::Visuals::UI::ZoomFieldOfView);
 					}
 					PopTransparent();
+					PushTransparent(!Vars::Visuals::UI::ViewmodelFOV.Value);
+					{
+						FSlider(Vars::Visuals::UI::ViewmodelFOV);
+					}
+					PopTransparent();
 					FToggle(Vars::Visuals::UI::FlexFOVDebug, FToggleEnum::Left);
 					FToggle(Vars::Visuals::UI::FlexFOVComposite, FToggleEnum::Right);
 					PushTransparent(!Vars::Visuals::UI::FlexFOVComposite.Value);
 					{
 						FSlider(Vars::Visuals::UI::FlexFOVStrength);
 						FSlider(Vars::Visuals::UI::FlexFOVQuality);
-						FSlider(Vars::Visuals::UI::FlexFOVViewmodelFOV);
 						FToggle(Vars::Visuals::UI::FlexFOVSkipMainView);
 					}
 					PopTransparent();

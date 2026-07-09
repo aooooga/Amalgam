@@ -107,6 +107,7 @@ template <> void CConfigs::SaveJson(boost::property_tree::ptree& t, const std::s
 		boost::property_tree::ptree tEntry;
 		SaveJson(tEntry, "Pos", tStop.Pos);
 		SaveJson(tEntry, "Color", tStop.Color);
+		SaveJson(tEntry, "Ease", tStop.Ease);
 
 		tStops.push_back({ "", tEntry });
 	}
@@ -246,6 +247,8 @@ template <> void CConfigs::LoadJson(const boost::property_tree::ptree& t, const 
 				GlowStop_t tStop;
 				LoadJson(tEntry, "Pos", tStop.Pos);
 				LoadJson(tEntry, "Color", tStop.Color);
+				LoadJson(tEntry, "Ease", tStop.Ease);
+				tStop.Ease = std::clamp(tStop.Ease, 0, GlowEaseEnum::Count - 1);
 				v.Stops.push_back(tStop);
 			}
 			std::sort(v.Stops.begin(), v.Stops.end(), [](const GlowStop_t& a, const GlowStop_t& b) { return a.Pos < b.Pos; });

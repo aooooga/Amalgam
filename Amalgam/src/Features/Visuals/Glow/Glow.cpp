@@ -128,9 +128,21 @@ void CGlow::DrawModel(CBaseEntity* pEntity)
 
 
 // Health fraction (0..1) for entities that have HP, -1 for those that don't;
-// feeds the glow health gradient.
+// feeds the glow health gradient. Weapons and wearables use their carrier's HP
+// so a player's whole silhouette (model + held weapon + cosmetics) matches.
 static float GetHealthFraction(CBaseEntity* pEntity)
 {
+	if (pEntity->IsBaseCombatWeapon())
+	{
+		if (auto pOwner = pEntity->As<CBaseCombatWeapon>()->m_hOwner().Get())
+			pEntity = reinterpret_cast<CBaseEntity*>(pOwner);
+	}
+	else if (pEntity->IsWearable())
+	{
+		if (auto pOwner = pEntity->m_hOwnerEntity().Get())
+			pEntity = reinterpret_cast<CBaseEntity*>(pOwner);
+	}
+
 	float flHealth = -1.f, flMaxHealth = 0.f;
 	if (pEntity->IsPlayer())
 	{

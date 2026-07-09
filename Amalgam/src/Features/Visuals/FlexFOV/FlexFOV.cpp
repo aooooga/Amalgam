@@ -355,14 +355,31 @@ void CFlexFOV::CaptureGlobe(void* rcx, const CViewSetup& pViewSetup)
 		return;
 
 	// If the fov crossed the rig boundary or the quality slider changed the face
-	// size, rebuild the RTs before capturing (only happens on those changes).
-	// Done here, outside m_bDrawing, so we never tear down textures mid-capture.
+	// size, rebuild the RTs before capturing. Debounced: while the user drags a
+	// slider the desired rig can change every frame, and tearing down / creating
+	// render targets mid-frame repeatedly is what caused the random crashes on
+	// fov changes - so only rebuild after the mismatch has been stable for a
+	// moment (the composite falls back to the normal view meanwhile).
 	bool bWide; int iW, iH;
 	ComputeRig(bWide, iW, iH);
-	if (bWide != m_bWideRig || iW != m_iFaceW || iH != m_iFaceH || !m_pFaceTextures[0])
+	const bool bMismatch = bWide != m_bWideRig || iW != m_iFaceW || iH != m_iFaceH || !m_pFaceTextures[0];
+	static float s_flMismatchStart = -1.f;
+	if (!bMismatch)
+		s_flMismatchStart = -1.f;
+	else
 	{
-		Unload();
-		Initialize();
+		const float flNow = static_cast<float>(SDK::PlatFloatTime());
+		if (s_flMismatchStart < 0.f)
+			s_flMismatchStart = flNow;
+		if (flNow - s_flMismatchStart > 0.4f)
+		{
+			Unload();
+			Initialize();
+			s_flMismatchStart = -1.f;
+		}
+		else if (!m_pFaceTextures[0])
+			return; // nothing usable yet; wait out the debounce
+		// else: keep capturing with the old rig until the rebuild fires
 	}
 	if (!m_pFaceTextures[0])
 		return;
@@ -753,16 +770,23 @@ void CFlexFOV::DrawViewmodel()
 	if (!m_bPaintedComposite || !m_bViewSetupValid)
 		return;
 
-	CViewSetup tViewSetup = m_tViewSetup;
-	if (Vars::Visuals::UI::FlexFOVViewmodelFOV.Value)
-		tViewSetup.fovViewmodel = Vars::Visuals::UI::FlexFOVViewmodelFOV.Value;
-
 	auto pRenderContext = I::MaterialSystem->GetRenderContext();
 	pRenderContext->ClearBuffers(false, true, false);
 	pRenderContext->Release();
 
+	// This runs inside the cheap main pass, where BeginCheapMainView zeroed
+	// r_drawviewmodel - and DrawViewModels re-checks that cvar internally
+	// (ShouldDrawViewModel), so without forcing it back on nothing draws.
+	static auto r_drawviewmodel = H::ConVars.FindVar("r_drawviewmodel");
+	const int iOld = r_drawviewmodel ? r_drawviewmodel->GetInt() : 1;
+	if (r_drawviewmodel)
+		r_drawviewmodel->SetValue(1);
+
 	static auto CViewRender_DrawViewModels = U::Hooks.m_mHooks["CViewRender_DrawViewModels"];
-	CViewRender_DrawViewModels->Call<void>(I::ViewRender, tViewSetup, true);
+	CViewRender_DrawViewModels->Call<void>(I::ViewRender, m_tViewSetup, true);
+
+	if (r_drawviewmodel)
+		r_drawviewmodel->SetValue(iOld);
 }
 
 // Forward flex-FOV projection used by SDK::W2S while the composite is active.
@@ -856,6 +880,11 @@ void CFlexFOV::Initialize()
 {
 	ComputeRig(m_bWideRig, m_iFaceW, m_iFaceH);
 
+	// RT creation outside the engine's alloc window needs the explicit
+	// begin/end bracket, or the driver-side reallocation can crash when this
+	// runs mid-frame (fov/quality change rebuilds).
+	I::MaterialSystem->BeginRenderTargetAllocation();
+
 	// Glow silhouette/blur buffers for the face passes. Screen-sized, NOT
 	// face-sized: outlines are low-frequency, so rendering them at face
 	// resolution (~2x screen per axis) tripled the fill cost of every blur and
@@ -898,6 +927,8 @@ void CFlexFOV::Initialize()
 			m_pFaceMaterials[i] = F::Materials.Create(s_szFaceNames[i], kv);
 		}
 	}
+
+	I::MaterialSystem->EndRenderTargetAllocation();
 }
 
 void CFlexFOV::Unload()

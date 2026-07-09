@@ -1136,14 +1136,33 @@ public:
 };
 
 // A color stop on the glow health gradient; Pos is the health fraction (0..1).
+// Ease shapes the blend from this stop toward the NEXT one.
+namespace GlowEaseEnum
+{
+	enum { Linear = 0, In, Out, InOut, Constant, Count };
+}
 struct GlowStop_t
 {
 	float Pos = 0.f;
 	Color_t Color = { 255, 255, 255, 255 };
+	int Ease = GlowEaseEnum::Linear;
 };
 
+// Easing curve for a gradient segment, applied to the 0..1 blend fraction.
+inline float GlowEaseFraction(int iEase, float f)
+{
+	switch (iEase)
+	{
+	case GlowEaseEnum::In: return f * f;
+	case GlowEaseEnum::Out: return 1.f - (1.f - f) * (1.f - f);
+	case GlowEaseEnum::InOut: return f * f * (3.f - 2.f * f);
+	case GlowEaseEnum::Constant: return 0.f; // hold this stop's color until the next
+	default: return f;
+	}
+}
+
 // Evaluate a stop list (sorted by Pos) at health fraction t: clamped at the
-// ends, linearly interpolated between neighboring stops.
+// ends, interpolated between neighboring stops with the left stop's easing.
 inline Color_t EvalGlowStops(const std::vector<GlowStop_t>& vStops, float t)
 {
 	if (vStops.empty())
@@ -1159,7 +1178,7 @@ inline Color_t EvalGlowStops(const std::vector<GlowStop_t>& vStops, float t)
 			const auto& a = vStops[i - 1];
 			const auto& b = vStops[i];
 			const float flRange = b.Pos - a.Pos;
-			const float f = flRange > 0.f ? (t - a.Pos) / flRange : 0.f;
+			const float f = GlowEaseFraction(a.Ease, flRange > 0.f ? (t - a.Pos) / flRange : 0.f);
 			return {
 				byte(a.Color.r + (b.Color.r - a.Color.r) * f),
 				byte(a.Color.g + (b.Color.g - a.Color.g) * f),

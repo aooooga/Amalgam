@@ -30,9 +30,9 @@ bool CRearView::SetupTargets(int iScrW, int iScrH, int iCams)
 
 	for (int i = 0; i < iCams; i++)
 	{
-		// Own (separate) depth per RT so Push3DView has a depth-stencil matching the
-		// sub-screen-sized target; the flank pass draws only enemy models so it never
-		// needs the main scene's depth.
+		// Own (separate) depth+stencil per RT so Push3DView has a depth-stencil
+		// matching the sub-screen-sized target, and so the glow stencil has somewhere
+		// to land; the flank pass draws only enemy models, never the world.
 		const std::string sTex = "RearViewTex" + std::to_string(i);
 		ITexture* pTex = I::MaterialSystem->CreateNamedRenderTargetTextureEx(
 			sTex.c_str(),
@@ -62,15 +62,43 @@ bool CRearView::SetupTargets(int iScrW, int iScrH, int iCams)
 			return false;
 		m_vMaterials.push_back(pMat);
 		m_vAlphaVars.push_back(pMat->FindVar("$alpha", nullptr));
+	}
 
-		// Additive twin of the same RT used for the outline glow: blitting it offset
-		// around the silhouette adds a colored halo (same technique CGlow's halo uses,
-		// minus the stencil - the sharp tile drawn on top hides the interior add).
-		KeyValues* kvG = new KeyValues("UnlitGeneric");
-		kvG->SetString("$basetexture", sTex.c_str());
-		kvG->SetInt("$additive", 1);
-		const std::string sGlow = "RearViewGlowMat" + std::to_string(i);
-		m_vGlowMaterials.push_back(F::Materials.Create(sGlow.c_str(), kvG));
+	// Shared glow scratch buffers, sized to one flank tile so all dims line up.
+	for (int i = 0; i < 2; i++)
+	{
+		ITexture*& pBuf = i ? m_pGlowBlur : m_pGlowSil;
+		pBuf = I::MaterialSystem->CreateNamedRenderTargetTextureEx(
+			i ? "RearViewGlowBlur" : "RearViewGlowSil",
+			iCamW, iScrH,
+			RT_SIZE_LITERAL,
+			IMAGE_FORMAT_RGBA8888,
+			MATERIAL_RT_DEPTH_SEPARATE,
+			TEXTUREFLAGS_CLAMPS | TEXTUREFLAGS_CLAMPT | TEXTUREFLAGS_EIGHTBITALPHA,
+			CREATERENDERTARGETFLAGS_HDR
+		);
+		if (!pBuf)
+			return false;
+		pBuf->IncrementReferenceCount();
+	}
+	{
+		KeyValues* kv = new KeyValues("BlurFilterX");
+		kv->SetString("$basetexture", "RearViewGlowSil");
+		m_pGlowBlurX = F::Materials.Create("RearViewGlowBlurX", kv);
+	}
+	{
+		KeyValues* kv = new KeyValues("BlurFilterY");
+		kv->SetString("$basetexture", "RearViewGlowBlur");
+		m_pGlowBlurY = F::Materials.Create("RearViewGlowBlurY", kv);
+		m_pGlowBloom = m_pGlowBlurY->FindVar("$bloomamount", nullptr);
+	}
+	{
+		// Translucent (not additive like the on-screen glow): the halo is baked into
+		// the flank RT and must write alpha so the tile composite shows it.
+		KeyValues* kv = new KeyValues("UnlitGeneric");
+		kv->SetString("$basetexture", "RearViewGlowSil");
+		kv->SetInt("$translucent", 1);
+		m_pGlowHalo = F::Materials.Create("RearViewGlowHalo", kv);
 	}
 
 	return true;
@@ -78,15 +106,27 @@ bool CRearView::SetupTargets(int iScrW, int iScrH, int iCams)
 
 void CRearView::FreeTargets()
 {
-	for (auto pMat : m_vMaterials)
+	for (IMaterial** ppMat : { &m_pGlowBlurX, &m_pGlowBlurY, &m_pGlowHalo })
 	{
-		if (pMat)
+		if (*ppMat)
 		{
-			pMat->DecrementReferenceCount();
-			pMat->DeleteIfUnreferenced();
+			(*ppMat)->DecrementReferenceCount();
+			(*ppMat)->DeleteIfUnreferenced();
+			*ppMat = nullptr;
 		}
 	}
-	for (auto pMat : m_vGlowMaterials)
+	m_pGlowBloom = nullptr;
+	for (ITexture** ppTex : { &m_pGlowSil, &m_pGlowBlur })
+	{
+		if (*ppTex)
+		{
+			(*ppTex)->DecrementReferenceCount();
+			(*ppTex)->DeleteIfUnreferenced();
+			*ppTex = nullptr;
+		}
+	}
+
+	for (auto pMat : m_vMaterials)
 	{
 		if (pMat)
 		{
@@ -103,7 +143,6 @@ void CRearView::FreeTargets()
 		}
 	}
 	m_vMaterials.clear();
-	m_vGlowMaterials.clear();
 	m_vTextures.clear();
 	m_vAlphaVars.clear();
 }
@@ -161,6 +200,115 @@ void CRearView::DrawEnemies()
 	pRenderContext->Release();
 }
 
+// Outline glow into the currently-bound flank RT, mirroring CGlow: stencil the
+// interior, render a colored silhouette into a scratch buffer, blur it, then blit
+// the halo back offset+masked to the stencil so only the outline lands. Uses a
+// translucent (alpha-writing) halo so the baked outline survives the tile blend.
+void CRearView::RenderGlow(int iCamW, int iScrH)
+{
+	if (m_vVisible.empty() || !m_pGlowColor || !m_pGlowSil || !m_pGlowBlur || !m_pGlowBlurX || !m_pGlowBlurY || !m_pGlowHalo)
+		return;
+
+	const int iStencil = Vars::Visuals::UI::RearViewGlowStencil.Value;
+	const float flBlur = Vars::Visuals::UI::RearViewGlowBlur.Value;
+	if (!iStencil && !flBlur)
+		return;
+	const Color_t cGlow = Vars::Visuals::UI::RearViewGlowColor.Value;
+
+	auto pRenderContext = I::MaterialSystem->GetRenderContext();
+
+	const Color_t cOldMod = I::RenderView->GetColorModulation();
+	const float flOldBlend = I::RenderView->GetBlend();
+	IMaterial* pOldMat = nullptr; OverrideType_t iOldOverride = OVERRIDE_NORMAL;
+	I::ModelRender->GetMaterialOverride(&pOldMat, &iOldOverride);
+
+	auto GlowBegin = [&]()
+	{
+		I::RenderView->SetBlend(0.f);
+		I::RenderView->SetColorModulation(1.f, 1.f, 1.f);
+		I::ModelRender->ForcedMaterialOverride(m_pGlowColor);
+	};
+	auto Draw = [&](CTFPlayer* p)
+	{
+		m_bRendering = true;
+		p->DrawModel(STUDIO_RENDER | STUDIO_NOSHADOWS);
+		m_bRendering = false;
+	};
+
+	// The flank RT's stencil persists across frames; clear it before stamping.
+	pRenderContext->ClearBuffers(false, false, true);
+
+	// 1) Stamp the interior into the flank RT stencil (models drawn invisibly).
+	GlowBegin();
+	pRenderContext->SetStencilEnable(true);
+	pRenderContext->SetStencilCompareFunction(STENCILCOMPARISONFUNCTION_ALWAYS);
+	pRenderContext->SetStencilPassOperation(STENCILOPERATION_REPLACE);
+	pRenderContext->SetStencilFailOperation(STENCILOPERATION_KEEP);
+	pRenderContext->SetStencilZFailOperation(STENCILOPERATION_REPLACE);
+	pRenderContext->SetStencilReferenceValue(1);
+	pRenderContext->SetStencilWriteMask(0xFF);
+	pRenderContext->SetStencilTestMask(0x0);
+	for (auto p : m_vVisible)
+		Draw(p);
+	pRenderContext->SetStencilEnable(false);
+
+	// 2) Colored silhouette into the scratch buffer.
+	pRenderContext->PushRenderTargetAndViewport();
+	pRenderContext->SetRenderTarget(m_pGlowSil);
+	pRenderContext->Viewport(0, 0, iCamW, iScrH);
+	pRenderContext->ClearColor4ub(0, 0, 0, 0);
+	pRenderContext->ClearBuffers(true, true, false);
+	for (auto p : m_vVisible)
+	{
+		I::RenderView->SetColorModulation(cGlow);
+		I::RenderView->SetBlend(cGlow.a / 255.f);
+		Draw(p);
+	}
+	pRenderContext->PopRenderTargetAndViewport(); // back to the flank RT
+
+	// 3) Separable blur (silhouette -> blur -> silhouette).
+	if (flBlur && m_pGlowBloom)
+	{
+		m_pGlowBloom->SetFloatValue(flBlur);
+		pRenderContext->PushRenderTargetAndViewport();
+		pRenderContext->SetRenderTarget(m_pGlowBlur);
+		pRenderContext->Viewport(0, 0, iCamW, iScrH);
+		pRenderContext->DrawScreenSpaceRectangle(m_pGlowBlurX, 0, 0, iCamW, iScrH, 0.f, 0.f, iCamW - 1, iScrH - 1, iCamW, iScrH);
+		pRenderContext->SetRenderTarget(m_pGlowSil);
+		pRenderContext->Viewport(0, 0, iCamW, iScrH);
+		pRenderContext->DrawScreenSpaceRectangle(m_pGlowBlurY, 0, 0, iCamW, iScrH, 0.f, 0.f, iCamW - 1, iScrH - 1, iCamW, iScrH);
+		pRenderContext->PopRenderTargetAndViewport();
+	}
+
+	// 4) Halo: blit the (blurred) silhouette back into the flank RT where the
+	// stencil is 0 (outside the interior), so only the outline shows.
+	pRenderContext->SetStencilEnable(true);
+	pRenderContext->SetStencilCompareFunction(STENCILCOMPARISONFUNCTION_EQUAL);
+	pRenderContext->SetStencilPassOperation(STENCILOPERATION_KEEP);
+	pRenderContext->SetStencilFailOperation(STENCILOPERATION_KEEP);
+	pRenderContext->SetStencilZFailOperation(STENCILOPERATION_KEEP);
+	pRenderContext->SetStencilReferenceValue(0);
+	pRenderContext->SetStencilWriteMask(0x0);
+	pRenderContext->SetStencilTestMask(0xFF);
+	if (iStencil)
+	{
+		const int s = std::max(1, (iStencil + 1) / 2);
+		pRenderContext->DrawScreenSpaceRectangle(m_pGlowHalo, -s, 0, iCamW, iScrH, 0.f, 0.f, iCamW - 1, iScrH - 1, iCamW, iScrH);
+		pRenderContext->DrawScreenSpaceRectangle(m_pGlowHalo, 0, -s, iCamW, iScrH, 0.f, 0.f, iCamW - 1, iScrH - 1, iCamW, iScrH);
+		pRenderContext->DrawScreenSpaceRectangle(m_pGlowHalo, s, 0, iCamW, iScrH, 0.f, 0.f, iCamW - 1, iScrH - 1, iCamW, iScrH);
+		pRenderContext->DrawScreenSpaceRectangle(m_pGlowHalo, 0, s, iCamW, iScrH, 0.f, 0.f, iCamW - 1, iScrH - 1, iCamW, iScrH);
+	}
+	if (flBlur)
+		pRenderContext->DrawScreenSpaceRectangle(m_pGlowHalo, 0, 0, iCamW, iScrH, 0.f, 0.f, iCamW - 1, iScrH - 1, iCamW, iScrH);
+	pRenderContext->SetStencilEnable(false);
+
+	I::RenderView->SetColorModulation(cOldMod);
+	I::RenderView->SetBlend(flOldBlend);
+	I::ModelRender->ForcedMaterialOverride(pOldMat, iOldOverride);
+
+	pRenderContext->Release();
+}
+
 void CRearView::RenderSideCamera(const CViewSetup& tView, float flYawOffset, float flSideFOV, ITexture* pTexture, int iCamW, int iScrH)
 {
 	if (!pTexture)
@@ -187,6 +335,7 @@ void CRearView::RenderSideCamera(const CViewSetup& tView, float flYawOffset, flo
 	pRenderContext->Release();
 
 	DrawEnemies();
+	RenderGlow(iCamW, iScrH); // self-gates: only draws when stencil or blur >= 1
 
 	I::RenderView->PopView(frustum);
 }
@@ -217,8 +366,7 @@ void CRearView::Capture(void* rcx, const CViewSetup& tView)
 	// Front coverage the player already sees: FlexFOV's wide FOV while the composite
 	// owns the screen, otherwise the actual rendered view fov, plus the user's
 	// manual offset. This is a full-circle angle (can exceed 179 on wide FlexFOV) so
-	// it is CLAMPED, not FOV-sanitized - clamping to <179 was the bug that made the
-	// slider dead outside a narrow band. m_flFovX is only an estimate of the
+	// it is CLAMPED, not FOV-sanitized. m_flFovX is only an estimate of the
 	// effective warp FOV, so the offset trims the seam until on-screen enemies stop
 	// ghosting behind.
 	float flBaseFOV = F::FlexFOV.m_bComposite ? F::FlexFOV.m_flFovX : tView.fov;
@@ -261,8 +409,6 @@ void CRearView::DrawOverlay()
 		return;
 
 	const float flAlpha = Vars::Visuals::UI::RearViewAlpha.Value;
-	const bool bGlow = Vars::Visuals::UI::RearViewGlow.Value;
-	const int iSide = std::max(2, iScrH / 250); // outline halo width, scaled to resolution
 
 	auto pRenderContext = I::MaterialSystem->GetRenderContext();
 	for (int i = 0; i < iCams; i++)
@@ -270,23 +416,11 @@ void CRearView::DrawOverlay()
 		if (!m_vMaterials[i])
 			continue;
 
-		const int iDestX = i * iCamW;
-
-		// Outline glow: additive blits of the same tile offset around the silhouette
-		// (mirrored identically), so a colored halo bleeds past the enemy edges. The
-		// sharp tile drawn afterwards covers the interior, leaving the halo as an
-		// outline. Src u runs texW -> 0 to mirror like a rear-view mirror.
-		if (bGlow && i < int(m_vGlowMaterials.size()) && m_vGlowMaterials[i])
-		{
-			IMaterial* pGlow = m_vGlowMaterials[i];
-			const int aOff[8][2] = { {-iSide,0},{iSide,0},{0,-iSide},{0,iSide},{-iSide,-iSide},{iSide,iSide},{iSide,-iSide},{-iSide,iSide} };
-			for (auto& o : aOff)
-				pRenderContext->DrawScreenSpaceRectangle(pGlow, iDestX + o[0], o[1], iCamW, iScrH, float(iCamW), 0.f, 0.f, float(iScrH), iCamW, iScrH);
-		}
-
 		if (i < int(m_vAlphaVars.size()) && m_vAlphaVars[i])
 			m_vAlphaVars[i]->SetFloatValue(flAlpha);
 
+		const int iDestX = i * iCamW;
+		// Mirrored horizontally (src u runs texW -> 0) so it reads like a rear-view mirror.
 		pRenderContext->DrawScreenSpaceRectangle(m_vMaterials[i], iDestX, 0, iCamW, iScrH, float(iCamW), 0.f, 0.f, float(iScrH), iCamW, iScrH);
 	}
 	pRenderContext->Release();
@@ -294,12 +428,25 @@ void CRearView::DrawOverlay()
 
 void CRearView::Initialize()
 {
-	// Enemy materials come from the shared Amalgam material list (F::Materials);
-	// the per-RT tile / glow materials are created lazily in SetupTargets.
+	// Enemy materials come from the shared Amalgam material list (F::Materials); the
+	// per-RT tile and glow scratch materials are created lazily in SetupTargets.
+	if (!m_pGlowColor)
+	{
+		m_pGlowColor = I::MaterialSystem->FindMaterial("dev/glow_color", TEXTURE_GROUP_OTHER);
+		m_pGlowColor->IncrementReferenceCount();
+		F::Materials.m_mMatList[m_pGlowColor];
+	}
 }
 
 void CRearView::Unload()
 {
 	FreeTargets();
 	m_iLastW = m_iLastH = m_iLastCams = 0;
+
+	if (m_pGlowColor)
+	{
+		m_pGlowColor->DecrementReferenceCount();
+		m_pGlowColor->DeleteIfUnreferenced();
+		m_pGlowColor = nullptr;
+	}
 }

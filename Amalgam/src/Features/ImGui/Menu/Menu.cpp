@@ -1280,17 +1280,6 @@ void CMenu::MenuVisuals(int iTab)
 						FSlider(Vars::Visuals::UI::FlexFOVQuality);
 					}
 					PopTransparent();
-					FToggle(Vars::Visuals::UI::RearView);
-					PushTransparent(!Vars::Visuals::UI::RearView.Value);
-					{
-						FSlider(Vars::Visuals::UI::RearViewCameras, FSliderEnum::Left);
-						FSlider(Vars::Visuals::UI::RearViewFOVOffset, FSliderEnum::Right);
-						FToggle(Vars::Visuals::UI::RearViewFlipPitch, FToggleEnum::Left);
-						FToggle(Vars::Visuals::UI::RearViewGlow, FToggleEnum::Right);
-						FSlider(Vars::Visuals::UI::RearViewAlpha);
-						FMDropdown(Vars::Visuals::UI::RearViewMaterial);
-					}
-					PopTransparent();
 					/*
 					PushTransparent(!Vars::Visuals::UI::AspectRatio.Value);
 					{
@@ -1339,6 +1328,26 @@ void CMenu::MenuVisuals(int iTab)
 					FDropdown(Vars::Visuals::Effects::RagdollEffects);
 					FToggle(Vars::Visuals::Effects::DrawIconsThroughWalls);
 					FToggle(Vars::Visuals::Effects::DrawDamageNumbersThroughWalls);
+				} EndSection();
+				if (Section("Rear view"))
+				{
+					FToggle(Vars::Visuals::UI::RearView);
+					PushTransparent(!Vars::Visuals::UI::RearView.Value);
+					{
+						FSlider(Vars::Visuals::UI::RearViewCameras, FSliderEnum::Left);
+						FSlider(Vars::Visuals::UI::RearViewFOVOffset, FSliderEnum::Right);
+						FToggle(Vars::Visuals::UI::RearViewFlipPitch, FToggleEnum::Left);
+						FSlider(Vars::Visuals::UI::RearViewAlpha, FSliderEnum::Right);
+						FMDropdown(Vars::Visuals::UI::RearViewMaterial);
+						FSlider(Vars::Visuals::UI::RearViewGlowStencil, FSliderEnum::Left | FSliderEnum::Min);
+						FSlider(Vars::Visuals::UI::RearViewGlowBlur, FSliderEnum::Right | FSliderEnum::Min | FSliderEnum::Precision);
+						PushTransparent(!(Vars::Visuals::UI::RearViewGlowStencil.Value || Vars::Visuals::UI::RearViewGlowBlur.Value));
+						{
+							FColorPicker(Vars::Visuals::UI::RearViewGlowColor);
+						}
+						PopTransparent();
+					}
+					PopTransparent();
 				} EndSection();
 			}
 			/* Column 2 */

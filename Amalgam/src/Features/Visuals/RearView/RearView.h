@@ -12,15 +12,25 @@
 // FOV-offset slider trims the seam so on-screen enemies stop doubling as ghosts.
 //
 // Enemies are drawn with the player's chosen material list (same list as chams,
-// with per-material colors); an optional stencil-free outline glow is added in
-// the screen-space compositing pass.
+// with per-material colors). An optional stencil outline glow (its own stencil
+// width / blur / color, mirroring the Glow feature's pipeline) is baked into each
+// flank RT so it composites with the tiles.
 class CRearView
 {
 private:
-	std::vector<ITexture*> m_vTextures = {};        // one flank RT per camera
-	std::vector<IMaterial*> m_vMaterials = {};      // screen-tile material per RT
-	std::vector<IMaterial*> m_vGlowMaterials = {};  // additive twin of each tile (outline glow)
-	std::vector<IMaterialVar*> m_vAlphaVars = {};   // $alpha var of each tile material
+	std::vector<ITexture*> m_vTextures = {};      // one flank RT per camera
+	std::vector<IMaterial*> m_vMaterials = {};    // screen-tile material per RT
+	std::vector<IMaterialVar*> m_vAlphaVars = {}; // $alpha var of each tile material
+
+	// Glow pipeline (mirrors CGlow), sized to a flank tile and shared across
+	// cameras. Baked into the flank RT so the outline composites with the tile.
+	IMaterial* m_pGlowColor = nullptr; // dev/glow_color (solid color for stencil/silhouette)
+	ITexture* m_pGlowSil = nullptr;    // colored silhouette buffer
+	ITexture* m_pGlowBlur = nullptr;   // blur ping buffer
+	IMaterial* m_pGlowBlurX = nullptr;
+	IMaterial* m_pGlowBlurY = nullptr;
+	IMaterialVar* m_pGlowBloom = nullptr;
+	IMaterial* m_pGlowHalo = nullptr;  // translucent (writes alpha, so it composites)
 
 	std::vector<CTFPlayer*> m_vVisible = {}; // enemies with LOS, gathered once per frame
 
@@ -32,6 +42,7 @@ private:
 	void GatherVisibleEnemies(CTFPlayer* pLocal);
 	void RenderSideCamera(const CViewSetup& tView, float flYawOffset, float flSideFOV, ITexture* pTexture, int iCamW, int iScrH);
 	void DrawEnemies();
+	void RenderGlow(int iCamW, int iScrH); // outline glow into the currently-bound flank RT
 
 public:
 	// Re-renders the flank cameras into their RTs. Called from the

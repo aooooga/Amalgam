@@ -1287,9 +1287,8 @@ void CMenu::MenuVisuals(int iTab)
 						FSlider(Vars::Visuals::UI::RearViewFOVOffset, FSliderEnum::Right);
 						FToggle(Vars::Visuals::UI::RearViewFlipPitch, FToggleEnum::Left);
 						FToggle(Vars::Visuals::UI::RearViewGlow, FToggleEnum::Right);
-						FDropdown(Vars::Visuals::UI::RearViewMaterial, FDropdownEnum::Left);
-						FSlider(Vars::Visuals::UI::RearViewAlpha, FSliderEnum::Right);
-						FColorPicker(Vars::Visuals::UI::RearViewColor);
+						FSlider(Vars::Visuals::UI::RearViewAlpha);
+						FMDropdown(Vars::Visuals::UI::RearViewMaterial);
 					}
 					PopTransparent();
 					/*

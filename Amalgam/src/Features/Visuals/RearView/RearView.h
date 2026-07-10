@@ -9,19 +9,18 @@
 // of sight) into render targets, then tiles those mirrored across the screen as a
 // translucent overlay. Works at any FOV and cooperates with FlexFOV: when the
 // composite owns the screen the front coverage is FlexFOV's wide FOV, and the
-// FOV-offset slider lets the user trim the seam so on-screen enemies stop
-// doubling as rear-view ghosts.
+// FOV-offset slider trims the seam so on-screen enemies stop doubling as ghosts.
+//
+// Enemies are drawn with the player's chosen material list (same list as chams,
+// with per-material colors); an optional stencil-free outline glow is added in
+// the screen-space compositing pass.
 class CRearView
 {
 private:
-	std::vector<ITexture*> m_vTextures = {};
-	std::vector<IMaterial*> m_vMaterials = {};    // one screen-tile material per flank RT
-	std::vector<IMaterialVar*> m_vAlphaVars = {}; // parallel $alpha var of each tile material
-
-	// Enemy silhouette materials (color comes from SetColorModulation at draw time).
-	IMaterial* m_pMatFlat = nullptr;
-	IMaterial* m_pMatShaded = nullptr;
-	IMaterial* m_pMatGlow = nullptr; // additive pass drawn on top when glow is on
+	std::vector<ITexture*> m_vTextures = {};        // one flank RT per camera
+	std::vector<IMaterial*> m_vMaterials = {};      // screen-tile material per RT
+	std::vector<IMaterial*> m_vGlowMaterials = {};  // additive twin of each tile (outline glow)
+	std::vector<IMaterialVar*> m_vAlphaVars = {};   // $alpha var of each tile material
 
 	std::vector<CTFPlayer*> m_vVisible = {}; // enemies with LOS, gathered once per frame
 
@@ -32,7 +31,7 @@ private:
 	void FreeTargets();
 	void GatherVisibleEnemies(CTFPlayer* pLocal);
 	void RenderSideCamera(const CViewSetup& tView, float flYawOffset, float flSideFOV, ITexture* pTexture, int iCamW, int iScrH);
-	void DrawEnemies(IMaterial* pBase);
+	void DrawEnemies();
 
 public:
 	// Re-renders the flank cameras into their RTs. Called from the

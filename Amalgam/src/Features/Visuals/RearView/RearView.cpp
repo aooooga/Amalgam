@@ -7,7 +7,8 @@
 #include <algorithm>
 
 // Reject NaNs and degenerate/too-wide FOVs a single linear projection can't
-// represent; fall back to a sane value instead.
+// represent; fall back to a sane value instead. Used only for the per-camera
+// side FOV - the front coverage is a full-circle angle and is clamped separately.
 static float SanitizeFOV(float flFov, float flFallback)
 {
 	if (flFov != flFov || flFov <= 1.f || flFov >= 179.f)
@@ -47,9 +48,9 @@ bool CRearView::SetupTargets(int iScrW, int iScrH, int iCams)
 		pTex->IncrementReferenceCount();
 		m_vTextures.push_back(pTex);
 
-		// Translucent so the transparent (cleared) background shows nothing and only
-		// the enemy silhouettes blend over the frame; $alpha is driven live from the
-		// alpha slider for the whole overlay's opacity.
+		// Translucent tile: the transparent (cleared) background shows nothing and
+		// only the enemy silhouettes blend over the frame; $alpha is driven live from
+		// the alpha slider for the whole overlay's opacity.
 		KeyValues* kv = new KeyValues("UnlitGeneric");
 		kv->SetString("$basetexture", sTex.c_str());
 		kv->SetInt("$translucent", 1);
@@ -61,6 +62,15 @@ bool CRearView::SetupTargets(int iScrW, int iScrH, int iCams)
 			return false;
 		m_vMaterials.push_back(pMat);
 		m_vAlphaVars.push_back(pMat->FindVar("$alpha", nullptr));
+
+		// Additive twin of the same RT used for the outline glow: blitting it offset
+		// around the silhouette adds a colored halo (same technique CGlow's halo uses,
+		// minus the stencil - the sharp tile drawn on top hides the interior add).
+		KeyValues* kvG = new KeyValues("UnlitGeneric");
+		kvG->SetString("$basetexture", sTex.c_str());
+		kvG->SetInt("$additive", 1);
+		const std::string sGlow = "RearViewGlowMat" + std::to_string(i);
+		m_vGlowMaterials.push_back(F::Materials.Create(sGlow.c_str(), kvG));
 	}
 
 	return true;
@@ -69,6 +79,14 @@ bool CRearView::SetupTargets(int iScrW, int iScrH, int iCams)
 void CRearView::FreeTargets()
 {
 	for (auto pMat : m_vMaterials)
+	{
+		if (pMat)
+		{
+			pMat->DecrementReferenceCount();
+			pMat->DeleteIfUnreferenced();
+		}
+	}
+	for (auto pMat : m_vGlowMaterials)
 	{
 		if (pMat)
 		{
@@ -85,6 +103,7 @@ void CRearView::FreeTargets()
 		}
 	}
 	m_vMaterials.clear();
+	m_vGlowMaterials.clear();
 	m_vTextures.clear();
 	m_vAlphaVars.clear();
 }
@@ -108,28 +127,24 @@ void CRearView::GatherVisibleEnemies(CTFPlayer* pLocal)
 	}
 }
 
-void CRearView::DrawEnemies(IMaterial* pBase)
+void CRearView::DrawEnemies()
 {
 	if (m_vVisible.empty())
 		return;
 
-	const Color_t cColor = Vars::Visuals::UI::RearViewColor.Value;
-	const bool bGlow = Vars::Visuals::UI::RearViewGlow.Value;
+	auto pRenderContext = I::MaterialSystem->GetRenderContext();
 
-	// Pass 0: the chosen (flat/shaded) silhouette. Pass 1 (glow on): an additive
-	// re-draw on top so the silhouettes light up. Color is applied through the
-	// studio color modulation, tinting whatever material is bound (same mechanism
-	// CGlow uses), with m_bRendering flipped per model so the engine's own
-	// per-draw overrides can't stomp ours.
-	for (int iPass = 0; iPass < (bGlow ? 2 : 1); iPass++)
+	// Draw the visible enemies with the user's material list (same list/handling as
+	// chams: each entry is a named material + color), m_bRendering flipped per model
+	// so the engine's own per-draw overrides can't stomp ours.
+	for (auto& [sName, tColor] : Vars::Visuals::UI::RearViewMaterial.Value)
 	{
-		IMaterial* pMat = iPass == 0 ? pBase : m_pMatGlow;
-		if (!pMat)
-			continue;
+		auto pMaterial = F::Materials.GetMaterial(FNV1A::Hash32(sName.c_str()));
+		F::Materials.SetColor(pMaterial, tColor);
+		I::ModelRender->ForcedMaterialOverride(pMaterial ? pMaterial->m_pMaterial : nullptr);
 
-		I::ModelRender->ForcedMaterialOverride(pMat);
-		I::RenderView->SetColorModulation(cColor);
-		I::RenderView->SetBlend(1.f);
+		if (pMaterial && pMaterial->m_bInvertCull)
+			pRenderContext->CullMode(MATERIAL_CULLMODE_CW);
 
 		for (auto pPlayer : m_vVisible)
 		{
@@ -137,8 +152,13 @@ void CRearView::DrawEnemies(IMaterial* pBase)
 			pPlayer->DrawModel(STUDIO_RENDER);
 			m_bRendering = false;
 		}
+
+		if (pMaterial && pMaterial->m_bInvertCull)
+			pRenderContext->CullMode(MATERIAL_CULLMODE_CCW);
 	}
 	I::ModelRender->ForcedMaterialOverride(nullptr);
+
+	pRenderContext->Release();
 }
 
 void CRearView::RenderSideCamera(const CViewSetup& tView, float flYawOffset, float flSideFOV, ITexture* pTexture, int iCamW, int iScrH)
@@ -158,8 +178,6 @@ void CRearView::RenderSideCamera(const CViewSetup& tView, float flYawOffset, flo
 	tCam.angles = Vec3(flPitch, tView.angles.y + flYawOffset, tView.angles.z);
 	// origin left at the player's eye (tView.origin)
 
-	IMaterial* pBase = Vars::Visuals::UI::RearViewMaterial.Value == Vars::Visuals::UI::RearViewMaterialEnum::Shaded ? m_pMatShaded : m_pMatFlat;
-
 	Frustum frustum;
 	I::RenderView->Push3DView(tCam, VIEW_CLEAR_COLOR | VIEW_CLEAR_DEPTH, pTexture, frustum);
 
@@ -168,7 +186,7 @@ void CRearView::RenderSideCamera(const CViewSetup& tView, float flYawOffset, flo
 	pRenderContext->ClearBuffers(true, true, false);
 	pRenderContext->Release();
 
-	DrawEnemies(pBase);
+	DrawEnemies();
 
 	I::RenderView->PopView(frustum);
 }
@@ -196,12 +214,17 @@ void CRearView::Capture(void* rcx, const CViewSetup& tView)
 	if (!SetupTargets(iScrW, iScrH, iCams))
 		return;
 
-	// Front coverage the player already sees: FlexFOV's wide FOV while the
-	// composite owns the screen, otherwise the actual rendered view fov, plus the
-	// user's manual offset (m_flFovX is only an estimate of the effective warp FOV,
-	// so the slider trims the seam until on-screen enemies stop ghosting behind).
-	const float flBaseFOV = F::FlexFOV.m_bComposite ? F::FlexFOV.m_flFovX : tView.fov;
-	const float flFrontFOV = SanitizeFOV(flBaseFOV + Vars::Visuals::UI::RearViewFOVOffset.Value, 100.f);
+	// Front coverage the player already sees: FlexFOV's wide FOV while the composite
+	// owns the screen, otherwise the actual rendered view fov, plus the user's
+	// manual offset. This is a full-circle angle (can exceed 179 on wide FlexFOV) so
+	// it is CLAMPED, not FOV-sanitized - clamping to <179 was the bug that made the
+	// slider dead outside a narrow band. m_flFovX is only an estimate of the
+	// effective warp FOV, so the offset trims the seam until on-screen enemies stop
+	// ghosting behind.
+	float flBaseFOV = F::FlexFOV.m_bComposite ? F::FlexFOV.m_flFovX : tView.fov;
+	if (flBaseFOV != flBaseFOV || flBaseFOV <= 1.f)
+		flBaseFOV = 100.f;
+	const float flFrontFOV = std::clamp(flBaseFOV + Vars::Visuals::UI::RearViewFOVOffset.Value, 1.f, 350.f);
 	const float flRemaining = 360.f - flFrontFOV;
 	if (flRemaining <= 0.f)
 		return;
@@ -238,6 +261,8 @@ void CRearView::DrawOverlay()
 		return;
 
 	const float flAlpha = Vars::Visuals::UI::RearViewAlpha.Value;
+	const bool bGlow = Vars::Visuals::UI::RearViewGlow.Value;
+	const int iSide = std::max(2, iScrH / 250); // outline halo width, scaled to resolution
 
 	auto pRenderContext = I::MaterialSystem->GetRenderContext();
 	for (int i = 0; i < iCams; i++)
@@ -245,11 +270,23 @@ void CRearView::DrawOverlay()
 		if (!m_vMaterials[i])
 			continue;
 
+		const int iDestX = i * iCamW;
+
+		// Outline glow: additive blits of the same tile offset around the silhouette
+		// (mirrored identically), so a colored halo bleeds past the enemy edges. The
+		// sharp tile drawn afterwards covers the interior, leaving the halo as an
+		// outline. Src u runs texW -> 0 to mirror like a rear-view mirror.
+		if (bGlow && i < int(m_vGlowMaterials.size()) && m_vGlowMaterials[i])
+		{
+			IMaterial* pGlow = m_vGlowMaterials[i];
+			const int aOff[8][2] = { {-iSide,0},{iSide,0},{0,-iSide},{0,iSide},{-iSide,-iSide},{iSide,iSide},{iSide,-iSide},{-iSide,iSide} };
+			for (auto& o : aOff)
+				pRenderContext->DrawScreenSpaceRectangle(pGlow, iDestX + o[0], o[1], iCamW, iScrH, float(iCamW), 0.f, 0.f, float(iScrH), iCamW, iScrH);
+		}
+
 		if (i < int(m_vAlphaVars.size()) && m_vAlphaVars[i])
 			m_vAlphaVars[i]->SetFloatValue(flAlpha);
 
-		const int iDestX = i * iCamW;
-		// Mirrored horizontally (src u runs texW -> 0) so it reads like a rear-view mirror.
 		pRenderContext->DrawScreenSpaceRectangle(m_vMaterials[i], iDestX, 0, iCamW, iScrH, float(iCamW), 0.f, 0.f, float(iScrH), iCamW, iScrH);
 	}
 	pRenderContext->Release();
@@ -257,42 +294,12 @@ void CRearView::DrawOverlay()
 
 void CRearView::Initialize()
 {
-	if (!m_pMatFlat)
-	{
-		KeyValues* kv = new KeyValues("UnlitGeneric");
-		kv->SetString("$basetexture", "white");
-		kv->SetInt("$model", 1);
-		m_pMatFlat = F::Materials.Create("RearViewMatFlat", kv);
-	}
-	if (!m_pMatShaded)
-	{
-		KeyValues* kv = new KeyValues("VertexLitGeneric");
-		kv->SetString("$basetexture", "white");
-		kv->SetInt("$model", 1);
-		m_pMatShaded = F::Materials.Create("RearViewMatShaded", kv);
-	}
-	if (!m_pMatGlow)
-	{
-		KeyValues* kv = new KeyValues("UnlitGeneric");
-		kv->SetString("$basetexture", "white");
-		kv->SetInt("$model", 1);
-		kv->SetInt("$additive", 1);
-		m_pMatGlow = F::Materials.Create("RearViewMatGlow", kv);
-	}
+	// Enemy materials come from the shared Amalgam material list (F::Materials);
+	// the per-RT tile / glow materials are created lazily in SetupTargets.
 }
 
 void CRearView::Unload()
 {
 	FreeTargets();
 	m_iLastW = m_iLastH = m_iLastCams = 0;
-
-	for (IMaterial** ppMat : { &m_pMatFlat, &m_pMatShaded, &m_pMatGlow })
-	{
-		if (*ppMat)
-		{
-			(*ppMat)->DecrementReferenceCount();
-			(*ppMat)->DeleteIfUnreferenced();
-			*ppMat = nullptr;
-		}
-	}
 }

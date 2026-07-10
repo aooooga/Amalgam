@@ -401,6 +401,7 @@ void CMaterials::RemoveMaterial(const char* sName)
 			fRemoveFromVal(tGroup.m_tBacktrackChams.Visible);
 			fRemoveFromVal(tGroup.m_tBacktrackChams.Occluded);
 		}
+		fRemoveFromVar(Vars::Visuals::UI::RearViewMaterial);
 	}
 
 	m_bLoaded = true;

@@ -157,16 +157,16 @@ void CChams::Store(CTFPlayer* pLocal)
 	if (!pLocal || !F::Groups.GroupsActive())
 		return;
 
-	m_iTargetedEntity = GetCrosshairTarget(pLocal);
-
 	for (auto& [pEntity, pGroup] : F::Groups.GetGroup())
 	{
 		if (pEntity->IsDormant() || !pEntity->ShouldDraw())
 			continue;
 
 		const bool bChams = pGroup->m_tChams();
-		// Targeted material only participates for the one entity under the crosshair.
-		const bool bTarget = pGroup->m_tTargetChams(false) && pEntity->entindex() == m_iTargetedEntity;
+		// Targeted material candidates: any entity whose group has it enabled. Which
+		// one is actually under the crosshair is resolved per frame in RenderMain(),
+		// after interpolation, so the highlight matches the rendered model.
+		const bool bTarget = pGroup->m_tTargetChams(false);
 		if ((bChams || bTarget) && !pEntity->IsWearableVM()
 			&& SDK::IsOnScreen(pEntity, pEntity->IsBaseCombatWeapon() || pEntity->IsWearable()))
 			m_vEntities.emplace_back(pEntity, bChams ? &pGroup->m_tChams : nullptr, 0, bTarget ? &pGroup->m_tTargetChams : nullptr);
@@ -209,13 +209,24 @@ void CChams::RenderMain()
 
 	pRenderContext->ClearBuffers(false, false, true);
 
+	// Resolve the crosshair target here, per frame, rather than in Store():
+	// Store() runs at FRAME_NET_UPDATE_END where entities sit at their latest
+	// networked positions, but models render interpolated (~cl_interp behind),
+	// so a tick-time trace visibly desyncs from moving players. At render time
+	// the trace hits the interpolated hitboxes matching what's on screen.
+	m_iTargetedEntity = GetCrosshairTarget(H::Entities.GetLocal());
+
 	// The crosshair-targeted entity draws with its group's targeted material on
 	// both the visible and occluded passes (a solid, always-on-top highlight)
 	// instead of its regular chams. Built once - only one entity is ever targeted.
 	Chams_t tTarget = {};
+	auto IsTargeted = [&](const ChamsInfo_t& tInfo)
+	{
+		return tInfo.m_pTargetChams && m_iTargetedEntity && tInfo.m_pEntity->entindex() == m_iTargetedEntity;
+	};
 	for (auto& tInfo : m_vEntities)
 	{
-		if (tInfo.m_pTargetChams)
+		if (IsTargeted(tInfo))
 		{
 			tTarget.Visible = tInfo.m_pTargetChams->Visible;
 			tTarget.Occluded = tInfo.m_pTargetChams->Visible;
@@ -224,7 +235,7 @@ void CChams::RenderMain()
 	}
 	auto GetChams = [&](const ChamsInfo_t& tInfo) -> const Chams_t*
 	{
-		return tInfo.m_pTargetChams ? &tTarget : tInfo.m_pChams;
+		return IsTargeted(tInfo) ? &tTarget : tInfo.m_pChams;
 	};
 
 	for (int iModel : { ModelEnum::Visible, ModelEnum::Occluded })

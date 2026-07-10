@@ -15,7 +15,8 @@ private:
 	void RenderFakeAngle(const DrawModelState_t& pState, const ModelRenderInfo_t& pInfo);
 
 	// Entindex of the entity the local player's crosshair is currently on (eye
-	// trace through the aim direction), or 0. Latched once per Store.
+	// trace through the aim direction), or 0. Resolved per frame in RenderMain()
+	// so it tracks interpolated (rendered) hitbox positions, not net-tick ones.
 	int GetCrosshairTarget(CTFPlayer* pLocal);
 	int m_iTargetedEntity = 0;
 

@@ -48,16 +48,19 @@ bool CRearView::SetupTargets(int iScrW, int iScrH, int iCams)
 		m_vTextures.push_back(pTex);
 
 		// Translucent so the transparent (cleared) background shows nothing and only
-		// the enemy silhouettes blend over the frame when tiled.
+		// the enemy silhouettes blend over the frame; $alpha is driven live from the
+		// alpha slider for the whole overlay's opacity.
 		KeyValues* kv = new KeyValues("UnlitGeneric");
 		kv->SetString("$basetexture", sTex.c_str());
 		kv->SetInt("$translucent", 1);
 		kv->SetInt("$vertexalpha", 0);
+		kv->SetString("$alpha", "1");
 		const std::string sMat = "RearViewMat" + std::to_string(i);
 		IMaterial* pMat = F::Materials.Create(sMat.c_str(), kv);
 		if (!pMat)
 			return false;
 		m_vMaterials.push_back(pMat);
+		m_vAlphaVars.push_back(pMat->FindVar("$alpha", nullptr));
 	}
 
 	return true;
@@ -83,19 +86,14 @@ void CRearView::FreeTargets()
 	}
 	m_vMaterials.clear();
 	m_vTextures.clear();
+	m_vAlphaVars.clear();
 }
 
-void CRearView::DrawEnemies(CTFPlayer* pLocal)
+void CRearView::GatherVisibleEnemies(CTFPlayer* pLocal)
 {
-	if (!m_pChams)
-		return;
+	m_vVisible.clear();
 
 	const Vec3 vMyEye = pLocal->GetShootPos();
-
-	// Set the override with m_bRendering false so it goes through the
-	// ForcedMaterialOverride hook, then flip m_bRendering per model so the engine's
-	// own per-draw overrides can't stomp our chams (same dance as CChams).
-	I::ModelRender->ForcedMaterialOverride(m_pChams);
 	for (auto pEntity : H::Entities.GetGroup(EntityEnum::PlayerEnemy))
 	{
 		auto pPlayer = pEntity->As<CTFPlayer>();
@@ -106,17 +104,49 @@ void CRearView::DrawEnemies(CTFPlayer* pLocal)
 		if (!SDK::VisPos(pLocal, pPlayer, vMyEye, pPlayer->GetShootPos()))
 			continue;
 
-		m_bRendering = true;
-		pPlayer->DrawModel(STUDIO_RENDER);
-		m_bRendering = false;
+		m_vVisible.push_back(pPlayer);
+	}
+}
+
+void CRearView::DrawEnemies(IMaterial* pBase)
+{
+	if (m_vVisible.empty())
+		return;
+
+	const Color_t cColor = Vars::Visuals::UI::RearViewColor.Value;
+	const bool bGlow = Vars::Visuals::UI::RearViewGlow.Value;
+
+	// Pass 0: the chosen (flat/shaded) silhouette. Pass 1 (glow on): an additive
+	// re-draw on top so the silhouettes light up. Color is applied through the
+	// studio color modulation, tinting whatever material is bound (same mechanism
+	// CGlow uses), with m_bRendering flipped per model so the engine's own
+	// per-draw overrides can't stomp ours.
+	for (int iPass = 0; iPass < (bGlow ? 2 : 1); iPass++)
+	{
+		IMaterial* pMat = iPass == 0 ? pBase : m_pMatGlow;
+		if (!pMat)
+			continue;
+
+		I::ModelRender->ForcedMaterialOverride(pMat);
+		I::RenderView->SetColorModulation(cColor);
+		I::RenderView->SetBlend(1.f);
+
+		for (auto pPlayer : m_vVisible)
+		{
+			m_bRendering = true;
+			pPlayer->DrawModel(STUDIO_RENDER);
+			m_bRendering = false;
+		}
 	}
 	I::ModelRender->ForcedMaterialOverride(nullptr);
 }
 
-void CRearView::RenderSideCamera(const CViewSetup& tView, float flYawOffset, float flSideFOV, ITexture* pTexture, int iCamW, int iScrH, CTFPlayer* pLocal)
+void CRearView::RenderSideCamera(const CViewSetup& tView, float flYawOffset, float flSideFOV, ITexture* pTexture, int iCamW, int iScrH)
 {
 	if (!pTexture)
 		return;
+
+	const float flPitch = Vars::Visuals::UI::RearViewFlipPitch.Value ? -tView.angles.x : tView.angles.x;
 
 	CViewSetup tCam = tView;
 	tCam.x = 0;
@@ -125,8 +155,10 @@ void CRearView::RenderSideCamera(const CViewSetup& tView, float flYawOffset, flo
 	tCam.height = iScrH;
 	tCam.m_flAspectRatio = float(iCamW) / float(iScrH);
 	tCam.fov = flSideFOV;
-	tCam.angles = Vec3(tView.angles.x, tView.angles.y + flYawOffset, tView.angles.z);
+	tCam.angles = Vec3(flPitch, tView.angles.y + flYawOffset, tView.angles.z);
 	// origin left at the player's eye (tView.origin)
+
+	IMaterial* pBase = Vars::Visuals::UI::RearViewMaterial.Value == Vars::Visuals::UI::RearViewMaterialEnum::Shaded ? m_pMatShaded : m_pMatFlat;
 
 	Frustum frustum;
 	I::RenderView->Push3DView(tCam, VIEW_CLEAR_COLOR | VIEW_CLEAR_DEPTH, pTexture, frustum);
@@ -136,7 +168,7 @@ void CRearView::RenderSideCamera(const CViewSetup& tView, float flYawOffset, flo
 	pRenderContext->ClearBuffers(true, true, false);
 	pRenderContext->Release();
 
-	DrawEnemies(pLocal);
+	DrawEnemies(pBase);
 
 	I::RenderView->PopView(frustum);
 }
@@ -165,9 +197,11 @@ void CRearView::Capture(void* rcx, const CViewSetup& tView)
 		return;
 
 	// Front coverage the player already sees: FlexFOV's wide FOV while the
-	// composite owns the screen, otherwise the actual rendered view fov. The rest
-	// of the 360 is what we fill.
-	const float flFrontFOV = SanitizeFOV(F::FlexFOV.m_bComposite ? F::FlexFOV.m_flFovX : tView.fov, 100.f);
+	// composite owns the screen, otherwise the actual rendered view fov, plus the
+	// user's manual offset (m_flFovX is only an estimate of the effective warp FOV,
+	// so the slider trims the seam until on-screen enemies stop ghosting behind).
+	const float flBaseFOV = F::FlexFOV.m_bComposite ? F::FlexFOV.m_flFovX : tView.fov;
+	const float flFrontFOV = SanitizeFOV(flBaseFOV + Vars::Visuals::UI::RearViewFOVOffset.Value, 100.f);
 	const float flRemaining = 360.f - flFrontFOV;
 	if (flRemaining <= 0.f)
 		return;
@@ -179,13 +213,15 @@ void CRearView::Capture(void* rcx, const CViewSetup& tView)
 	const float flPerCam = flRemaining / iCams;
 	const float flSideFOV = SanitizeFOV(flPerCam - 1.25f, 125.f); // small seam overlap (OVERLAP_DEG)
 
+	GatherVisibleEnemies(pLocal);
+
 	m_bCapturing = true;
 	for (int i = 0; i < iCams; i++)
 	{
 		// Sweep from the edge of the front cone around the back: each camera centred
 		// one coverage step further round than the last.
 		const float flYaw = flFrontFOV * 0.5f + (i + 0.5f) * flPerCam;
-		RenderSideCamera(tView, flYaw, flSideFOV, m_vTextures[i], iCamW, iScrH, pLocal);
+		RenderSideCamera(tView, flYaw, flSideFOV, m_vTextures[i], iCamW, iScrH);
 	}
 	m_bCapturing = false;
 }
@@ -201,11 +237,16 @@ void CRearView::DrawOverlay()
 	if (iCamW <= 0)
 		return;
 
+	const float flAlpha = Vars::Visuals::UI::RearViewAlpha.Value;
+
 	auto pRenderContext = I::MaterialSystem->GetRenderContext();
 	for (int i = 0; i < iCams; i++)
 	{
 		if (!m_vMaterials[i])
 			continue;
+
+		if (i < int(m_vAlphaVars.size()) && m_vAlphaVars[i])
+			m_vAlphaVars[i]->SetFloatValue(flAlpha);
 
 		const int iDestX = i * iCamW;
 		// Mirrored horizontally (src u runs texW -> 0) so it reads like a rear-view mirror.
@@ -216,13 +257,27 @@ void CRearView::DrawOverlay()
 
 void CRearView::Initialize()
 {
-	if (!m_pChams)
+	if (!m_pMatFlat)
 	{
 		KeyValues* kv = new KeyValues("UnlitGeneric");
 		kv->SetString("$basetexture", "white");
-		kv->SetString("$color", "[1 0.30 0.34]"); // bright red silhouette
 		kv->SetInt("$model", 1);
-		m_pChams = F::Materials.Create("RearViewChams", kv);
+		m_pMatFlat = F::Materials.Create("RearViewMatFlat", kv);
+	}
+	if (!m_pMatShaded)
+	{
+		KeyValues* kv = new KeyValues("VertexLitGeneric");
+		kv->SetString("$basetexture", "white");
+		kv->SetInt("$model", 1);
+		m_pMatShaded = F::Materials.Create("RearViewMatShaded", kv);
+	}
+	if (!m_pMatGlow)
+	{
+		KeyValues* kv = new KeyValues("UnlitGeneric");
+		kv->SetString("$basetexture", "white");
+		kv->SetInt("$model", 1);
+		kv->SetInt("$additive", 1);
+		m_pMatGlow = F::Materials.Create("RearViewMatGlow", kv);
 	}
 }
 
@@ -231,10 +286,13 @@ void CRearView::Unload()
 	FreeTargets();
 	m_iLastW = m_iLastH = m_iLastCams = 0;
 
-	if (m_pChams)
+	for (IMaterial** ppMat : { &m_pMatFlat, &m_pMatShaded, &m_pMatGlow })
 	{
-		m_pChams->DecrementReferenceCount();
-		m_pChams->DeleteIfUnreferenced();
-		m_pChams = nullptr;
+		if (*ppMat)
+		{
+			(*ppMat)->DecrementReferenceCount();
+			(*ppMat)->DeleteIfUnreferenced();
+			*ppMat = nullptr;
+		}
 	}
 }

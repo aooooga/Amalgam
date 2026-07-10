@@ -536,6 +536,8 @@ NAMESPACE_BEGIN(Vars)
 			CVar(FlexFOVStrength, "Flex FOV strength## FlexFOVStrength", 1.f, VISUAL | SLIDER_MIN | SLIDER_PRECISION, 0.f, 2.f, 0.05f);
 			CVar(FlexFOVSkipMainView, "Flex FOV skip main view## FlexFOVSkipMainView", true, VISUAL);
 			CVar(FlexFOVQuality, "Flex FOV quality## FlexFOVQuality", 1.f, VISUAL | SLIDER_MIN | SLIDER_PRECISION, 0.35f, 1.f, 0.05f);
+			CVar(RearView, "Rear view## RearView", false, VISUAL);
+			CVar(RearViewCameras, "Rear view cameras## RearViewCameras", 4, VISUAL, 2, 8);
 			CVar(ViewmodelFOV, "Viewmodel field of view## Viewmodel FOV", 0.f, VISUAL | SLIDER_MIN | SLIDER_PRECISION, 0.f, 160.f, 1.f);
 			CVar(AspectRatio, "Aspect ratio", 0.f, VISUAL | SLIDER_MIN | SLIDER_PRECISION, 0.f, 5.f, 0.05f);
 			CVar(RevealScoreboard, "Reveal scoreboard", false, VISUAL);
@@ -719,6 +721,7 @@ NAMESPACE_BEGIN(Vars)
 			CVar(AutoStrafeMaxDelta, VA_LIST("Max delta", "Auto strafe max delta"), 180.f, SLIDER_CLAMP | SLIDER_PRECISION, 0.f, 180.f, 5.f);
 			CVar(Bunnyhop, "Bunnyhop", false);
 			CVar(EdgeJump, "Edge jump", false);
+			CVar(AirCrouch, "Air crouch", false);
 			CVar(AutoJumpbug, "Auto jumpbug", false);
 			CVar(BreakJump, "Break jump", false);
 			CVar(AutoRocketJump, "Auto rocket jump", false);

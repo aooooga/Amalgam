@@ -26,6 +26,7 @@ void CMisc::RunPre(CTFPlayer* pLocal, CUserCmd* pCmd)
 	AutoFaNJump(pLocal, pCmd);
 	AutoRevJump(pLocal, pCmd);
 	AutoStrafe(pLocal, pCmd);
+	AirCrouch(pLocal, pCmd);
 	AutoPeek(pLocal, pCmd);
 	MovementLock(pLocal, pCmd);
 	BreakJump(pLocal, pCmd);
@@ -124,6 +125,30 @@ void CMisc::AutoRevJump(CTFPlayer* pLocal, CUserCmd* pCmd)
 		return;
 
 	pCmd->buttons |= IN_JUMP;
+}
+
+// Auto-crouch while airborne, then release the crouch just before landing so
+// touchdown is un-ducked. A hull trace of the player's own bounds is cast a
+// short clearance straight down: nothing within range -> keep ducking, ground
+// detected within the clearance -> unduck. Ported from AirCrouch.lua.
+void CMisc::AirCrouch(CTFPlayer* pLocal, CUserCmd* pCmd)
+{
+	if (!Vars::Misc::Movement::AirCrouch.Value || pLocal->m_hGroundEntity())
+		return;
+
+	constexpr float flGroundClearance = 28.f;
+
+	CGameTrace trace = {};
+	CTraceFilterWorldAndPropsOnly filter = {};
+	filter.pSkip = pLocal;
+
+	const Vec3 vOrigin = pLocal->m_vecOrigin();
+	SDK::TraceHull(vOrigin, vOrigin - Vec3(0, 0, flGroundClearance), pLocal->m_vecMins(), pLocal->m_vecMaxs(), pLocal->SolidMask(), &filter, &trace);
+
+	if (trace.fraction == 1.f)
+		pCmd->buttons |= IN_DUCK;
+	else
+		pCmd->buttons &= ~IN_DUCK;
 }
 
 void CMisc::AutoStrafe(CTFPlayer* pLocal, CUserCmd* pCmd)

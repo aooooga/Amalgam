@@ -2,6 +2,7 @@
 
 #include "../Features/Visuals/CameraWindow/CameraWindow.h"
 #include "../Features/Visuals/FlexFOV/FlexFOV.h"
+#include "../Features/Visuals/RearView/RearView.h"
 
 MAKE_HOOK(CViewRender_RenderView, U::Memory.GetVirtual(I::ViewRender, 6), void,
 	void* rcx, const CViewSetup& view, ClearFlags_t nClearFlags, RenderViewInfo_t whatToDraw)
@@ -39,4 +40,5 @@ MAKE_HOOK(CViewRender_RenderView, U::Memory.GetVirtual(I::ViewRender, 6), void,
 
 	F::CameraWindow.RenderView(rcx, tView);
 	F::FlexFOV.CaptureGlobe(rcx, tView);
+	F::RearView.Capture(rcx, tView);
 }

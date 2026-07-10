@@ -3,6 +3,7 @@
 #include "../Glow/Glow.h"
 #include "../CameraWindow/CameraWindow.h"
 #include "../FlexFOV/FlexFOV.h"
+#include "../RearView/RearView.h"
 #include "../../Configs/Configs.h"
 #include "../../Binds/Binds.h"
 #include "../Groups/Groups.h"
@@ -199,6 +200,7 @@ void CMaterials::LoadMaterials()
 	F::Glow.Initialize();
 	F::CameraWindow.Initialize();
 	F::FlexFOV.Initialize();
+	F::RearView.Initialize();
 
 	S::InitializeStandardMaterials.Call<void>();
 	auto pMaterial = *reinterpret_cast<IMaterial**>(U::Memory.RelToAbs(S::Wireframe()));
@@ -249,6 +251,7 @@ void CMaterials::UnloadMaterials()
 	F::Glow.Unload();
 	F::CameraWindow.Unload();
 	F::FlexFOV.Unload();
+	F::RearView.Unload();
 }
 
 void CMaterials::ReloadMaterials()
@@ -394,6 +397,7 @@ void CMaterials::RemoveMaterial(const char* sName)
 		{
 			fRemoveFromVal(tGroup.m_tChams.Visible);
 			fRemoveFromVal(tGroup.m_tChams.Occluded);
+			fRemoveFromVal(tGroup.m_tTargetChams.Visible);
 			fRemoveFromVal(tGroup.m_tBacktrackChams.Visible);
 			fRemoveFromVal(tGroup.m_tBacktrackChams.Occluded);
 		}

@@ -1154,6 +1154,9 @@ void CMenu::MenuVisuals(int iTab)
 					}
 					else
 						FMDropdown("Material", &tGroup.m_tChams.Visible);
+
+					// Rendered only while the crosshair is on this group's entity.
+					FMDropdown("Targeted material", &tGroup.m_tTargetChams.Visible);
 				} EndSection();
 				if (Section("Glow", 8))
 				{
@@ -1270,13 +1273,17 @@ void CMenu::MenuVisuals(int iTab)
 						FSlider(Vars::Visuals::UI::ViewmodelFOV);
 					}
 					PopTransparent();
-					FToggle(Vars::Visuals::UI::FlexFOVDebug, FToggleEnum::Left);
-					FToggle(Vars::Visuals::UI::FlexFOVComposite, FToggleEnum::Right);
+					FToggle(Vars::Visuals::UI::FlexFOVComposite);
 					PushTransparent(!Vars::Visuals::UI::FlexFOVComposite.Value);
 					{
 						FSlider(Vars::Visuals::UI::FlexFOVStrength);
 						FSlider(Vars::Visuals::UI::FlexFOVQuality);
-						FToggle(Vars::Visuals::UI::FlexFOVSkipMainView);
+					}
+					PopTransparent();
+					FToggle(Vars::Visuals::UI::RearView);
+					PushTransparent(!Vars::Visuals::UI::RearView.Value);
+					{
+						FSlider(Vars::Visuals::UI::RearViewCameras);
 					}
 					PopTransparent();
 					/*
@@ -1505,6 +1512,7 @@ void CMenu::MenuMisc(int iTab)
 					FToggle(Vars::Misc::Movement::ShieldTurnRate, FToggleEnum::Right);
 					FToggle(Vars::Misc::Movement::NoPush, FToggleEnum::Left);
 					FToggle(Vars::Misc::Movement::MovementLock, FToggleEnum::Right);
+					FToggle(Vars::Misc::Movement::AirCrouch, FToggleEnum::Left);
 				} EndSection();
 				if (Vars::Debug::Options.Value)
 				{

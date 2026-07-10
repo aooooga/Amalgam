@@ -60,17 +60,24 @@ void CGlow::SecondEnd(Glow_t tGlow, IMatRenderContext* pRenderContext, int w, in
 {
 	pRenderContext->PopRenderTargetAndViewport();
 
+	// RenderBuffer2 is half-res: BlurX downsamples the full-res silhouette into it,
+	// BlurY upscales the blurred result back into the full-res RenderBuffer1 (which
+	// the halo blits below sample). Halving the blur intermediate is imperceptible
+	// on an already-blurred outline and cuts that pass's fill roughly in half.
+	const int bw = w / 2, bh = h / 2;
+
 	if (tGlow.Blur)
 	{
 		m_pBloomAmount->SetFloatValue(tGlow.Blur);
 
 		pRenderContext->PushRenderTargetAndViewport();
 		{
-			pRenderContext->Viewport(0, 0, w, h);
 			pRenderContext->SetRenderTarget(m_pRenderBuffer2);
-			pRenderContext->DrawScreenSpaceRectangle(m_pMatBlurX, 0, 0, w, h, 0.f, 0.f, w - 1, h - 1, w, h);
+			pRenderContext->Viewport(0, 0, bw, bh);
+			pRenderContext->DrawScreenSpaceRectangle(m_pMatBlurX, 0, 0, bw, bh, 0.f, 0.f, w - 1, h - 1, w, h);
 			pRenderContext->SetRenderTarget(m_pRenderBuffer1);
-			pRenderContext->DrawScreenSpaceRectangle(m_pMatBlurY, 0, 0, w, h, 0.f, 0.f, w - 1, h - 1, w, h);
+			pRenderContext->Viewport(0, 0, w, h);
+			pRenderContext->DrawScreenSpaceRectangle(m_pMatBlurY, 0, 0, w, h, 0.f, 0.f, bw - 1, bh - 1, bw, bh);
 		}
 		pRenderContext->PopRenderTargetAndViewport();
 	}
@@ -86,18 +93,15 @@ void CGlow::SecondEnd(Glow_t tGlow, IMatRenderContext* pRenderContext, int w, in
 
 	if (tGlow.Stencil)
 	{
+		// 4 cardinal offset blits only. The 4 diagonal corner blits were dropped:
+		// each is a full-screen additive pass, and at the outline widths in use the
+		// cardinal blits' overlap already fills the diagonals - the same trim the
+		// FlexFOV face path relies on. This is the main fill-rate win for glow.
 		int iSide = (tGlow.Stencil + 1) / 2.f;
 		pRenderContext->DrawScreenSpaceRectangle(m_pMatHaloAddToScreen, -iSide, 0, w, h, 0.f, 0.f, w - 1, h - 1, w, h);
 		pRenderContext->DrawScreenSpaceRectangle(m_pMatHaloAddToScreen, 0, -iSide, w, h, 0.f, 0.f, w - 1, h - 1, w, h);
 		pRenderContext->DrawScreenSpaceRectangle(m_pMatHaloAddToScreen, iSide, 0, w, h, 0.f, 0.f, w - 1, h - 1, w, h);
 		pRenderContext->DrawScreenSpaceRectangle(m_pMatHaloAddToScreen, 0, iSide, w, h, 0.f, 0.f, w - 1, h - 1, w, h);
-		if (int iCorner = tGlow.Stencil / 2.f)
-		{
-			pRenderContext->DrawScreenSpaceRectangle(m_pMatHaloAddToScreen, -iCorner, -iCorner, w, h, 0.f, 0.f, w - 1, h - 1, w, h);
-			pRenderContext->DrawScreenSpaceRectangle(m_pMatHaloAddToScreen, iCorner, iCorner, w, h, 0.f, 0.f, w - 1, h - 1, w, h);
-			pRenderContext->DrawScreenSpaceRectangle(m_pMatHaloAddToScreen, iCorner, -iCorner, w, h, 0.f, 0.f, w - 1, h - 1, w, h);
-			pRenderContext->DrawScreenSpaceRectangle(m_pMatHaloAddToScreen, -iCorner, iCorner, w, h, 0.f, 0.f, w - 1, h - 1, w, h);
-		}
 	}
 	if (tGlow.Blur)
 		pRenderContext->DrawScreenSpaceRectangle(m_pMatHaloAddToScreen, 0, 0, w, h, 0.f, 0.f, w - 1, h - 1, w, h);
@@ -622,9 +626,14 @@ void CGlow::Initialize()
 
 	if (!m_pRenderBuffer2)
 	{
+		// Half resolution: this only ever holds the blur intermediate (a screen-
+		// space pass with no depth test), so quartering its fill is free. The
+		// silhouette buffer (RenderBuffer1) stays full-res because its shared depth
+		// is the full-res scene depth - a half-res silhouette viewport would sample
+		// that depth misaligned and lose the glow's world occlusion.
 		m_pRenderBuffer2 = I::MaterialSystem->CreateNamedRenderTargetTextureEx(
 			"RenderBuffer2",
-			nWidth, nHeight,
+			nWidth / 2, nHeight / 2,
 			RT_SIZE_LITERAL,
 			IMAGE_FORMAT_RGB888,
 			MATERIAL_RT_DEPTH_SHARED,

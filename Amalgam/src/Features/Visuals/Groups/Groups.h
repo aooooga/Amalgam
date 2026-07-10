@@ -28,6 +28,10 @@ struct Group_t
 
 	Chams_t m_tChams = {};
 
+	// Applied to this group's entity while the local player's crosshair is on it
+	// (eye trace hits its hitboxes). Empty by default = off; checked with (false).
+	Chams_t m_tTargetChams = { {}, {} };
+
 	Glow_t m_tGlow = {};
 
 	bool m_bOffscreenArrows = false;

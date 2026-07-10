@@ -14,11 +14,17 @@ private:
 	void RenderBacktrack(const DrawModelState_t& pState, const ModelRenderInfo_t& pInfo);
 	void RenderFakeAngle(const DrawModelState_t& pState, const ModelRenderInfo_t& pInfo);
 
+	// Entindex of the entity the local player's crosshair is currently on (eye
+	// trace through the aim direction), or 0. Latched once per Store.
+	int GetCrosshairTarget(CTFPlayer* pLocal);
+	int m_iTargetedEntity = 0;
+
 	struct ChamsInfo_t
 	{
 		CBaseEntity* m_pEntity;
-		Chams_t* m_pChams;
+		Chams_t* m_pChams;      // regular chams, or nullptr if the group has none
 		int m_iFlags = 0;
+		Chams_t* m_pTargetChams = nullptr; // group's targeted material, or nullptr
 	};
 	std::vector<ChamsInfo_t> m_vEntities = {};
 

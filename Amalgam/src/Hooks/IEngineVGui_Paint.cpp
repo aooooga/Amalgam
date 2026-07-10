@@ -4,6 +4,7 @@
 #include "../Features/Visuals/OffscreenArrows/OffscreenArrows.h"
 #include "../Features/Visuals/CameraWindow/CameraWindow.h"
 #include "../Features/Visuals/FlexFOV/FlexFOV.h"
+#include "../Features/Visuals/RearView/RearView.h"
 #include "../Features/Visuals/Visuals.h"
 #include "../Features/Ticks/Ticks.h"
 #include "../Features/CritHack/CritHack.h"
@@ -42,6 +43,9 @@ MAKE_HOOK(IEngineVGui_Paint, U::Memory.GetVirtual(I::EngineVGui, 14), void,
 			F::FlexFOV.DrawComposite();
 			F::FlexFOV.DrawViewmodel();
 			F::FlexFOV.DrawDebug();
+			// After the composite (it repaints every pixel) so the rear-view enemy
+			// overlay stays visible with or without FlexFOV.
+			F::RearView.DrawOverlay();
 			F::CameraWindow.Draw();
 
 			F::AntiAim.Draw(pLocal);

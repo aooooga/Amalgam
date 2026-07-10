@@ -129,20 +129,47 @@ void CChams::DrawModel(CBaseEntity* pEntity, const Chams_t& tChams, IMatRenderCo
 
 
 
+// Entity whose hitboxes the crosshair is on: an eye trace along the aim
+// direction, exactly like a fired bullet (same mask/filter), so it respects
+// walls (a blocked crosshair returns nothing) and hits at hitbox precision.
+// Screen-center = camera forward, so this is correct under FlexFOV too.
+int CChams::GetCrosshairTarget(CTFPlayer* pLocal)
+{
+	if (!pLocal || !pLocal->IsAlive())
+		return 0;
+
+	const Vec3 vEyePos = pLocal->GetShootPos();
+	Vec3 vForward; Math::AngleVectors(I::EngineClient->GetViewAngles(), &vForward);
+
+	CGameTrace trace = {};
+	CTraceFilterHitscan filter = {};
+	filter.pSkip = pLocal;
+	SDK::Trace(vEyePos, vEyePos + vForward * 8192.f, MASK_SHOT | CONTENTS_GRATE, &filter, &trace);
+
+	if (auto pEnt = trace.m_pEnt; pEnt && pEnt->IsPlayer())
+		return pEnt->entindex();
+	return 0;
+}
+
 void CChams::Store(CTFPlayer* pLocal)
 {
 	m_vEntities.clear();
 	if (!pLocal || !F::Groups.GroupsActive())
 		return;
 
+	m_iTargetedEntity = GetCrosshairTarget(pLocal);
+
 	for (auto& [pEntity, pGroup] : F::Groups.GetGroup())
 	{
 		if (pEntity->IsDormant() || !pEntity->ShouldDraw())
 			continue;
 
-		if (pGroup->m_tChams() && !pEntity->IsWearableVM()
+		const bool bChams = pGroup->m_tChams();
+		// Targeted material only participates for the one entity under the crosshair.
+		const bool bTarget = pGroup->m_tTargetChams(false) && pEntity->entindex() == m_iTargetedEntity;
+		if ((bChams || bTarget) && !pEntity->IsWearableVM()
 			&& SDK::IsOnScreen(pEntity, pEntity->IsBaseCombatWeapon() || pEntity->IsWearable()))
-			m_vEntities.emplace_back(pEntity, &pGroup->m_tChams);
+			m_vEntities.emplace_back(pEntity, bChams ? &pGroup->m_tChams : nullptr, 0, bTarget ? &pGroup->m_tTargetChams : nullptr);
 
 		if (pEntity->IsPlayer() && pEntity != pLocal && pGroup->m_iBacktrack & BacktrackEnum::Enabled && pGroup->m_tBacktrackChams(false)
 			&& (F::Backtrack.GetFakeLatency() || F::Backtrack.GetFakeInterp() > G::Lerp || F::Backtrack.GetWindow()))
@@ -182,38 +209,46 @@ void CChams::RenderMain()
 
 	pRenderContext->ClearBuffers(false, false, true);
 
+	// The crosshair-targeted entity draws with its group's targeted material on
+	// both the visible and occluded passes (a solid, always-on-top highlight)
+	// instead of its regular chams. Built once - only one entity is ever targeted.
+	Chams_t tTarget = {};
 	for (auto& tInfo : m_vEntities)
 	{
-		if (!tInfo.m_iFlags)
-			DrawModel(tInfo.m_pEntity, *tInfo.m_pChams, pRenderContext, ModelEnum::Visible, true);
-		else
+		if (tInfo.m_pTargetChams)
 		{
-			m_iFlags = tInfo.m_iFlags;
-
-			auto pPlayer = tInfo.m_pEntity->As<CTFPlayer>();
-			const float flOldInvisibility = pPlayer->m_flInvisibility();
-			pPlayer->m_flInvisibility() = 0.f;
-			DrawModel(tInfo.m_pEntity, *tInfo.m_pChams, pRenderContext, ModelEnum::Visible, true);
-			pPlayer->m_flInvisibility() = flOldInvisibility;
-
-			m_iFlags = false;
+			tTarget.Visible = tInfo.m_pTargetChams->Visible;
+			tTarget.Occluded = tInfo.m_pTargetChams->Visible;
+			break;
 		}
 	}
-	for (auto& tInfo : m_vEntities)
+	auto GetChams = [&](const ChamsInfo_t& tInfo) -> const Chams_t*
 	{
-		if (!tInfo.m_iFlags)
-			DrawModel(tInfo.m_pEntity, *tInfo.m_pChams, pRenderContext, ModelEnum::Occluded, true);
-		else
+		return tInfo.m_pTargetChams ? &tTarget : tInfo.m_pChams;
+	};
+
+	for (int iModel : { ModelEnum::Visible, ModelEnum::Occluded })
+	{
+		for (auto& tInfo : m_vEntities)
 		{
-			m_iFlags = tInfo.m_iFlags;
+			const Chams_t* pChams = GetChams(tInfo);
+			if (!pChams)
+				continue;
 
-			auto pPlayer = tInfo.m_pEntity->As<CTFPlayer>();
-			const float flOldInvisibility = pPlayer->m_flInvisibility();
-			pPlayer->m_flInvisibility() = 0.f;
-			DrawModel(tInfo.m_pEntity, *tInfo.m_pChams, pRenderContext, ModelEnum::Occluded, true);
-			pPlayer->m_flInvisibility() = flOldInvisibility;
+			if (!tInfo.m_iFlags)
+				DrawModel(tInfo.m_pEntity, *pChams, pRenderContext, iModel, true);
+			else
+			{
+				m_iFlags = tInfo.m_iFlags;
 
-			m_iFlags = false;
+				auto pPlayer = tInfo.m_pEntity->As<CTFPlayer>();
+				const float flOldInvisibility = pPlayer->m_flInvisibility();
+				pPlayer->m_flInvisibility() = 0.f;
+				DrawModel(tInfo.m_pEntity, *pChams, pRenderContext, iModel, true);
+				pPlayer->m_flInvisibility() = flOldInvisibility;
+
+				m_iFlags = false;
+			}
 		}
 	}
 

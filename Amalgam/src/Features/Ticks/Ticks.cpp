@@ -19,9 +19,14 @@ void CTicks::Recharge(CTFPlayer* pLocal)
 
 	bool bPassive = m_bRecharge = false;
 
+	// Passive recharge only ticks up while the player is standing still (on the
+	// ground with ~no horizontal velocity), so warp charge builds when stationary
+	// rather than during movement.
+	const bool bStill = pLocal->m_hGroundEntity() && pLocal->m_vecVelocity().Length2D() < 1.f;
+
 	static float flPassiveTime = 0.f;
 	flPassiveTime = std::max(flPassiveTime - TICK_INTERVAL, -TICK_INTERVAL);
-	if (Vars::Doubletap::PassiveRecharge.Value && 0.f >= flPassiveTime)
+	if (bStill && Vars::Doubletap::PassiveRecharge.Value && 0.f >= flPassiveTime)
 	{
 		bPassive = true;
 		flPassiveTime += 1.f / Vars::Doubletap::PassiveRecharge.Value;

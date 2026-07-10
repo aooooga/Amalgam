@@ -497,6 +497,7 @@ bool CConfigs::SaveConfig(const std::string& sConfigName, bool bNotify)
 				SaveJson(tChild, "Projectiles", tGroup.m_iProjectiles);
 				SaveJson(tChild, "ESP", tGroup.m_iESP);
 				SaveJson(tChild, "Chams", tGroup.m_tChams);
+				SaveJson(tChild, "TargetChams", tGroup.m_tTargetChams);
 				SaveJson(tChild, "Glow", tGroup.m_tGlow);
 				SaveJson(tChild, "OffscreenArrows", tGroup.m_bOffscreenArrows);
 				SaveJson(tChild, "OffscreenArrowsOffset", tGroup.m_iOffscreenArrowsOffset);
@@ -613,6 +614,7 @@ bool CConfigs::LoadConfig(const std::string& sConfigName, bool bNotify)
 				LoadJson(tChild, "Projectiles", tGroup.m_iProjectiles);
 				LoadJson(tChild, "ESP", tGroup.m_iESP);
 				LoadJson(tChild, "Chams", tGroup.m_tChams);
+				LoadJson(tChild, "TargetChams", tGroup.m_tTargetChams);
 				LoadJson(tChild, "Glow", tGroup.m_tGlow);
 				LoadJson(tChild, "OffscreenArrows", tGroup.m_bOffscreenArrows);
 				LoadJson(tChild, "OffscreenArrowsOffset", tGroup.m_iOffscreenArrowsOffset);
@@ -706,6 +708,7 @@ bool CConfigs::SaveVisual(const std::string& sConfigName, bool bNotify)
 				SaveJson(tChild, "Projectiles", tGroup.m_iProjectiles);
 				SaveJson(tChild, "ESP", tGroup.m_iESP);
 				SaveJson(tChild, "Chams", tGroup.m_tChams);
+				SaveJson(tChild, "TargetChams", tGroup.m_tTargetChams);
 				SaveJson(tChild, "Glow", tGroup.m_tGlow);
 				SaveJson(tChild, "OffscreenArrows", tGroup.m_bOffscreenArrows);
 				SaveJson(tChild, "OffscreenArrowsOffset", tGroup.m_iOffscreenArrowsOffset);
@@ -789,6 +792,7 @@ bool CConfigs::LoadVisual(const std::string& sConfigName, bool bNotify)
 				LoadJson(tChild, "Projectiles", tGroup.m_iProjectiles);
 				LoadJson(tChild, "ESP", tGroup.m_iESP);
 				LoadJson(tChild, "Chams", tGroup.m_tChams);
+				LoadJson(tChild, "TargetChams", tGroup.m_tTargetChams);
 				LoadJson(tChild, "Glow", tGroup.m_tGlow);
 				LoadJson(tChild, "OffscreenArrows", tGroup.m_bOffscreenArrows);
 				LoadJson(tChild, "OffscreenArrowsOffset", tGroup.m_iOffscreenArrowsOffset);

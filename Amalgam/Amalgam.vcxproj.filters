@@ -4,6 +4,7 @@
     <ClCompile Include="src\Core\Core.cpp" />
     <ClCompile Include="src\Features\Visuals\CameraWindow\CameraWindow.cpp" />
     <ClCompile Include="src\Features\Visuals\FlexFOV\FlexFOV.cpp" />
+    <ClCompile Include="src\Features\Visuals\RearView\RearView.cpp" />
     <ClCompile Include="src\Features\Binds\Binds.cpp" />
     <ClCompile Include="src\Features\Configs\Configs.cpp" />
     <ClCompile Include="src\Features\ImGui\Menu\Menu.cpp" />
@@ -219,6 +220,7 @@
     <ClInclude Include="src\Core\Core.h" />
     <ClInclude Include="src\Features\Visuals\CameraWindow\CameraWindow.h" />
     <ClInclude Include="src\Features\Visuals\FlexFOV\FlexFOV.h" />
+    <ClInclude Include="src\Features\Visuals\RearView\RearView.h" />
     <ClInclude Include="src\SDK\Definitions\Main\IMesh.h" />
     <ClInclude Include="src\Features\Binds\Binds.h" />
     <ClInclude Include="src\Features\Configs\Configs.h" />

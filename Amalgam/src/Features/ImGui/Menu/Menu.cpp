@@ -429,6 +429,9 @@ void CMenu::MenuAimbot(int iTab)
 						FSlider(Vars::Aimbot::Projectile::AutoRelease);
 					}
 					PopTransparent();
+					FToggle(Vars::Aimbot::Projectile::DoubleSticky, FToggleEnum::Left);
+					FColorPicker(Vars::Colors::DoubleStickyPath, FColorPickerEnum::SameLine);
+					FKeybind(Vars::Aimbot::Projectile::DoubleStickyKey, FButtonEnum::Right | FButtonEnum::SameLine, { Vars::Menu::PrimaryKey[DEFAULT_BIND], Vars::Menu::SecondaryKey[DEFAULT_BIND] });
 				} EndSection();
 				if (Vars::Debug::Options.Value)
 				{

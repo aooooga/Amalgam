@@ -7,6 +7,7 @@
 #include "../Features/Visuals/Visuals.h"
 #include "../Features/Visuals/Materials/Materials.h"
 #include "../Features/Spectate/Spectate.h"
+#include "../Features/Aimbot/DoubleSticky/DoubleSticky.h"
 
 MAKE_SIGNATURE(CViewRender_DrawViewModels, "client.dll", "48 89 5C 24 ? 55 56 57 41 54 41 55 41 56 41 57 48 8D 6C 24 ? 48 81 EC ? ? ? ? 48 8B 05 ? ? ? ? 48 8B FA", 0x0);
 
@@ -19,6 +20,9 @@ MAKE_HOOK(CClientModeShared_DoPostScreenSpaceEffects, U::Memory.GetVirtual(I::Cl
 		return CALL_ORIGINAL(rcx, pSetup);
 	
 	F::Visuals.ProjectileTrace(H::Entities.GetLocal(), H::Entities.GetWeapon());
+	// Before the FlexFOV early-returns (like ProjectileTrace) so the arc also renders
+	// into the capture faces and survives the composite.
+	F::DoubleSticky.Draw();
 	// Cheap (scene-stripped) main pass: the composite paints over everything this
 	// pass produces, so chams / glow / effects here are pure wasted work.
 	if (F::CameraWindow.m_bDrawing || F::FlexFOV.m_bReplacingView)

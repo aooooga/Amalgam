@@ -7,6 +7,7 @@
 #include "AutoAirblast/AutoAirblast.h"
 #include "AutoHeal/AutoHeal.h"
 #include "AutoRocketJump/AutoRocketJump.h"
+#include "DoubleSticky/DoubleSticky.h"
 #include "../Misc/Misc.h"
 #include "../Visuals/Visuals.h"
 
@@ -65,6 +66,8 @@ void CAimbot::RunMain(CTFPlayer* pLocal, CTFWeaponBase* pWeapon, CUserCmd* pCmd)
 
 	RunAimbot(pLocal, pWeapon, pCmd);
 	RunAimbot(pLocal, pWeapon, pCmd, true);
+
+	F::DoubleSticky.Run(pLocal, pWeapon, pCmd); // after the aimbot so its pitch override wins while active
 }
 
 void CAimbot::Run(CTFPlayer* pLocal, CTFWeaponBase* pWeapon, CUserCmd* pCmd)

@@ -176,10 +176,10 @@ void CRearView::DrawEnemies()
 	// Draw the visible enemies with the user's material list (same list/handling as
 	// chams: each entry is a named material + color), m_bRendering flipped per model
 	// so the engine's own per-draw overrides can't stomp ours.
+	auto pLocal = H::Entities.GetLocal();
 	for (auto& [sName, tColor] : Vars::Visuals::UI::RearViewMaterial.Value)
 	{
 		auto pMaterial = F::Materials.GetMaterial(FNV1A::Hash32(sName.c_str()));
-		F::Materials.SetColor(pMaterial, tColor);
 		I::ModelRender->ForcedMaterialOverride(pMaterial ? pMaterial->m_pMaterial : nullptr);
 
 		if (pMaterial && pMaterial->m_bInvertCull)
@@ -187,6 +187,9 @@ void CRearView::DrawEnemies()
 
 		for (auto pPlayer : m_vVisible)
 		{
+			// Per player so distance-based colors track each enemy's range.
+			F::Materials.SetColor(pMaterial, tColor.GetColor(pLocal ? pLocal->GetAbsOrigin().DistTo(pPlayer->GetAbsOrigin()) : -1.f));
+
 			m_bRendering = true;
 			pPlayer->DrawModel(STUDIO_RENDER);
 			m_bRendering = false;

@@ -23,6 +23,10 @@ void CChams::DrawModel(CBaseEntity* pEntity, const Chams_t& tChams, IMatRenderCo
 	if (!m_iFlags && iModel == ModelEnum::Visible)
 		m_mEntities[pEntity->entindex()];
 
+	// Local player's distance to the entity, for distance-based material colors.
+	auto pLocal = H::Entities.GetLocal();
+	const float flDistance = pLocal ? pLocal->GetAbsOrigin().DistTo(pEntity->GetAbsOrigin()) : -1.f;
+
 	bool bOccluded = !tChams.Occluded.empty();
 	bool bSame = tChams.Visible == tChams.Occluded;
 	bTwoModel &= bOccluded && !bSame;
@@ -54,7 +58,7 @@ void CChams::DrawModel(CBaseEntity* pEntity, const Chams_t& tChams, IMatRenderCo
 		{
 			auto pMaterial = F::Materials.GetMaterial(FNV1A::Hash32(sName.c_str()));
 
-			F::Materials.SetColor(pMaterial, tColor);
+			F::Materials.SetColor(pMaterial, tColor.GetColor(flDistance));
 			I::ModelRender->ForcedMaterialOverride(pMaterial ? pMaterial->m_pMaterial : nullptr);
 			if (pMaterial)
 			{
@@ -106,7 +110,7 @@ void CChams::DrawModel(CBaseEntity* pEntity, const Chams_t& tChams, IMatRenderCo
 		{
 			auto pMaterial = F::Materials.GetMaterial(FNV1A::Hash32(sName.c_str()));
 
-			F::Materials.SetColor(pMaterial, tColor);
+			F::Materials.SetColor(pMaterial, tColor.GetColor(flDistance));
 			I::ModelRender->ForcedMaterialOverride(pMaterial ? pMaterial->m_pMaterial : nullptr);
 			if (pMaterial && pMaterial->m_bInvertCull)
 				pRenderContext->CullMode(MATERIAL_CULLMODE_CW);
@@ -360,7 +364,7 @@ bool CChams::RenderViewmodel(void* rcx, int flags, int* iReturn)
 	{
 		auto pMaterial = F::Materials.GetMaterial(FNV1A::Hash32(sName.c_str()));
 
-		F::Materials.SetColor(pMaterial, tColor);
+		F::Materials.SetColor(pMaterial, tColor.GetColor(0.f)); // viewmodel = distance 0
 		I::ModelRender->ForcedMaterialOverride(pMaterial ? pMaterial->m_pMaterial : nullptr);
 
 		bool bFlip = pMaterial && pMaterial->m_bInvertCull ? !G::FlipViewmodels : G::FlipViewmodels;
@@ -392,7 +396,7 @@ bool CChams::RenderViewmodel(const DrawModelState_t& pState, const ModelRenderIn
 	{
 		auto pMaterial = F::Materials.GetMaterial(FNV1A::Hash32(sName.c_str()));
 
-		F::Materials.SetColor(pMaterial, tColor);
+		F::Materials.SetColor(pMaterial, tColor.GetColor(0.f)); // viewmodel = distance 0
 		I::ModelRender->ForcedMaterialOverride(pMaterial ? pMaterial->m_pMaterial : nullptr);
 
 		bool bFlip = pMaterial && pMaterial->m_bInvertCull ? !G::FlipViewmodels : G::FlipViewmodels;

@@ -165,11 +165,13 @@ static float GetHealthFraction(CBaseEntity* pEntity)
 	return std::clamp(flHealth / flMaxHealth, 0.f, 1.f);
 }
 
-// Glow color: the glow's own color option (not the group color), or the health
-// gradient for entities with HP when enabled.
-static Color_t GetGlowColor(CBaseEntity* pEntity, const Glow_t& tGlow)
+// Glow color: the glow's own color option (not the group color), the health
+// gradient for entities with HP when enabled, or the distance gradient
+// evaluated at the local player's distance to the entity.
+static Color_t GetGlowColor(CBaseEntity* pEntity, const Glow_t& tGlow, CTFPlayer* pLocal)
 {
-	return tGlow.GetColor(GetHealthFraction(pEntity));
+	const float flDistance = pLocal ? pLocal->GetAbsOrigin().DistTo(pEntity->GetAbsOrigin()) : -1.f;
+	return tGlow.GetColor(GetHealthFraction(pEntity), flDistance);
 }
 
 void CGlow::Store(CTFPlayer* pLocal)
@@ -185,7 +187,7 @@ void CGlow::Store(CTFPlayer* pLocal)
 
 		if (pGroup->m_tGlow() && !pEntity->IsWearableVM()
 			&& SDK::IsOnScreen(pEntity, pEntity->IsBaseCombatWeapon() || pEntity->IsWearable()))
-			m_mEntities[pGroup->m_tGlow].emplace_back(pEntity, GetGlowColor(pEntity, pGroup->m_tGlow));
+			m_mEntities[pGroup->m_tGlow].emplace_back(pEntity, GetGlowColor(pEntity, pGroup->m_tGlow, pLocal));
 
 		if (pEntity->IsPlayer() && pEntity != pLocal && pGroup->m_iBacktrack & BacktrackEnum::Enabled && pGroup->m_tBacktrackGlow()
 			&& (F::Backtrack.GetFakeLatency() || F::Backtrack.GetFakeInterp() > G::Lerp || F::Backtrack.GetWindow()))
@@ -200,7 +202,7 @@ void CGlow::Store(CTFPlayer* pLocal)
 					bShowFriendly = true, bShowEnemy = false;
 
 				if (bShowEnemy && pEntity->m_iTeamNum() != pLocal->m_iTeamNum() || bShowFriendly && pEntity->m_iTeamNum() == pLocal->m_iTeamNum())
-					m_mEntities[pGroup->m_tBacktrackGlow].emplace_back(pEntity, GetGlowColor(pEntity, pGroup->m_tBacktrackGlow), pGroup->m_iBacktrack);
+					m_mEntities[pGroup->m_tBacktrackGlow].emplace_back(pEntity, GetGlowColor(pEntity, pGroup->m_tBacktrackGlow, pLocal), pGroup->m_iBacktrack);
 			}
 		}
 	}
@@ -209,7 +211,7 @@ void CGlow::Store(CTFPlayer* pLocal)
 	if (F::FakeAngle.bDrawChams && F::FakeAngle.bBonesSetup
 		&& F::Groups.GetGroup(TargetsEnum::FakeAngle, pGroup) && pGroup->m_tGlow())
 	{	// fakeangle
-		m_mEntities[pGroup->m_tGlow].emplace_back(pLocal, GetGlowColor(pLocal, pGroup->m_tGlow), 1);
+		m_mEntities[pGroup->m_tGlow].emplace_back(pLocal, GetGlowColor(pLocal, pGroup->m_tGlow, pLocal), 1);
 	}
 }
 
@@ -564,7 +566,7 @@ void CGlow::RenderViewmodel(void* rcx, int flags)
 	CBaseAnimating_InternalDrawModel->Call<int>(rcx, flags);
 	FirstEnd(pRenderContext);
 	SecondBegin(pRenderContext, w, h);
-	const Color_t tGlowColor = pGroup->m_tGlow.GetColor();
+	const Color_t tGlowColor = pGroup->m_tGlow.GetColor(-1.f, 0.f); // viewmodel = distance 0
 	I::RenderView->SetColorModulation(tGlowColor);
 	I::RenderView->SetBlend(tGlowColor.a / 255.f);
 	CBaseAnimating_InternalDrawModel->Call<int>(rcx, flags);
@@ -592,7 +594,7 @@ void CGlow::RenderViewmodel(const DrawModelState_t& pState, const ModelRenderInf
 	IVModelRender_DrawModelExecute->Call<void>(I::ModelRender, pState, pInfo, pBoneToWorld);
 	FirstEnd(pRenderContext);
 	SecondBegin(pRenderContext, w, h);
-	const Color_t tGlowColor = pGroup->m_tGlow.GetColor();
+	const Color_t tGlowColor = pGroup->m_tGlow.GetColor(-1.f, 0.f); // viewmodel = distance 0
 	I::RenderView->SetColorModulation(tGlowColor);
 	I::RenderView->SetBlend(tGlowColor.a / 255.f);
 	IVModelRender_DrawModelExecute->Call<void>(I::ModelRender, pState, pInfo, pBoneToWorld);

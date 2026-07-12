@@ -40,14 +40,42 @@ template <> void CConfigs::SaveJson(boost::property_tree::ptree& t, const std::s
 	t.put_child(s, tChild);
 }
 
-template <> void CConfigs::SaveJson(boost::property_tree::ptree& t, const std::string& s, const std::vector<std::pair<std::string, Color_t>>& v)
+template <> void CConfigs::SaveJson(boost::property_tree::ptree& t, const std::string& s, const std::vector<GlowStop_t>& v)
+{
+	boost::property_tree::ptree tChild;
+	for (auto& tStop : v)
+	{
+		boost::property_tree::ptree tEntry;
+		SaveJson(tEntry, "Pos", tStop.Pos);
+		SaveJson(tEntry, "Color", tStop.Color);
+		SaveJson(tEntry, "Ease", tStop.Ease);
+
+		tChild.push_back({ "", tEntry });
+	}
+
+	t.put_child(s, tChild);
+}
+
+template <> void CConfigs::SaveJson(boost::property_tree::ptree& t, const std::string& s, const DistanceColor_t& v)
+{
+	boost::property_tree::ptree tChild;
+	SaveJson(tChild, "Enabled", v.Enabled);
+	SaveJson(tChild, "Near", v.Near);
+	SaveJson(tChild, "Far", v.Far);
+	SaveJson(tChild, "Stops", v.Stops);
+
+	t.put_child(s, tChild);
+}
+
+template <> void CConfigs::SaveJson(boost::property_tree::ptree& t, const std::string& s, const std::vector<std::pair<std::string, MaterialColor_t>>& v)
 {
 	boost::property_tree::ptree tChild;
 	for (auto& [m, c] : v)
 	{
 		boost::property_tree::ptree tLayer;
 		SaveJson(tLayer, "Material", m);
-		SaveJson(tLayer, "Color", c);
+		SaveJson(tLayer, "Color", c.Color);
+		SaveJson(tLayer, "Distance", c.Distance);
 
 		tChild.push_back({ "", tLayer });
 	}
@@ -100,18 +128,8 @@ template <> void CConfigs::SaveJson(boost::property_tree::ptree& t, const std::s
 	SaveJson(tChild, "Blur", v.Blur);
 	SaveJson(tChild, "Color", v.Color);
 	SaveJson(tChild, "HealthColor", v.HealthColor);
-
-	boost::property_tree::ptree tStops;
-	for (auto& tStop : v.Stops)
-	{
-		boost::property_tree::ptree tEntry;
-		SaveJson(tEntry, "Pos", tStop.Pos);
-		SaveJson(tEntry, "Color", tStop.Color);
-		SaveJson(tEntry, "Ease", tStop.Ease);
-
-		tStops.push_back({ "", tEntry });
-	}
-	tChild.put_child("Stops", tStops);
+	SaveJson(tChild, "Stops", v.Stops);
+	SaveJson(tChild, "DistanceColor", v.DistanceColor);
 
 	t.put_child(s, tChild);
 }
@@ -153,7 +171,38 @@ template <> void CConfigs::LoadJson(const boost::property_tree::ptree& t, const 
 	}
 }
 
-template <> void CConfigs::LoadJson(const boost::property_tree::ptree& t, const std::string& s, std::vector<std::pair<std::string, Color_t>>& v)
+template <> void CConfigs::LoadJson(const boost::property_tree::ptree& t, const std::string& s, std::vector<GlowStop_t>& v)
+{
+	if (auto tChild = t.get_child_optional(s))
+	{
+		v.clear();
+		for (auto& [_, tEntry] : *tChild)
+		{
+			GlowStop_t tStop;
+			LoadJson(tEntry, "Pos", tStop.Pos);
+			LoadJson(tEntry, "Color", tStop.Color);
+			LoadJson(tEntry, "Ease", tStop.Ease);
+			tStop.Ease = std::clamp(tStop.Ease, 0, GlowEaseEnum::Count - 1);
+			v.push_back(tStop);
+		}
+		std::sort(v.begin(), v.end(), [](const GlowStop_t& a, const GlowStop_t& b) { return a.Pos < b.Pos; });
+	}
+}
+
+template <> void CConfigs::LoadJson(const boost::property_tree::ptree& t, const std::string& s, DistanceColor_t& v)
+{
+	if (auto tChild = t.get_child_optional(s))
+	{
+		LoadJson(*tChild, "Enabled", v.Enabled);
+		LoadJson(*tChild, "Near", v.Near);
+		LoadJson(*tChild, "Far", v.Far);
+		LoadJson(*tChild, "Stops", v.Stops);
+		v.Near = std::clamp(v.Near, 0.f, 16384.f);
+		v.Far = std::clamp(v.Far, v.Near + 1.f, 16384.f);
+	}
+}
+
+template <> void CConfigs::LoadJson(const boost::property_tree::ptree& t, const std::string& s, std::vector<std::pair<std::string, MaterialColor_t>>& v)
 {
 	if (auto tChild = t.get_child_optional(s))
 	{
@@ -163,7 +212,9 @@ template <> void CConfigs::LoadJson(const boost::property_tree::ptree& t, const 
 			if (auto o = tLayer.get_optional<std::string>("Material"))
 			{
 				std::string& m = *o;
-				Color_t c; LoadJson(tLayer, "Color", c);
+				MaterialColor_t c;
+				LoadJson(tLayer, "Color", c.Color);
+				LoadJson(tLayer, "Distance", c.Distance); // absent in old configs, keeps defaults
 				v.emplace_back(m, c);
 			}
 		}
@@ -238,21 +289,8 @@ template <> void CConfigs::LoadJson(const boost::property_tree::ptree& t, const 
 		LoadJson(*tChild, "Blur", v.Blur);
 		LoadJson(*tChild, "Color", v.Color);
 		LoadJson(*tChild, "HealthColor", v.HealthColor);
-
-		if (auto tStops = tChild->get_child_optional("Stops"))
-		{
-			v.Stops.clear();
-			for (auto& [_, tEntry] : *tStops)
-			{
-				GlowStop_t tStop;
-				LoadJson(tEntry, "Pos", tStop.Pos);
-				LoadJson(tEntry, "Color", tStop.Color);
-				LoadJson(tEntry, "Ease", tStop.Ease);
-				tStop.Ease = std::clamp(tStop.Ease, 0, GlowEaseEnum::Count - 1);
-				v.Stops.push_back(tStop);
-			}
-			std::sort(v.Stops.begin(), v.Stops.end(), [](const GlowStop_t& a, const GlowStop_t& b) { return a.Pos < b.Pos; });
-		}
+		LoadJson(*tChild, "Stops", v.Stops);
+		LoadJson(*tChild, "DistanceColor", v.DistanceColor); // absent in old configs, keeps defaults
 	}
 }
 
@@ -471,7 +509,7 @@ bool CConfigs::SaveConfig(const std::string& sConfigName, bool bNotify)
 				else Save(IntRange_t, tSub)
 				else Save(FloatRange_t, tSub)
 				else Save(std::string, tSub)
-				else Save(VA_LIST(std::vector<std::pair<std::string, Color_t>>), tSub)
+				else Save(VA_LIST(std::vector<std::pair<std::string, MaterialColor_t>>), tSub)
 				else Save(Color_t, tSub)
 				else Save(Gradient_t, tSub)
 				else Save(DragBox_t, tSub)
@@ -589,7 +627,7 @@ bool CConfigs::LoadConfig(const std::string& sConfigName, bool bNotify)
 				else Load(IntRange_t, *tSub)
 				else Load(FloatRange_t, *tSub)
 				else Load(std::string, *tSub)
-				else Load(VA_LIST(std::vector<std::pair<std::string, Color_t>>), *tSub)
+				else Load(VA_LIST(std::vector<std::pair<std::string, MaterialColor_t>>), *tSub)
 				else Load(Color_t, *tSub)
 				else Load(Gradient_t, *tSub)
 				else Load(DragBox_t, *tSub)
@@ -682,7 +720,7 @@ bool CConfigs::SaveVisual(const std::string& sConfigName, bool bNotify)
 				else SaveMisc(IntRange_t, tSub)
 				else SaveMisc(FloatRange_t, tSub)
 				else SaveMisc(std::string, tSub)
-				else SaveMisc(VA_LIST(std::vector<std::pair<std::string, Color_t>>), tSub)
+				else SaveMisc(VA_LIST(std::vector<std::pair<std::string, MaterialColor_t>>), tSub)
 				else SaveMisc(Color_t, tSub)
 				else SaveMisc(Gradient_t, tSub)
 				else SaveMisc(DragBox_t, tSub)
@@ -767,7 +805,7 @@ bool CConfigs::LoadVisual(const std::string& sConfigName, bool bNotify)
 				else LoadMisc(IntRange_t, *tSub)
 				else LoadMisc(FloatRange_t, *tSub)
 				else LoadMisc(std::string, *tSub)
-				else LoadMisc(VA_LIST(std::vector<std::pair<std::string, Color_t>>), *tSub)
+				else LoadMisc(VA_LIST(std::vector<std::pair<std::string, MaterialColor_t>>), *tSub)
 				else LoadMisc(Color_t, *tSub)
 				else LoadMisc(Gradient_t, *tSub)
 				else LoadMisc(DragBox_t, *tSub)

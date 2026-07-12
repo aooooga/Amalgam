@@ -550,7 +550,7 @@ NAMESPACE_BEGIN(Vars)
 			CVar(RearViewGlowBlur, "Glow blur## RearViewGlowBlur", 0.f, VISUAL | SLIDER_MIN | SLIDER_PRECISION, 0.f, 10.f, 1.f);
 			CVar(RearViewGlowColor, "Glow color## RearViewGlowColor", Color_t(255, 255, 255, 255), VISUAL);
 			CVar(RearViewAlpha, "Alpha## RearViewAlpha", 0.95f, VISUAL | SLIDER_CLAMP | SLIDER_PRECISION, 0.f, 1.f, 0.05f);
-			CVar(RearViewMaterial, "Material## RearViewMaterial", (std::vector<std::pair<std::string, Color_t>>{ { "Flat", Color_t(255, 80, 90, 255) } }), VISUAL);
+			CVar(RearViewMaterial, "Material## RearViewMaterial", (std::vector<std::pair<std::string, MaterialColor_t>>{ { "Flat", Color_t(255, 80, 90, 255) } }), VISUAL);
 			CVar(ViewmodelFOV, "Viewmodel field of view## Viewmodel FOV", 0.f, VISUAL | SLIDER_MIN | SLIDER_PRECISION, 0.f, 160.f, 1.f);
 			CVar(AspectRatio, "Aspect ratio", 0.f, VISUAL | SLIDER_MIN | SLIDER_PRECISION, 0.f, 5.f, 0.05f);
 			CVar(RevealScoreboard, "Reveal scoreboard", false, VISUAL);

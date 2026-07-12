@@ -1928,6 +1928,149 @@ namespace ImGui
 		return bReturn;
 	}
 
+	// Gradient stop editor: a bar with color stops along it. Click an empty spot
+	// on the bar to add a stop (with the gradient's color at that point), drag a
+	// handle to move it, click a handle to open its color picker, right-click a
+	// handle to delete it. Stop positions are 0..1; the popup's position slider
+	// displays them remapped to [flPosMin, flPosMax] with sPosFormat (health uses
+	// 0-100%, distance-based colors use near/far hammer units).
+	// flWidth > 0 lays the editor out at the cursor with a fixed width (for use
+	// inside popups); flWidth <= 0 spans the window like other menu widgets.
+	inline void FGradientStops(const char* sLabel, std::vector<GlowStop_t>& vStops, float flWidth = 0.f, float flPosMin = 0.f, float flPosMax = 100.f, const char* sPosFormat = "%.0f%%")
+	{
+		if (vStops.empty())
+			vStops.push_back({ 0.5f, { 255, 255, 255, 255 } });
+		// Keep sorted by position, but not while the mouse is down: re-ordering
+		// mid-drag would change the handle IDs and break the drag.
+		if (!IsMouseDown(ImGuiMouseButton_Left))
+			std::sort(vStops.begin(), vStops.end(), [](const GlowStop_t& a, const GlowStop_t& b) { return a.Pos < b.Pos; });
+
+		const bool bFixed = flWidth > 0.f;
+		const float flPad = GetStyle().WindowPadding.x;
+		if (!bFixed)
+			flWidth = GetWindowWidth() - flPad * 2;
+		const float flBarH = H::Draw.Scale(12);
+		const float flHandleW = H::Draw.Scale(8);
+		const float flHandleH = H::Draw.Scale(10);
+		const float flTotalH = flBarH + flHandleH + H::Draw.Scale(4);
+
+		PushID(sLabel);
+
+		const ImVec2 vLocalPos = GetCursorPos();
+		if (!bFixed)
+			SetCursorPosX(flPad);
+		const ImVec2 vPos = GetCursorScreenPos();
+		auto pDrawList = GetWindowDrawList();
+
+		auto ColU32 = [](const Color_t& c) { return IM_COL32(c.r, c.g, c.b, c.a); };
+
+		// Gradient bar (sorted copy so drawing is right even mid-drag), rendered by
+		// sampling EvalGlowStops in slices so easing/constant segments show exactly
+		// as they will in game.
+		auto vSorted = vStops;
+		std::sort(vSorted.begin(), vSorted.end(), [](const GlowStop_t& a, const GlowStop_t& b) { return a.Pos < b.Pos; });
+		const float y0 = vPos.y, y1 = vPos.y + flBarH;
+		auto StopX = [&](float flPos) { return vPos.x + std::clamp(flPos, 0.f, 1.f) * flWidth; };
+		{
+			const int nSlices = 96;
+			for (int i = 0; i < nSlices; i++)
+			{
+				const float t0 = float(i) / nSlices, t1 = float(i + 1) / nSlices;
+				const ImU32 c0 = ColU32(EvalGlowStops(vSorted, t0)), c1 = ColU32(EvalGlowStops(vSorted, t1));
+				pDrawList->AddRectFilledMultiColor({ vPos.x + t0 * flWidth, y0 }, { vPos.x + t1 * flWidth, y1 }, c0, c1, c1, c0);
+			}
+			pDrawList->AddRect({ vPos.x, y0 }, { vPos.x + flWidth, y1 }, IM_COL32(0, 0, 0, 160));
+		}
+
+		// Click on the bar adds a stop with the gradient's color at that point.
+		SetCursorScreenPos(vPos);
+		InvisibleButton("bar", { flWidth, flBarH });
+		if (IsItemClicked(ImGuiMouseButton_Left))
+		{
+			const float t = std::clamp((GetIO().MousePos.x - vPos.x) / flWidth, 0.f, 1.f);
+			vStops.push_back({ t, EvalGlowStops(vSorted, t) });
+		}
+		if (IsItemHovered())
+			SetMouseCursor(ImGuiMouseCursor_Hand);
+
+		// Stop handles beneath the bar.
+		static int s_iDraggedStop = -1;
+		int iRemove = -1;
+		for (int i = 0; i < int(vStops.size()); i++)
+		{
+			auto& tStop = vStops[i];
+			const float hx = StopX(tStop.Pos);
+			const ImVec2 vMin = { hx - flHandleW / 2, y1 + H::Draw.Scale(2) };
+			const ImVec2 vMax = { vMin.x + flHandleW, vMin.y + flHandleH };
+
+			PushID(i);
+			SetCursorScreenPos(vMin);
+			InvisibleButton("stop", { flHandleW, flHandleH });
+
+			if (IsItemActive() && IsMouseDragging(ImGuiMouseButton_Left, 2.f))
+			{
+				tStop.Pos = std::clamp((GetIO().MousePos.x - vPos.x) / flWidth, 0.f, 1.f);
+				s_iDraggedStop = i;
+			}
+			if (IsItemDeactivated())
+			{
+				if (s_iDraggedStop != i) // plain click, not a drag: edit the color
+					OpenPopup("StopPicker");
+				s_iDraggedStop = -1;
+			}
+			if (IsItemClicked(ImGuiMouseButton_Right))
+				iRemove = i;
+			if (IsItemHovered())
+				SetMouseCursor(ImGuiMouseCursor_Hand);
+
+			pDrawList->AddRectFilled(vMin, vMax, ColU32(tStop.Color), H::Draw.Scale(2));
+			pDrawList->AddRect(vMin, vMax, IsItemHovered() || IsItemActive() ? IM_COL32(255, 255, 255, 255) : IM_COL32(0, 0, 0, 200), H::Draw.Scale(2));
+
+			if (BeginPopup("StopPicker"))
+			{
+				// Full picker with manual RGBA/hex inputs.
+				ImVec4 vColor = { tStop.Color.r / 255.f, tStop.Color.g / 255.f, tStop.Color.b / 255.f, tStop.Color.a / 255.f };
+				if (ColorPicker4("##StopColor", &vColor.x, ImGuiColorEditFlags_AlphaBar | ImGuiColorEditFlags_DisplayRGB | ImGuiColorEditFlags_DisplayHex))
+				{
+					tStop.Color = {
+						byte(std::clamp(vColor.x, 0.f, 1.f) * 255.f), byte(std::clamp(vColor.y, 0.f, 1.f) * 255.f),
+						byte(std::clamp(vColor.z, 0.f, 1.f) * 255.f), byte(std::clamp(vColor.w, 0.f, 1.f) * 255.f)
+					};
+				}
+
+				// Exact handle position, typed directly in the caller's units.
+				const float flPosRange = flPosMax - flPosMin;
+				float flVal = flPosMin + tStop.Pos * flPosRange;
+				SetNextItemWidth(H::Draw.Scale(180));
+				if (InputFloat("Position", &flVal, 0.f, 0.f, sPosFormat))
+					tStop.Pos = flPosRange != 0.f ? std::clamp((flVal - flPosMin) / flPosRange, 0.f, 1.f) : 0.f;
+
+				// Easing toward the next stop.
+				SetNextItemWidth(H::Draw.Scale(180));
+				Combo("Easing", &tStop.Ease, "Linear\0Ease in\0Ease out\0Ease in/out\0Constant\0");
+
+				EndPopup();
+			}
+			PopID();
+		}
+		if (iRemove >= 0 && vStops.size() > 1)
+			vStops.erase(vStops.begin() + iRemove);
+
+		if (!bFixed)
+		{
+			SetCursorPos(vLocalPos);
+			AddRowSize(vLocalPos, { flWidth, flTotalH });
+			DebugDummy({ flWidth, GetRowSize(flTotalH + GetStyle().WindowPadding.y) });
+		}
+		else
+		{
+			SetCursorScreenPos(vPos);
+			Dummy({ flWidth, flTotalH });
+		}
+
+		PopID();
+	}
+
 	inline bool ColorPicker(const char* sLabel, Color_t* pColor, bool bTooltip = true, ImVec2 vSize = { H::Draw.Scale(12), H::Draw.Scale(12) })
 	{
 		ImVec2 vOriginalPos = GetCursorPos();
@@ -1963,8 +2106,123 @@ namespace ImGui
 		return bReturn;
 	}
 
+	// Color picker with an optional distance-based gradient (pDistance): the
+	// popup gains a "Distance based" checkbox; when checked, a gradient stop
+	// editor maps the local player's distance to the entity (near -> far) onto
+	// the color, and the swatch previews the gradient instead of the flat color.
+	inline bool ColorPicker(const char* sLabel, Color_t* pColor, DistanceColor_t* pDistance, bool bTooltip = true, ImVec2 vSize = { H::Draw.Scale(12), H::Draw.Scale(12) })
+	{
+		if (!pDistance)
+			return ColorPicker(sLabel, pColor, bTooltip, vSize);
+
+		ImVec2 vOriginalPos = GetCursorPos();
+		if (Disabled)
+		{	// lol
+			Button("##", vSize);
+			SetCursorPos(vOriginalPos);
+		}
+
+		PushStyleVar(ImGuiStyleVar_Alpha, 1.f);
+		PushStyleVar(ImGuiStyleVar_FramePadding, { H::Draw.Scale(2), H::Draw.Scale(2) });
+		PushStyleVar(ImGuiStyleVar_ItemSpacing, { 0, H::Draw.Scale(4) });
+		PushStyleVar(ImGuiStyleVar_ItemInnerSpacing, { H::Draw.Scale(4), 0 });
+		PushStyleVar(ImGuiStyleVar_PopupBorderSize, H::Draw.Scale());
+		PushStyleColor(ImGuiCol_PopupBg, F::Render.Background0p5.Value);
+
+		PushID(sLabel);
+		bool bReturn = false;
+
+		// Swatch: gradient preview when distance-based, otherwise the same alpha-
+		// aware button the plain picker shows.
+		bool bOpen;
+		if (pDistance->Enabled && !pDistance->Stops.empty())
+		{
+			const ImVec2 vPos = GetCursorScreenPos();
+			bOpen = InvisibleButton("##swatch", vSize);
+
+			auto vSorted = pDistance->Stops;
+			std::sort(vSorted.begin(), vSorted.end(), [](const GlowStop_t& a, const GlowStop_t& b) { return a.Pos < b.Pos; });
+			auto pDrawList = GetWindowDrawList();
+			const int nSlices = std::max(4, int(vSize.x / 2));
+			for (int i = 0; i < nSlices; i++)
+			{
+				const float t0 = float(i) / nSlices, t1 = float(i + 1) / nSlices;
+				const Color_t c0 = EvalGlowStops(vSorted, t0), c1 = EvalGlowStops(vSorted, t1);
+				pDrawList->AddRectFilledMultiColor(
+					{ vPos.x + t0 * vSize.x, vPos.y }, { vPos.x + t1 * vSize.x, vPos.y + vSize.y },
+					IM_COL32(c0.r, c0.g, c0.b, c0.a), IM_COL32(c1.r, c1.g, c1.b, c1.a), IM_COL32(c1.r, c1.g, c1.b, c1.a), IM_COL32(c0.r, c0.g, c0.b, c0.a));
+			}
+			pDrawList->AddRect(vPos, vPos + vSize, IM_COL32(0, 0, 0, 160));
+		}
+		else
+		{
+			ImVec4 tTempColor = ColorByteToVec(*pColor);
+			bOpen = ColorButton("##swatch", tTempColor, ImGuiColorEditFlags_AlphaBar | ImGuiColorEditFlags_LargeAlphaGrid | ImGuiColorEditFlags_NoRoundRestrict | ImGuiColorEditFlags_NoBorder | ImGuiColorEditFlags_NoTooltip, vSize);
+		}
+		if (!Disabled && IsItemHovered())
+			SetMouseCursor(ImGuiMouseCursor_Hand);
+		bool bItemHovered = IsItemHovered();
+		if (bOpen && !Disabled)
+			OpenPopup("DistancePicker");
+
+		if (BeginPopup("DistancePicker"))
+		{
+			const float flWidth = H::Draw.Scale(200);
+
+			// Flat color: the fallback when distance-based is off (or the distance
+			// to an entity is unknown), and the health-gradient override's base.
+			ImVec4 tTempColor = ColorByteToVec(*pColor);
+			SetNextItemWidth(flWidth);
+			if (ColorPicker4("##Color", &tTempColor.x, ImGuiColorEditFlags_AlphaBar | ImGuiColorEditFlags_DisplayRGB | ImGuiColorEditFlags_DisplayHex))
+			{
+				*pColor = ColorVecToByte(tTempColor);
+				bReturn = true;
+			}
+
+			Dummy({ 0, H::Draw.Scale(4) });
+			bReturn |= Checkbox("Distance based", &pDistance->Enabled);
+			if (pDistance->Enabled)
+			{
+				Dummy({ 0, H::Draw.Scale(2) });
+				FGradientStops("DistanceStops", pDistance->Stops, flWidth, pDistance->Near, pDistance->Far, "%.0f HU");
+
+				// Distance range the gradient spans, in hammer units.
+				const float flItemWidth = (flWidth - GetStyle().ItemInnerSpacing.x * 2) / 2;
+				SetNextItemWidth(flItemWidth);
+				if (DragFloat("##Near", &pDistance->Near, 10.f, 0.f, 16384.f, "near %.0f"))
+				{
+					pDistance->Near = std::clamp(pDistance->Near, 0.f, 16384.f);
+					pDistance->Far = std::max(pDistance->Far, pDistance->Near + 1.f);
+					bReturn = true;
+				}
+				SameLine(0.f, GetStyle().ItemInnerSpacing.x * 2);
+				SetNextItemWidth(flItemWidth);
+				if (DragFloat("##Far", &pDistance->Far, 10.f, 0.f, 16384.f, "far %.0f"))
+				{
+					pDistance->Far = std::clamp(pDistance->Far, 1.f, 16384.f);
+					pDistance->Near = std::min(pDistance->Near, pDistance->Far - 1.f);
+					bReturn = true;
+				}
+			}
+
+			EndPopup();
+		}
+		PopID();
+
+		PopStyleColor();
+		PopStyleVar(5);
+
+		if (bTooltip)
+		{
+			vOriginalPos += GetDrawPos();
+			FTooltip(StripDoubleHash(sLabel).c_str(), bItemHovered, 300, F::Render.FontSmall, &vOriginalPos, &vSize);
+		}
+
+		return bReturn;
+	}
+
 	// if items overlap, use before to have working input, e.g. a right toggle and a color picker
-	inline bool FColorPicker(const char* sLabel, Color_t* pColor, int iFlags = FColorPickerEnum::None, ImVec2 vOffset = {}, ImVec2 vSize = { H::Draw.Scale(12), H::Draw.Scale(12) }, ImVec2 vIconOffset = {}, bool* pHovered = nullptr)
+	inline bool FColorPicker(const char* sLabel, Color_t* pColor, DistanceColor_t* pDistance, int iFlags = FColorPickerEnum::None, ImVec2 vOffset = {}, ImVec2 vSize = { H::Draw.Scale(12), H::Draw.Scale(12) }, ImVec2 vIconOffset = {}, bool* pHovered = nullptr)
 	{
 		if (Transparent || Disabled)
 			PushStyleVar(ImGuiStyleVar_Alpha, 0.5f);
@@ -2034,7 +2292,7 @@ namespace ImGui
 		}
 
 		SetCursorPos(vOriginalPos2 + vIconOffset);
-		bool bReturn = ColorPicker(sLabel, pColor, bTooltip, vSize);
+		bool bReturn = ColorPicker(sLabel, pColor, pDistance, bTooltip, vSize);
 		if (pHovered && !(iFlags & FColorPickerEnum::HoverContents))
 			*pHovered = IsItemHovered();
 
@@ -2063,6 +2321,10 @@ namespace ImGui
 			PopStyleVar();
 
 		return bReturn;
+	}
+	inline bool FColorPicker(const char* sLabel, Color_t* pColor, int iFlags = FColorPickerEnum::None, ImVec2 vOffset = {}, ImVec2 vSize = { H::Draw.Scale(12), H::Draw.Scale(12) }, ImVec2 vIconOffset = {}, bool* pHovered = nullptr)
+	{
+		return FColorPicker(sLabel, pColor, nullptr, iFlags, vOffset, vSize, vIconOffset, pHovered);
 	}
 
 	inline void FKeybind(const char* sLabel, int& iOutput, int iFlags = FKeybindEnum::None, std::vector<int> vIgnore = { Vars::Menu::PrimaryKey[DEFAULT_BIND], Vars::Menu::SecondaryKey[DEFAULT_BIND] }, ImVec2 vSize = { 0, 30 }, int iSizeOffset = 0, bool* pHovered = nullptr)
@@ -2143,7 +2405,7 @@ namespace ImGui
 	}
 
 	// dropdown for materials
-	inline bool FMDropdown(const char* sLabel, std::vector<std::pair<std::string, Color_t>>* pVar, int iFlags = FDropdownEnum::None, int iSizeOffset = 0, bool* pHovered = nullptr)
+	inline bool FMDropdown(const char* sLabel, std::vector<std::pair<std::string, MaterialColor_t>>* pVar, int iFlags = FDropdownEnum::None, int iSizeOffset = 0, bool* pHovered = nullptr)
 	{
 		// material stuff
 		std::vector<Material_t> vMaterials;
@@ -2176,7 +2438,7 @@ namespace ImGui
 
 		bool bTitle = sLabel[0] != '#';
 
-		std::unordered_map<std::string, std::vector<std::pair<std::string, Color_t>>::iterator> mIts = {};
+		std::unordered_map<std::string, std::vector<std::pair<std::string, MaterialColor_t>>::iterator> mIts = {};
 		for (auto it = pVar->begin(); it != pVar->end(); it++)
 			mIts[it->first] = it;
 
@@ -2240,7 +2502,7 @@ namespace ImGui
 				if (bFlagActive) // do here so as to not sink input
 				{
 					SetCursorPos(vOriginalPos2 + ImVec2(vSize.x - H::Draw.Scale(31), H::Draw.Scale(1)));
-					ColorPicker(std::format("MaterialColor{}", iEntry).c_str(), &it->second->second, false);
+					ColorPicker(std::format("MaterialColor{}", iEntry).c_str(), &it->second->second.Color, &it->second->second.Distance, false);
 					SetCursorPos(vOriginalPos2);
 				}
 				bool bHovered = bFlagActive ? IsItemHovered() : false;
@@ -2250,7 +2512,7 @@ namespace ImGui
 					if (bFlagActive)
 						pVar->erase(it->second);
 					else
-						pVar->emplace_back(sEntry, Color_t());
+						pVar->emplace_back(sEntry, MaterialColor_t());
 					bReturn = true;
 				}
 				bHovered = !bHovered && IsItemHovered();
@@ -2647,7 +2909,7 @@ namespace ImGui
 	WRAPPER(FDropdown, int, VA_LIST(int iFlags = 0, int iSizeOffset = 0), VA_LIST(&tVal, tVar.m_vValues, {}, iFlags, iSizeOffset, tVar.m_sExtra ? tVar.m_sExtra : "None"))
 	WRAPPER(FDropdown, int, VA_LIST(std::vector<const char*> vEntries, std::vector<int> vValues = {}, int iFlags = 0, int iSizeOffset = 0), VA_LIST(&tVal, vEntries, vValues, iFlags, iSizeOffset, tVar.m_sExtra ? tVar.m_sExtra : "None"))
 	WRAPPER(FSDropdown, std::string, VA_LIST(int iFlags = 0, int iSizeOffset = 0), VA_LIST(&tVal, tVar.m_vValues, iFlags, iSizeOffset))
-	WRAPPER(FMDropdown, VA_LIST(std::vector<std::pair<std::string, Color_t>>), VA_LIST(int iFlags = 0, int iSizeOffset = 0), VA_LIST(&tVal, iFlags, iSizeOffset))
+	WRAPPER(FMDropdown, VA_LIST(std::vector<std::pair<std::string, MaterialColor_t>>), VA_LIST(int iFlags = 0, int iSizeOffset = 0), VA_LIST(&tVal, iFlags, iSizeOffset))
 	WRAPPER(FColorPicker, Color_t, VA_LIST(int iFlags = 0, ImVec2 vOffset = {}, ImVec2 vSize = { H::Draw.Scale(12), H::Draw.Scale(12) }, ImVec2 vIconOffset = {}), VA_LIST(&tVal, iFlags, vOffset, vSize, vIconOffset))
 	WRAPPER(FColorPicker, Gradient_t, VA_LIST(bool bStart = true, int iFlags = 0, ImVec2 vOffset = {}, ImVec2 vSize = { H::Draw.Scale(12), H::Draw.Scale(12) }, ImVec2 vIconOffset = {}), VA_LIST(bStart ? &tVal.StartColor : &tVal.EndColor, iFlags, vOffset, vSize, vIconOffset))
 }

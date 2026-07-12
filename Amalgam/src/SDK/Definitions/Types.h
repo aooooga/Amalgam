@@ -1099,44 +1099,9 @@ struct Gradient_t
 	}
 };
 
-struct Chams_t
-{
-private:
-	static inline const std::vector<std::pair<std::string, Color_t>> s_vNone = std::vector<std::pair<std::string, Color_t>>{ { "None", {} } };
-	static inline const std::vector<std::pair<std::string, Color_t>> s_vOriginal = std::vector<std::pair<std::string, Color_t>>{ { "Original", {} } };
-
-public:
-	std::vector<std::pair<std::string, Color_t>> Visible = { { "Original", Color_t() } };
-	std::vector<std::pair<std::string, Color_t>> Occluded = {};
-
-	inline bool operator==(const Chams_t& t) const
-	{
-		return Visible == t.Visible && Occluded == t.Occluded;
-	}
-
-	inline bool operator!=(const Chams_t& t) const
-	{
-		return Visible != t.Visible || Occluded != t.Occluded;
-	}
-
-	inline bool operator()(bool bDefault = true) const
-	{
-		return (bDefault ? Visible != s_vOriginal : !Visible.empty()) || !Occluded.empty();
-	}
-
-	const std::vector<std::pair<std::string, Color_t>>& GetVisible() const
-	{
-		return !Visible.empty() ? Visible : s_vNone;
-	}
-
-	const std::vector<std::pair<std::string, Color_t>>& GetOccluded() const
-	{
-		return !Occluded.empty() ? Occluded : s_vNone;
-	}
-};
-
-// A color stop on the glow health gradient; Pos is the health fraction (0..1).
-// Ease shapes the blend from this stop toward the NEXT one.
+// A color stop on a gradient (glow health / distance-based colors); Pos is the
+// normalized position (0..1). Ease shapes the blend from this stop toward the
+// NEXT one.
 namespace GlowEaseEnum
 {
 	enum { Linear = 0, In, Out, InOut, Constant, Count };
@@ -1146,6 +1111,11 @@ struct GlowStop_t
 	float Pos = 0.f;
 	Color_t Color = { 255, 255, 255, 255 };
 	int Ease = GlowEaseEnum::Linear;
+
+	inline bool operator==(const GlowStop_t& t) const
+	{
+		return Pos == t.Pos && Color == t.Color && Ease == t.Ease;
+	}
 };
 
 // Easing curve for a gradient segment, applied to the 0..1 blend fraction.
@@ -1161,8 +1131,8 @@ inline float GlowEaseFraction(int iEase, float f)
 	}
 }
 
-// Evaluate a stop list (sorted by Pos) at health fraction t: clamped at the
-// ends, interpolated between neighboring stops with the left stop's easing.
+// Evaluate a stop list (sorted by Pos) at fraction t: clamped at the ends,
+// interpolated between neighboring stops with the left stop's easing.
 inline Color_t EvalGlowStops(const std::vector<GlowStop_t>& vStops, float t)
 {
 	if (vStops.empty())
@@ -1190,6 +1160,100 @@ inline Color_t EvalGlowStops(const std::vector<GlowStop_t>& vStops, float t)
 	return vStops.back().Color;
 }
 
+// Distance-based color: maps the local player's distance to the entity onto a
+// stop gradient (Pos 0 = Near hammer units away, 1 = Far). Attached to glow
+// and per-material (chams) colors via their color pickers.
+struct DistanceColor_t
+{
+	bool Enabled = false;
+	float Near = 0.f;    // distance mapped to gradient position 0
+	float Far = 3000.f;  // distance mapped to gradient position 1
+	std::vector<GlowStop_t> Stops = {
+		{ 0.f, { 255, 0, 0, 255 } }, { 0.5f, { 255, 255, 0, 255 } }, { 1.f, { 0, 255, 0, 255 } }
+	};
+
+	inline bool operator==(const DistanceColor_t& t) const
+	{
+		return Enabled == t.Enabled && Near == t.Near && Far == t.Far && Stops == t.Stops;
+	}
+
+	inline bool operator!=(const DistanceColor_t& t) const
+	{
+		return !(*this == t);
+	}
+
+	// Resolve against the gradient; flDistance < 0 (unknown) returns the fallback.
+	inline Color_t GetColor(const Color_t& tFallback, float flDistance) const
+	{
+		if (!Enabled || Stops.empty() || flDistance < 0.f)
+			return tFallback;
+		const float flRange = Far - Near;
+		return EvalGlowStops(Stops, flRange > 0.f ? std::clamp((flDistance - Near) / flRange, 0.f, 1.f) : 1.f);
+	}
+};
+
+// A material tint: flat color, optionally overridden by a distance gradient.
+struct MaterialColor_t
+{
+	Color_t Color = {};
+	DistanceColor_t Distance = {};
+
+	MaterialColor_t() = default;
+	MaterialColor_t(const Color_t& tColor) : Color(tColor) {}
+
+	inline bool operator==(const MaterialColor_t& t) const
+	{
+		return Color == t.Color && Distance == t.Distance;
+	}
+
+	inline bool operator!=(const MaterialColor_t& t) const
+	{
+		return !(*this == t);
+	}
+
+	// flDistance < 0 (unknown) uses the flat color
+	inline Color_t GetColor(float flDistance = -1.f) const
+	{
+		return Distance.GetColor(Color, flDistance);
+	}
+};
+
+struct Chams_t
+{
+private:
+	static inline const std::vector<std::pair<std::string, MaterialColor_t>> s_vNone = std::vector<std::pair<std::string, MaterialColor_t>>{ { "None", {} } };
+	static inline const std::vector<std::pair<std::string, MaterialColor_t>> s_vOriginal = std::vector<std::pair<std::string, MaterialColor_t>>{ { "Original", {} } };
+
+public:
+	std::vector<std::pair<std::string, MaterialColor_t>> Visible = { { "Original", MaterialColor_t() } };
+	std::vector<std::pair<std::string, MaterialColor_t>> Occluded = {};
+
+	inline bool operator==(const Chams_t& t) const
+	{
+		return Visible == t.Visible && Occluded == t.Occluded;
+	}
+
+	inline bool operator!=(const Chams_t& t) const
+	{
+		return Visible != t.Visible || Occluded != t.Occluded;
+	}
+
+	inline bool operator()(bool bDefault = true) const
+	{
+		return (bDefault ? Visible != s_vOriginal : !Visible.empty()) || !Occluded.empty();
+	}
+
+	const std::vector<std::pair<std::string, MaterialColor_t>>& GetVisible() const
+	{
+		return !Visible.empty() ? Visible : s_vNone;
+	}
+
+	const std::vector<std::pair<std::string, MaterialColor_t>>& GetOccluded() const
+	{
+		return !Occluded.empty() ? Occluded : s_vNone;
+	}
+};
+
 struct Glow_t
 {
 	int Stencil = 0;
@@ -1205,13 +1269,18 @@ struct Glow_t
 		{ 0.f, { 255, 0, 0, 255 } }, { 0.5f, { 255, 255, 0, 255 } }, { 1.f, { 0, 255, 0, 255 } }
 	};
 
+	// Color by distance (edited via the glow color picker): when enabled, the
+	// glow color comes from the gradient evaluated at the local player's
+	// distance to the entity. Health color takes precedence when both apply.
+	DistanceColor_t DistanceColor = {};
+
 	// Resolve the glow color for an entity with the given health fraction
-	// (pass -1 for entities without HP).
-	inline Color_t GetColor(float flHealthFrac = -1.f) const
+	// (pass -1 for entities without HP) and distance (-1 if unknown).
+	inline Color_t GetColor(float flHealthFrac = -1.f, float flDistance = -1.f) const
 	{
 		if (HealthColor && flHealthFrac >= 0.f && !Stops.empty())
 			return EvalGlowStops(Stops, flHealthFrac);
-		return Color;
+		return DistanceColor.GetColor(Color, flDistance);
 	}
 
 	// Equality/hash cover only the render-pass parameters: entities are batched

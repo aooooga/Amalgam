@@ -376,7 +376,7 @@ void CMaterials::RemoveMaterial(const char* sName)
 
 		std::filesystem::remove(F::Configs.m_sMaterialsPath + sName + ".vmt");
 
-		auto fRemoveFromVal = [&](std::vector<std::pair<std::string, Color_t>>& val)
+		auto fRemoveFromVal = [&](std::vector<std::pair<std::string, MaterialColor_t>>& val)
 		{
 			for (auto it = val.begin(); it != val.end();)
 			{
@@ -386,7 +386,7 @@ void CMaterials::RemoveMaterial(const char* sName)
 					++it;
 			}
 		};
-		auto fRemoveFromVar = [&](ConfigVar<std::vector<std::pair<std::string, Color_t>>>& var)
+		auto fRemoveFromVar = [&](ConfigVar<std::vector<std::pair<std::string, MaterialColor_t>>>& var)
 		{
 			for (auto& [iBind, vVal] : var.Map)
 			{

@@ -14,133 +14,11 @@
 #include "../../World/World.h"
 #include "../../Simulation/ProjectileSimulation/ProjectileSimulation.h"
 
-// Gradient editor for the glow health-color stops: a bar spanning 0-100% HP
-// with color stops along it. Click an empty spot on the bar to add a stop
-// (with the gradient's color at that point), drag a handle to move it, click
-// a handle to open its color picker, right-click a handle to delete it.
+// Gradient editor for the glow health-color stops: the shared stop editor
+// (ImGui::FGradientStops) spanning 0-100% HP.
 static void FGlowGradient(const char* sLabel, std::vector<GlowStop_t>& vStops)
 {
-	using namespace ImGui;
-
-	if (vStops.empty())
-		vStops.push_back({ 0.5f, { 255, 255, 255, 255 } });
-	// Keep sorted by position, but not while the mouse is down: re-ordering
-	// mid-drag would change the handle IDs and break the drag.
-	if (!IsMouseDown(ImGuiMouseButton_Left))
-		std::sort(vStops.begin(), vStops.end(), [](const GlowStop_t& a, const GlowStop_t& b) { return a.Pos < b.Pos; });
-
-	const float flPad = GetStyle().WindowPadding.x;
-	const float flWidth = GetWindowWidth() - flPad * 2;
-	const float flBarH = H::Draw.Scale(12);
-	const float flHandleW = H::Draw.Scale(8);
-	const float flHandleH = H::Draw.Scale(10);
-	const float flTotalH = flBarH + flHandleH + H::Draw.Scale(4);
-
-	PushID(sLabel);
-
-	const ImVec2 vLocalPos = GetCursorPos();
-	SetCursorPosX(flPad);
-	const ImVec2 vPos = GetCursorScreenPos();
-	auto pDrawList = GetWindowDrawList();
-
-	auto ColU32 = [](const Color_t& c) { return IM_COL32(c.r, c.g, c.b, c.a); };
-
-	// Gradient bar (sorted copy so drawing is right even mid-drag), rendered by
-	// sampling EvalGlowStops in slices so easing/constant segments show exactly
-	// as they will in game.
-	auto vSorted = vStops;
-	std::sort(vSorted.begin(), vSorted.end(), [](const GlowStop_t& a, const GlowStop_t& b) { return a.Pos < b.Pos; });
-	const float y0 = vPos.y, y1 = vPos.y + flBarH;
-	auto StopX = [&](float flPos) { return vPos.x + std::clamp(flPos, 0.f, 1.f) * flWidth; };
-	{
-		const int nSlices = 96;
-		for (int i = 0; i < nSlices; i++)
-		{
-			const float t0 = float(i) / nSlices, t1 = float(i + 1) / nSlices;
-			const ImU32 c0 = ColU32(EvalGlowStops(vSorted, t0)), c1 = ColU32(EvalGlowStops(vSorted, t1));
-			pDrawList->AddRectFilledMultiColor({ vPos.x + t0 * flWidth, y0 }, { vPos.x + t1 * flWidth, y1 }, c0, c1, c1, c0);
-		}
-		pDrawList->AddRect({ vPos.x, y0 }, { vPos.x + flWidth, y1 }, IM_COL32(0, 0, 0, 160));
-	}
-
-	// Click on the bar adds a stop with the gradient's color at that point.
-	SetCursorScreenPos(vPos);
-	InvisibleButton("bar", { flWidth, flBarH });
-	if (IsItemClicked(ImGuiMouseButton_Left))
-	{
-		const float t = std::clamp((GetIO().MousePos.x - vPos.x) / flWidth, 0.f, 1.f);
-		vStops.push_back({ t, EvalGlowStops(vSorted, t) });
-	}
-	if (IsItemHovered())
-		SetMouseCursor(ImGuiMouseCursor_Hand);
-
-	// Stop handles beneath the bar.
-	static int s_iDraggedStop = -1;
-	int iRemove = -1;
-	for (int i = 0; i < int(vStops.size()); i++)
-	{
-		auto& tStop = vStops[i];
-		const float hx = StopX(tStop.Pos);
-		const ImVec2 vMin = { hx - flHandleW / 2, y1 + H::Draw.Scale(2) };
-		const ImVec2 vMax = { vMin.x + flHandleW, vMin.y + flHandleH };
-
-		PushID(i);
-		SetCursorScreenPos(vMin);
-		InvisibleButton("stop", { flHandleW, flHandleH });
-
-		if (IsItemActive() && IsMouseDragging(ImGuiMouseButton_Left, 2.f))
-		{
-			tStop.Pos = std::clamp((GetIO().MousePos.x - vPos.x) / flWidth, 0.f, 1.f);
-			s_iDraggedStop = i;
-		}
-		if (IsItemDeactivated())
-		{
-			if (s_iDraggedStop != i) // plain click, not a drag: edit the color
-				OpenPopup("StopPicker");
-			s_iDraggedStop = -1;
-		}
-		if (IsItemClicked(ImGuiMouseButton_Right))
-			iRemove = i;
-		if (IsItemHovered())
-			SetMouseCursor(ImGuiMouseCursor_Hand);
-
-		pDrawList->AddRectFilled(vMin, vMax, ColU32(tStop.Color), H::Draw.Scale(2));
-		pDrawList->AddRect(vMin, vMax, IsItemHovered() || IsItemActive() ? IM_COL32(255, 255, 255, 255) : IM_COL32(0, 0, 0, 200), H::Draw.Scale(2));
-
-		if (BeginPopup("StopPicker"))
-		{
-			// Full picker with manual RGBA/hex inputs.
-			ImVec4 vColor = { tStop.Color.r / 255.f, tStop.Color.g / 255.f, tStop.Color.b / 255.f, tStop.Color.a / 255.f };
-			if (ColorPicker4("##StopColor", &vColor.x, ImGuiColorEditFlags_AlphaBar | ImGuiColorEditFlags_DisplayRGB | ImGuiColorEditFlags_DisplayHex))
-			{
-				tStop.Color = {
-					byte(std::clamp(vColor.x, 0.f, 1.f) * 255.f), byte(std::clamp(vColor.y, 0.f, 1.f) * 255.f),
-					byte(std::clamp(vColor.z, 0.f, 1.f) * 255.f), byte(std::clamp(vColor.w, 0.f, 1.f) * 255.f)
-				};
-			}
-
-			// Exact handle position along the 0-100% HP range.
-			float flPct = tStop.Pos * 100.f;
-			SetNextItemWidth(H::Draw.Scale(180));
-			if (SliderFloat("Position", &flPct, 0.f, 100.f, "%.0f%%"))
-				tStop.Pos = std::clamp(flPct / 100.f, 0.f, 1.f);
-
-			// Easing toward the next stop.
-			SetNextItemWidth(H::Draw.Scale(180));
-			Combo("Easing", &tStop.Ease, "Linear\0Ease in\0Ease out\0Ease in/out\0Constant\0");
-
-			EndPopup();
-		}
-		PopID();
-	}
-	if (iRemove >= 0 && vStops.size() > 1)
-		vStops.erase(vStops.begin() + iRemove);
-
-	SetCursorPos(vLocalPos);
-	AddRowSize(vLocalPos, { flWidth, flTotalH });
-	DebugDummy({ flWidth, GetRowSize(flTotalH + GetStyle().WindowPadding.y) });
-
-	PopID();
+	ImGui::FGradientStops(sLabel, vStops, 0.f, 0.f, 100.f, "%.0f%%");
 }
 
 void CMenu::DrawMenu()
@@ -1175,7 +1053,7 @@ void CMenu::MenuVisuals(int iTab)
 					PopTransparent();
 					PushTransparent(!tGroup.m_tGlow());
 					{
-						FColorPicker("Glow color", &tGroup.m_tGlow.Color, FColorPickerEnum::Left);
+						FColorPicker("Glow color", &tGroup.m_tGlow.Color, &tGroup.m_tGlow.DistanceColor, FColorPickerEnum::Left);
 						FToggle("Health color", &tGroup.m_tGlow.HealthColor, FToggleEnum::Right);
 						if (tGroup.m_tGlow.HealthColor)
 							FGlowGradient("GlowHealthGradient", tGroup.m_tGlow.Stops);
@@ -1216,7 +1094,7 @@ void CMenu::MenuVisuals(int iTab)
 						PopTransparent();
 						PushTransparent(!tGroup.m_tBacktrackGlow());
 						{
-							FColorPicker("Glow color## Backtrack", &tGroup.m_tBacktrackGlow.Color, FColorPickerEnum::Left);
+							FColorPicker("Glow color## Backtrack", &tGroup.m_tBacktrackGlow.Color, &tGroup.m_tBacktrackGlow.DistanceColor, FColorPickerEnum::Left);
 							FToggle("Health color## Backtrack", &tGroup.m_tBacktrackGlow.HealthColor, FToggleEnum::Right);
 							if (tGroup.m_tBacktrackGlow.HealthColor)
 								FGlowGradient("BacktrackGlowHealthGradient", tGroup.m_tBacktrackGlow.Stops);
@@ -3782,7 +3660,7 @@ void CMenu::MenuSearch(std::string sSearch)
 			iWidgetEnum = WidgetEnum::FFRSlider, iTypeEnum = WidgetEnum::FSlider;
 		else if (auto pVar = pBase->As<std::string>())
 			iWidgetEnum = WidgetEnum::FSDropdown, iTypeEnum = WidgetEnum::FDropdown;
-		else if (auto pVar = pBase->As<std::vector<std::pair<std::string, Color_t>>>())
+		else if (auto pVar = pBase->As<std::vector<std::pair<std::string, MaterialColor_t>>>())
 			iWidgetEnum = WidgetEnum::FMDropdown, iTypeEnum = WidgetEnum::FDropdown;
 		else if (auto pVar = pBase->As<Color_t>())
 			iWidgetEnum = WidgetEnum::FColorPicker, iTypeEnum = WidgetEnum::FToggle;
@@ -3907,7 +3785,7 @@ void CMenu::MenuSearch(std::string sSearch)
 		}
 		case WidgetEnum::FMDropdown:
 		{
-			auto pVar = pBase->As<std::vector<std::pair<std::string, Color_t>>>();
+			auto pVar = pBase->As<std::vector<std::pair<std::string, MaterialColor_t>>>();
 			FMDropdown(*pVar, !(i % 2) ? FDropdownEnum::Left : FDropdownEnum::Right, 0, nullptr, iOverride/*, iOverride*/);
 			break;
 		}

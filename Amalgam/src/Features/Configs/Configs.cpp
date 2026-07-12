@@ -60,8 +60,6 @@ template <> void CConfigs::SaveJson(boost::property_tree::ptree& t, const std::s
 {
 	boost::property_tree::ptree tChild;
 	SaveJson(tChild, "Enabled", v.Enabled);
-	SaveJson(tChild, "Near", v.Near);
-	SaveJson(tChild, "Far", v.Far);
 	SaveJson(tChild, "Stops", v.Stops);
 
 	t.put_child(s, tChild);
@@ -194,11 +192,7 @@ template <> void CConfigs::LoadJson(const boost::property_tree::ptree& t, const 
 	if (auto tChild = t.get_child_optional(s))
 	{
 		LoadJson(*tChild, "Enabled", v.Enabled);
-		LoadJson(*tChild, "Near", v.Near);
-		LoadJson(*tChild, "Far", v.Far);
 		LoadJson(*tChild, "Stops", v.Stops);
-		v.Near = std::clamp(v.Near, 0.f, 16384.f);
-		v.Far = std::clamp(v.Far, v.Near + 1.f, 16384.f);
 	}
 }
 

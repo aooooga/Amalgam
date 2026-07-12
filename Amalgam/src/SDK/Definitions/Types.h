@@ -1161,20 +1161,21 @@ inline Color_t EvalGlowStops(const std::vector<GlowStop_t>& vStops, float t)
 }
 
 // Distance-based color: maps the local player's distance to the entity onto a
-// stop gradient (Pos 0 = Near hammer units away, 1 = Far). Attached to glow
-// and per-material (chams) colors via their color pickers.
+// stop gradient (Pos 0 = point blank, 1 = MaxDistance hammer units; anything
+// farther holds the last stop's color). Attached to glow and per-material
+// (chams) colors via their color pickers.
 struct DistanceColor_t
 {
+	static constexpr float MaxDistance = 4096.f;
+
 	bool Enabled = false;
-	float Near = 0.f;    // distance mapped to gradient position 0
-	float Far = 3000.f;  // distance mapped to gradient position 1
 	std::vector<GlowStop_t> Stops = {
 		{ 0.f, { 255, 0, 0, 255 } }, { 0.5f, { 255, 255, 0, 255 } }, { 1.f, { 0, 255, 0, 255 } }
 	};
 
 	inline bool operator==(const DistanceColor_t& t) const
 	{
-		return Enabled == t.Enabled && Near == t.Near && Far == t.Far && Stops == t.Stops;
+		return Enabled == t.Enabled && Stops == t.Stops;
 	}
 
 	inline bool operator!=(const DistanceColor_t& t) const
@@ -1187,8 +1188,7 @@ struct DistanceColor_t
 	{
 		if (!Enabled || Stops.empty() || flDistance < 0.f)
 			return tFallback;
-		const float flRange = Far - Near;
-		return EvalGlowStops(Stops, flRange > 0.f ? std::clamp((flDistance - Near) / flRange, 0.f, 1.f) : 1.f);
+		return EvalGlowStops(Stops, std::clamp(flDistance / MaxDistance, 0.f, 1.f));
 	}
 };
 

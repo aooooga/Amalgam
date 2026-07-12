@@ -1940,9 +1940,21 @@ namespace ImGui
 	{
 		if (vStops.empty())
 			vStops.push_back({ 0.5f, { 255, 255, 255, 255 } });
-		// Keep sorted by position, but not while the mouse is down: re-ordering
-		// mid-drag would change the handle IDs and break the drag.
-		if (!IsMouseDown(ImGuiMouseButton_Left))
+
+		PushID(sLabel);
+
+		// Keep sorted by position, but not while the mouse is down (re-ordering
+		// mid-drag would change the handle IDs and break the drag) and not while a
+		// stop's edit popup is open (the popup is keyed by index, so re-ordering
+		// would silently retarget it to a different stop).
+		bool bEditPopup = false;
+		for (int i = 0; i < int(vStops.size()); i++)
+		{
+			PushID(i);
+			bEditPopup |= IsPopupOpen("StopPicker");
+			PopID();
+		}
+		if (!IsMouseDown(ImGuiMouseButton_Left) && !bEditPopup)
 			std::sort(vStops.begin(), vStops.end(), [](const GlowStop_t& a, const GlowStop_t& b) { return a.Pos < b.Pos; });
 
 		const bool bFixed = flWidth > 0.f;
@@ -1953,8 +1965,6 @@ namespace ImGui
 		const float flHandleW = H::Draw.Scale(8);
 		const float flHandleH = H::Draw.Scale(10);
 		const float flTotalH = flBarH + flHandleH + H::Draw.Scale(4);
-
-		PushID(sLabel);
 
 		const ImVec2 vLocalPos = GetCursorPos();
 		if (!bFixed)
@@ -2038,7 +2048,10 @@ namespace ImGui
 					};
 				}
 
-				// Exact handle position, typed directly in the caller's units.
+				// Exact handle position, typed directly in the caller's units. Edits
+				// only ever touch this stop: sorting is deferred while this popup is
+				// open, so half-typed values can't re-order the list and retarget the
+				// popup to a different stop.
 				const float flPosRange = flPosMax - flPosMin;
 				float flVal = flPosMin + tStop.Pos * flPosRange;
 				SetNextItemWidth(H::Draw.Scale(180));
@@ -2184,25 +2197,7 @@ namespace ImGui
 			if (pDistance->Enabled)
 			{
 				Dummy({ 0, H::Draw.Scale(2) });
-				FGradientStops("DistanceStops", pDistance->Stops, flWidth, pDistance->Near, pDistance->Far, "%.0f HU");
-
-				// Distance range the gradient spans, in hammer units.
-				const float flItemWidth = (flWidth - GetStyle().ItemInnerSpacing.x * 2) / 2;
-				SetNextItemWidth(flItemWidth);
-				if (DragFloat("##Near", &pDistance->Near, 10.f, 0.f, 16384.f, "near %.0f"))
-				{
-					pDistance->Near = std::clamp(pDistance->Near, 0.f, 16384.f);
-					pDistance->Far = std::max(pDistance->Far, pDistance->Near + 1.f);
-					bReturn = true;
-				}
-				SameLine(0.f, GetStyle().ItemInnerSpacing.x * 2);
-				SetNextItemWidth(flItemWidth);
-				if (DragFloat("##Far", &pDistance->Far, 10.f, 0.f, 16384.f, "far %.0f"))
-				{
-					pDistance->Far = std::clamp(pDistance->Far, 1.f, 16384.f);
-					pDistance->Near = std::min(pDistance->Near, pDistance->Far - 1.f);
-					bReturn = true;
-				}
+				FGradientStops("DistanceStops", pDistance->Stops, flWidth, 0.f, DistanceColor_t::MaxDistance, "%.0f HU");
 			}
 
 			EndPopup();

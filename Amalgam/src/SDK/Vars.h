@@ -532,11 +532,13 @@ NAMESPACE_BEGIN(Vars)
 			CVarEnum(ChatTags, "Chat tags", 0b000, VISUAL | DROPDOWN_MULTI, nullptr,
 				VA_LIST("Local", "Friends", "Party", "Assigned"),
 				Local = 1 << 0, Friends = 1 << 1, Party = 1 << 2, Assigned = 1 << 3);
-			CVar(FieldOfView, "Field of view## FOV", 0.f, VISUAL | SLIDER_MIN | SLIDER_PRECISION, 0.f, 360.f, 5.f);
+			CVar(FieldOfView, "Field of view## FOV", 0.f, VISUAL | SLIDER_MIN | SLIDER_PRECISION, 0.f, 360.f, 2.5f);
 			CVar(ZoomFieldOfView, "Zoomed field of view## Zoomed FOV", 0.f, VISUAL | SLIDER_MIN | SLIDER_PRECISION, 0.f, 160.f, 5.f);
 			CVar(FlexFOVDebug, "Flex FOV debug## FlexFOVDebug", false, VISUAL);
 			CVar(FlexFOVComposite, "Flex FOV composite## FlexFOVComposite", false, VISUAL);
 			CVar(FlexFOVStrength, "Flex FOV strength## FlexFOVStrength", 1.f, VISUAL | SLIDER_MIN | SLIDER_PRECISION, 0.f, 2.f, 0.05f);
+			CVar(FlexFOVStereographic, "Flex FOV stereographic## FlexFOVStereographic", false, VISUAL);
+			CVar(FlexFOVVertStereo, "Flex FOV vertical stereographic## FlexFOVVertStereo", false, VISUAL);
 			CVar(FlexFOVSkipMainView, "Flex FOV skip main view## FlexFOVSkipMainView", true, VISUAL);
 			CVar(FlexFOVQuality, "Flex FOV quality## FlexFOVQuality", 1.f, VISUAL | SLIDER_MIN | SLIDER_PRECISION, 0.35f, 1.f, 0.05f);
 			CVar(RearView, "Enabled## RearView", false, VISUAL);

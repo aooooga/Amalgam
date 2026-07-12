@@ -49,15 +49,123 @@ static float WideYawDeg(float flFovX)
 	return std::max(0.f, flFovX * 0.5f - 60.f);
 }
 
+static inline float Dot3(const Vec3& a, const Vec3& b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
+
+// --- Stereographic projection --------------------------------------------------
+// Projection from the point opposite the view axis onto the tangent plane at the
+// view axis (unit sphere, plane at z = 1): plane radius r = 2*tan(theta/2) for a
+// ray theta off-axis, so it stays conformal (no shape smear) all the way out and
+// only diverges at theta -> 180. Scaled like PaniniRay/MercatorRay so sx = +-1
+// lands exactly on lon = +-fov/2 along the horizontal axis.
+// Native frame here: forward = +z (callers negate z per the flex-fov convention).
+
+// Stereographic is singular at fov 360 (plane radius -> inf); clamp just short.
+static float StereoPlaneScale(float flFovXDeg)
+{
+	const float flHalf = std::min(flFovXDeg, 355.f) * FLEXFOV_DEG2RAD * 0.5f;
+	return 2.f * std::tan(flHalf * 0.5f); // r(theta) = 2*tan(theta/2) at theta = fov/2
+}
+
+static Vec3 StereographicRay(float sx, float sy, float flFovXDeg)
+{
+	const float flScale = StereoPlaneScale(flFovXDeg);
+	const float x = sx * flScale;
+	const float y = sy * flScale;
+	const float r2 = x * x + y * y;
+	Vec3 vRay(4.f * x / (r2 + 4.f), 4.f * y / (r2 + 4.f), (4.f - r2) / (r2 + 4.f));
+	vRay.z = -vRay.z;
+	return vRay;
+}
+
+static bool StereographicForwardScreen(float fx, float fy, float fz, float flFovXDeg, float& sx, float& sy)
+{
+	// Singular at the exact anti-axis point (fz = -1); reject just short of it.
+	if (fz <= -0.999f)
+		return false;
+	const float flScale = StereoPlaneScale(flFovXDeg);
+	if (flScale < 1e-6f)
+		return false;
+	sx = (2.f * fx / (1.f + fz)) / flScale;
+	sy = (2.f * fy / (1.f + fz)) / flScale;
+	return true;
+}
+
+// Stereographic blend factor for the current frame: 1 with the full-stereographic
+// toggle, otherwise (vertical-stereographic toggle) a smoothstep of |pitch|/90 so
+// Panini/Mercator hold when looking at the horizon and stereographic takes over
+// toward straight up/down (the original flex-fov pitch behavior), else 0.
+static float CurrentStereoBlend(float flPitchDeg)
+{
+	if (Vars::Visuals::UI::FlexFOVStereographic.Value)
+		return 1.f;
+	if (!Vars::Visuals::UI::FlexFOVVertStereo.Value)
+		return 0.f;
+	const float t = std::clamp(std::fabs(flPitchDeg) / 90.f, 0.f, 1.f);
+	return t * t * (3.f - 2.f * t);
+}
+
+// Worst-case blend the current toggles can reach, for rig selection: the rig must
+// stay stable while the player pitches (a rig switch tears down / rebuilds the
+// RTs), so it is picked for the extreme of the enabled mode, not the frame value.
+static float MaxStereoBlend()
+{
+	return Vars::Visuals::UI::FlexFOVStereographic.Value || Vars::Visuals::UI::FlexFOVVertStereo.Value ? 1.f : 0.f;
+}
+
 // The wide rig covers up to 2*(yaw+65) = 260 horizontally (capped 245 for
 // margin), but the screen corners also need vertical room: at a face's edge
 // its vertical reach shrinks to atan(tan(72.5)*cos(65)) ~ 57.5deg of latitude,
 // and the corner latitude of a Mercator view is atan(sinh((fov/2 rad)/aspect)).
 // That works out to roughly fov <= aspect*141deg (16:9 -> ~250). Narrower
 // aspects (4:3) fall back to the cube rig earlier.
+//
+// Stereographic pushes border rays further off-axis than Panini/Mercator at the
+// same fov, so when either stereographic toggle is on the wide rig is only kept
+// if it still contains the whole screen border at full stereographic (the worst
+// case the mode can reach). Blended rays are positive combinations of the two
+// endpoint rays, and a face frustum is a convex cone, so checking the endpoints
+// covers every intermediate blend. This keeps the cheaper 2-face rig for as long
+// as it actually works instead of pessimistically jumping to the cube.
 static bool UseWideRig(float flFovX, float flAspect)
 {
-	return flFovX <= std::min(245.f, flAspect * 141.f);
+	if (flFovX > std::min(245.f, flAspect * 141.f))
+		return false;
+	if (MaxStereoBlend() <= 0.f)
+		return true;
+
+	const float flYaw = WideYawDeg(flFovX) * FLEXFOV_DEG2RAD;
+	const float s = std::sin(flYaw), c = std::cos(flYaw);
+	// Same containment test DrawComposite uses, slightly tighter margin (0.97 vs
+	// 0.99) to leave room for boundary triangles.
+	const float flLimW = std::tan(FLEXFOV_FACE_FOV * 0.5f * FLEXFOV_DEG2RAD) * 0.97f;
+	const float flLimH = std::tan(FLEXFOV_WIDE_FOV_V * 0.5f * FLEXFOV_DEG2RAD) * 0.97f;
+
+	const int nSamples = 64; // walk the [-1,1]^2 screen border
+	for (int i = 0; i < nSamples; i++)
+	{
+		const float t = 8.f * i / nSamples; // perimeter param, [0,8)
+		float cx, cy;
+		if (t < 2.f)      { cx = t - 1.f;  cy = 1.f; }        // top edge
+		else if (t < 4.f) { cx = 1.f;      cy = 3.f - t; }    // right edge
+		else if (t < 6.f) { cx = 5.f - t;  cy = -1.f; }       // bottom edge
+		else              { cx = -1.f;     cy = t - 7.f; }    // left edge
+
+		const Vec3 r = StereographicRay(cx, cy / flAspect, flFovX);
+		bool bContained = false;
+		for (int f = 0; f < 2 && !bContained; f++)
+		{
+			const float sgn = f == 0 ? 1.f : -1.f;
+			const Vec3 vBack(-sgn * s, 0.f, c);
+			const Vec3 vRight(c, 0.f, sgn * s);
+			const float lz = Dot3(r, vBack);
+			bContained = lz < -0.05f
+				&& std::fabs(Dot3(r, vRight)) <= -lz * flLimW
+				&& std::fabs(r.y) <= -lz * flLimH;
+		}
+		if (!bContained)
+			return false;
+	}
+	return true;
 }
 
 // --- Inverse projection math (ported from shaunlebron/flex-fov flex.fs) ------
@@ -111,7 +219,7 @@ static Vec3 MercatorRay(float sx, float sy, float flFovXDeg)
 // Tier selection (per the project's chosen boundaries): Panini below 180 deg,
 // Mercator above, blended across a band around 180 to avoid a visible pop.
 // (270-360 clamps to Mercator for now; Winkel-Tripel deferred.)
-static Vec3 ScreenToRay(float sx, float sy, float flFovXDeg, float flStrength)
+static Vec3 BaseRay(float sx, float sy, float flFovXDeg, float flStrength)
 {
 	const float flLo = 170.f, flHi = 190.f;
 	if (flFovXDeg <= flLo)
@@ -124,6 +232,23 @@ static Vec3 ScreenToRay(float sx, float sy, float flFovXDeg, float flStrength)
 	const Vec3 a = PaniniRay(sx, sy, flFovXDeg, flStrength);
 	const Vec3 b = MercatorRay(sx, sy, flFovXDeg);
 	Vec3 m(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t);
+	const float len = std::sqrt(m.x * m.x + m.y * m.y + m.z * m.z);
+	if (len > 1e-6f) { m.x /= len; m.y /= len; m.z /= len; }
+	return m;
+}
+
+// Base (Panini/Mercator) ray blended toward stereographic by flStereo (0 = base,
+// 1 = pure stereographic), same blend-and-renormalize as the fov tier band.
+static Vec3 ScreenToRay(float sx, float sy, float flFovXDeg, float flStrength, float flStereo)
+{
+	if (flStereo >= 1.f)
+		return StereographicRay(sx, sy, flFovXDeg);
+	const Vec3 a = BaseRay(sx, sy, flFovXDeg, flStrength);
+	if (flStereo <= 0.f)
+		return a;
+
+	const Vec3 b = StereographicRay(sx, sy, flFovXDeg);
+	Vec3 m(a.x + (b.x - a.x) * flStereo, a.y + (b.y - a.y) * flStereo, a.z + (b.z - a.z) * flStereo);
 	const float len = std::sqrt(m.x * m.x + m.y * m.y + m.z * m.z);
 	if (len > 1e-6f) { m.x /= len; m.y /= len; m.z /= len; }
 	return m;
@@ -171,10 +296,10 @@ static bool MercatorForwardScreen(float fx, float fy, float fz, float flFovXDeg,
 	return true;
 }
 
-// Tier selection mirroring ScreenToRay: Panini below 180, Mercator above, blended
+// Tier selection mirroring BaseRay: Panini below 180, Mercator above, blended
 // across 170-190 (blending forward screen-coords is a sub-pixel approximation of
 // inverting the ray-blend; fine for point overlays). Fills the pre-aspect (sx,sy).
-static bool ForwardProject(float fx, float fy, float fz, float flFovXDeg, float flStrength, float& sx, float& sy)
+static bool BaseForwardProject(float fx, float fy, float fz, float flFovXDeg, float flStrength, float& sx, float& sy)
 {
 	const float flLo = 170.f, flHi = 190.f;
 
@@ -202,6 +327,24 @@ static bool ForwardProject(float fx, float fy, float fz, float flFovXDeg, float 
 	return true;
 }
 
+// Forward projection mirroring ScreenToRay's stereographic blend (same screen-coord
+// lerp approximation as the fov tier band) so overlays track the warped mesh.
+static bool ForwardProject(float fx, float fy, float fz, float flFovXDeg, float flStrength, float flStereo, float& sx, float& sy)
+{
+	if (flStereo >= 1.f)
+		return StereographicForwardScreen(fx, fy, fz, flFovXDeg, sx, sy);
+	if (flStereo <= 0.f)
+		return BaseForwardProject(fx, fy, fz, flFovXDeg, flStrength, sx, sy);
+
+	float sxB = 0.f, syB = 0.f, sxS = 0.f, syS = 0.f;
+	if (!BaseForwardProject(fx, fy, fz, flFovXDeg, flStrength, sxB, syB)
+		|| !StereographicForwardScreen(fx, fy, fz, flFovXDeg, sxS, syS))
+		return false;
+	sx = sxB + (sxS - sxB) * flStereo;
+	sy = syB + (syS - syB) * flStereo;
+	return true;
+}
+
 // Cube-face bases in view-local ray coords (x = right, y = up, forward = -z),
 // consistent with CFlexFOV::ComputeFaceAngles. Order: FRONT,BACK,LEFT,RIGHT,UP,DOWN.
 // Fwd = look direction; Right/Up/Back define the face camera (looks along -Back).
@@ -209,8 +352,6 @@ static const Vec3 s_FaceFwd[6]   = { {0,0,-1}, {0,0,1},  {-1,0,0}, {1,0,0},  {0,
 static const Vec3 s_FaceRight[6] = { {1,0,0},  {-1,0,0}, {0,0,-1}, {0,0,1},  {1,0,0},  {1,0,0}  };
 static const Vec3 s_FaceUp[6]    = { {0,1,0},  {0,1,0},  {0,1,0},  {0,1,0},  {0,0,1},  {0,0,-1} };
 static const Vec3 s_FaceBack[6]  = { {0,0,1},  {0,0,-1}, {1,0,0},  {-1,0,0}, {0,-1,0}, {0,1,0}  };
-
-static inline float Dot3(const Vec3& a, const Vec3& b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
 
 struct FVert { float x, y, z, u, v; };
 
@@ -521,22 +662,36 @@ void CFlexFOV::DrawComposite()
 		return;
 	}
 
+	// Stereographic blend for this frame, from the pitch the faces were captured
+	// at. Quantized so the mesh cache below only rebuilds every ~1.5deg of pitch
+	// in vertical-stereographic mode instead of every frame while pitching (the
+	// per-step warp change is far below a pixel at this granularity).
+	const float flStereo = std::round(CurrentStereoBlend(m_vViewAngles.x) * 64.f) / 64.f;
+
 	// Snapshot the projection inputs for WorldToScreen (single source of truth so
 	// overlays reproject with the exact same parameters as the mesh warp).
 	m_flAspect = flAspect;
 	m_flFovX = flFovX;
 	m_flStrength = flStrength;
+	m_flStereoBlend = flStereo;
 
-	// The warp mesh depends only on (fov, strength, aspect) - never on the view
-	// angles, because the cube faces are view-aligned (the warp is done entirely
-	// in view-local ray space). So the whole grid - inverse projection, triangle
-	// face assignment, UVs - is rebuilt only when one of those inputs changes,
-	// not per frame. Per frame we just upload the cached buckets.
+	// The warp mesh depends only on (fov, strength, aspect, stereo blend) - never
+	// on the view angles directly, because the cube faces are view-aligned (the
+	// warp is done entirely in view-local ray space). So the whole grid - inverse
+	// projection, triangle face assignment, UVs - is rebuilt only when one of
+	// those inputs changes, not per frame. Per frame we just upload the cached
+	// buckets.
+	// The rig is part of the key: the stereo toggles can flip it while every
+	// float input stays identical (e.g. toggling vertical-stereo while looking
+	// level), and a cube-rig mesh drawn with wide-rig textures is garbage.
 	static std::vector<FVert> vBuckets[FACE_COUNT];
-	static float s_flCacheFov = -1.f, s_flCacheStrength = -1.f, s_flCacheAspect = -1.f;
-	if (flFovX != s_flCacheFov || flStrength != s_flCacheStrength || flAspect != s_flCacheAspect)
+	static float s_flCacheFov = -1.f, s_flCacheStrength = -1.f, s_flCacheAspect = -1.f, s_flCacheStereo = -1.f;
+	static int s_iCacheWide = -1;
+	if (flFovX != s_flCacheFov || flStrength != s_flCacheStrength || flAspect != s_flCacheAspect || flStereo != s_flCacheStereo
+		|| int(m_bWideRig) != s_iCacheWide)
 	{
-		s_flCacheFov = flFovX; s_flCacheStrength = flStrength; s_flCacheAspect = flAspect;
+		s_flCacheFov = flFovX; s_flCacheStrength = flStrength; s_flCacheAspect = flAspect; s_flCacheStereo = flStereo;
+		s_iCacheWide = int(m_bWideRig);
 
 		// Per-rig face set: bases in view-local ray space, per-axis UV scales
 		// (d = 0.5/tan(halfFov), the stitching invariant - per axis now that wide
@@ -594,7 +749,7 @@ void CFlexFOV::DrawComposite()
 			{
 				const float cx = -1.f + 2.f * i / nGrid;
 				const float cy = -1.f + 2.f * j / nGrid;
-				vRays[j * nSide + i] = ScreenToRay(cx, cy / flAspect, flFovX, flStrength);
+				vRays[j * nSide + i] = ScreenToRay(cx, cy / flAspect, flFovX, flStrength, flStereo);
 			}
 		}
 
@@ -808,7 +963,7 @@ bool CFlexFOV::WorldToScreen(const Vec3& vWorld, Vec3& vScreen, bool bAlways)
 	const float fz = Dot3(vDir, m_vViewFwd);
 
 	float sx = 0.f, sy = 0.f;
-	if (ForwardProject(fx, fy, fz, m_flFovX, m_flStrength, sx, sy))
+	if (ForwardProject(fx, fy, fz, m_flFovX, m_flStrength, m_flStereoBlend, sx, sy))
 	{
 		const float cx = sx;                 // clip x (-1..1)
 		const float cy = sy * m_flAspect;    // undo ScreenToRay's cy/aspect
@@ -895,13 +1050,29 @@ void CFlexFOV::Initialize()
 		F::Glow.InitFlexBuffers(std::max(iScreenW, 640), std::max(iScreenH, 480));
 	}
 
+	// A rig/size switch means the mesh (and its recorded face usage) no longer
+	// matches; capture everything until DrawComposite rebuilds the mesh and
+	// records the real set, or a switched-index face could stay stale.
+	for (int i = 0; i < FACE_COUNT; i++)
+		m_bFaceNeeded[i] = true;
+
 	const int nFaces = m_bWideRig ? 2 : FACE_COUNT;
 	for (int i = 0; i < nFaces; i++)
 	{
+		// Size-suffixed names: material/texture deletion in the engine can be
+		// deferred, so a bare recurring name ("FlexFOV_Front") can alias a
+		// not-yet-destroyed texture of the OLD size on a rig/quality rebuild -
+		// CreateNamedRenderTargetTextureEx resolves by name and would hand back
+		// the stale RT while m_iFaceW/H describe the new one, making RenderFace
+		// set a viewport larger than the target (crash). A unique name per size
+		// can never alias.
+		char szName[64];
+		snprintf(szName, sizeof(szName), "%s_%dx%d", s_szFaceNames[i], m_iFaceW, m_iFaceH);
+
 		if (!m_pFaceTextures[i])
 		{
 			m_pFaceTextures[i] = I::MaterialSystem->CreateNamedRenderTargetTextureEx(
-				s_szFaceNames[i],
+				szName,
 				m_iFaceW,
 				m_iFaceH,
 				RT_SIZE_LITERAL,
@@ -914,17 +1085,26 @@ void CFlexFOV::Initialize()
 				// (reduces aliasing where faces are minified toward the edges).
 				CREATERENDERTARGETFLAGS_HDR | CREATERENDERTARGETFLAGS_AUTOMIPMAP
 			);
+			if (!m_pFaceTextures[i]) // allocation failure (VRAM) - skip, don't deref
+				continue;
+			// Undersized result = an aliased stale RT or a driver clamp; using it
+			// would overrun the viewport. Drop it and leave the face disabled.
+			if (m_pFaceTextures[i]->GetActualWidth() < m_iFaceW || m_pFaceTextures[i]->GetActualHeight() < m_iFaceH)
+			{
+				m_pFaceTextures[i] = nullptr;
+				continue;
+			}
 			m_pFaceTextures[i]->IncrementReferenceCount();
 		}
 
 		if (!m_pFaceMaterials[i])
 		{
 			KeyValues* kv = new KeyValues("UnlitGeneric");
-			kv->SetString("$basetexture", s_szFaceNames[i]);
+			kv->SetString("$basetexture", szName);
 			kv->SetInt("$ignorez", 1);
 			kv->SetInt("$nofog", 1);
 			kv->SetInt("$nocull", 1);
-			m_pFaceMaterials[i] = F::Materials.Create(s_szFaceNames[i], kv);
+			m_pFaceMaterials[i] = F::Materials.Create(szName, kv);
 		}
 	}
 
@@ -939,8 +1119,12 @@ void CFlexFOV::Unload()
 	{
 		if (m_pFaceMaterials[i])
 		{
-			m_pFaceMaterials[i]->DecrementReferenceCount();
-			m_pFaceMaterials[i]->DeleteIfUnreferenced();
+			// Through F::Materials.Remove, NOT a raw release: Create() registered
+			// the material in m_mMatList, and the CMaterial_Uncache hook blocks
+			// uncaching (and thus real teardown) for anything still in that list -
+			// a raw release both leaves a dangling pointer there and keeps the
+			// material (and its $basetexture ref) alive forever.
+			F::Materials.Remove(m_pFaceMaterials[i]);
 			m_pFaceMaterials[i] = nullptr;
 		}
 

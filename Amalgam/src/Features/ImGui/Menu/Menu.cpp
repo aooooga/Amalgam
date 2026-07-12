@@ -1281,6 +1281,8 @@ void CMenu::MenuVisuals(int iTab)
 					{
 						FSlider(Vars::Visuals::UI::FlexFOVStrength);
 						FSlider(Vars::Visuals::UI::FlexFOVQuality);
+						FToggle(Vars::Visuals::UI::FlexFOVStereographic);
+						FToggle(Vars::Visuals::UI::FlexFOVVertStereo);
 					}
 					PopTransparent();
 					/*

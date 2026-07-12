@@ -141,6 +141,9 @@ public:
 	float m_flFovX = 140.f;
 	float m_flAspect = 16.f / 9.f;
 	float m_flStrength = 1.f;
+	// 0 = Panini/Mercator, 1 = stereographic; driven by the stereographic /
+	// vertical-stereographic toggles (the latter blends with pitch).
+	float m_flStereoBlend = 0.f;
 };
 
 ADD_FEATURE(CFlexFOV, FlexFOV);

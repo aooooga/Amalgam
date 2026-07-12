@@ -2,6 +2,8 @@
 #include "../../../SDK/SDK.h"
 #include "../../../SDK/Definitions/Misc/CViewSetup.h"
 
+#include <vector>
+
 // Wide-angle FOV via globe reprojection (blinky / flex-fov technique).
 //
 // Phase 1: capture the scene as a view-aligned cube of 6 faces rendered from
@@ -31,6 +33,29 @@ private:
 	IMaterial* m_pFaceMaterials[FACE_COUNT] = {};
 
 	bool m_bWideRig = false;        // rig the current textures were built for
+
+	// Deferred RT destruction. The queued material system renders on a worker
+	// thread 1-2 frames behind the main thread (the crash logs show it faulting
+	// inside shaderapidx9 on a vstdlib pool thread), so a texture/material we
+	// destroy mid-frame can still be referenced by queued draw commands. On a
+	// rig/size rebuild the old faces are therefore RETIRED (kept alive, just
+	// unhooked) and only actually destroyed once they are several capture frames
+	// old - by then no queued command can still reference them.
+	struct RetiredFace
+	{
+		IMaterial* m_pMaterial;
+		ITexture* m_pTexture;
+		unsigned int m_uFrame;
+	};
+	std::vector<RetiredFace> m_vRetired;
+	unsigned int m_uCaptureFrame = 0;
+
+	// Moves the current face materials/textures onto the retired list (no
+	// destruction) so Initialize can build the replacement set.
+	void RetireFaces();
+	// Destroys retired entries older than the safety margin (all of them when
+	// bAll, for the real DLL unload).
+	void DrainRetired(bool bAll);
 
 	void RenderFace(void* rcx, const CViewSetup& pViewSetup, int iFace, const Vec3& vAngles);
 	void ComputeFaceAngles(const Vec3& vViewAngles, Vec3 vOut[FACE_COUNT]);

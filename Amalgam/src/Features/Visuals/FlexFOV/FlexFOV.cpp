@@ -495,6 +495,11 @@ void CFlexFOV::CaptureGlobe(void* rcx, const CViewSetup& pViewSetup)
 	if (!m_bActive || m_bDrawing || !I::EngineClient->IsInGame())
 		return;
 
+	// Destroy faces retired by an earlier rebuild once they're old enough that
+	// the queued render thread can no longer hold commands referencing them.
+	m_uCaptureFrame++;
+	DrainRetired(false);
+
 	// If the fov crossed the rig boundary or the quality slider changed the face
 	// size, rebuild the RTs before capturing. Debounced: while the user drags a
 	// slider the desired rig can change every frame, and tearing down / creating
@@ -514,7 +519,13 @@ void CFlexFOV::CaptureGlobe(void* rcx, const CViewSetup& pViewSetup)
 			s_flMismatchStart = flNow;
 		if (flNow - s_flMismatchStart > 0.4f)
 		{
-			Unload();
+			// Retire (don't destroy) the old faces: the queued render thread may
+			// still replay this/last frame's commands that bind them. They are
+			// destroyed by DrainRetired a few frames from now. The glow flex
+			// buffers are untouched here - they're screen-sized, so
+			// InitFlexBuffers early-outs, and rebuilding them per rig switch was
+			// pure create/destroy churn on fixed-name RTs.
+			RetireFaces();
 			Initialize();
 			s_flMismatchStart = -1.f;
 		}
@@ -1056,18 +1067,21 @@ void CFlexFOV::Initialize()
 	for (int i = 0; i < FACE_COUNT; i++)
 		m_bFaceNeeded[i] = true;
 
+	// Generation-suffixed names: the old faces are deliberately kept alive for
+	// several frames after a rebuild (see RetireFaces/DrainRetired), and
+	// CreateNamedRenderTargetTextureEx resolves by name - a recurring name
+	// ("FlexFOV_Front") would hand back the still-alive retired RT of the OLD
+	// size while m_iFaceW/H describe the new one, making RenderFace set a
+	// viewport larger than the target (crash). A generation counter makes every
+	// rebuild's names unique.
+	static unsigned int s_uGeneration = 0;
+	s_uGeneration++;
+
 	const int nFaces = m_bWideRig ? 2 : FACE_COUNT;
 	for (int i = 0; i < nFaces; i++)
 	{
-		// Size-suffixed names: material/texture deletion in the engine can be
-		// deferred, so a bare recurring name ("FlexFOV_Front") can alias a
-		// not-yet-destroyed texture of the OLD size on a rig/quality rebuild -
-		// CreateNamedRenderTargetTextureEx resolves by name and would hand back
-		// the stale RT while m_iFaceW/H describe the new one, making RenderFace
-		// set a viewport larger than the target (crash). A unique name per size
-		// can never alias.
 		char szName[64];
-		snprintf(szName, sizeof(szName), "%s_%dx%d", s_szFaceNames[i], m_iFaceW, m_iFaceH);
+		snprintf(szName, sizeof(szName), "%s_g%u_%dx%d", s_szFaceNames[i], s_uGeneration, m_iFaceW, m_iFaceH);
 
 		if (!m_pFaceTextures[i])
 		{
@@ -1111,28 +1125,55 @@ void CFlexFOV::Initialize()
 	I::MaterialSystem->EndRenderTargetAllocation();
 }
 
-void CFlexFOV::Unload()
+void CFlexFOV::RetireFaces()
 {
-	F::Glow.UnloadFlexBuffers();
-
 	for (int i = 0; i < FACE_COUNT; i++)
 	{
-		if (m_pFaceMaterials[i])
+		if (m_pFaceMaterials[i] || m_pFaceTextures[i])
+			m_vRetired.push_back({ m_pFaceMaterials[i], m_pFaceTextures[i], m_uCaptureFrame });
+		m_pFaceMaterials[i] = nullptr;
+		m_pFaceTextures[i] = nullptr;
+	}
+}
+
+void CFlexFOV::DrainRetired(bool bAll)
+{
+	// The queued material system runs at most a couple of frames behind; 8
+	// capture frames is a comfortable margin before really destroying anything.
+	constexpr unsigned int uSafeAge = 8;
+
+	for (auto it = m_vRetired.begin(); it != m_vRetired.end();)
+	{
+		if (!bAll && m_uCaptureFrame - it->m_uFrame < uSafeAge)
+		{
+			++it;
+			continue;
+		}
+
+		if (it->m_pMaterial)
 		{
 			// Through F::Materials.Remove, NOT a raw release: Create() registered
 			// the material in m_mMatList, and the CMaterial_Uncache hook blocks
 			// uncaching (and thus real teardown) for anything still in that list -
 			// a raw release both leaves a dangling pointer there and keeps the
 			// material (and its $basetexture ref) alive forever.
-			F::Materials.Remove(m_pFaceMaterials[i]);
-			m_pFaceMaterials[i] = nullptr;
+			F::Materials.Remove(it->m_pMaterial);
 		}
 
-		if (m_pFaceTextures[i])
+		if (it->m_pTexture)
 		{
-			m_pFaceTextures[i]->DecrementReferenceCount();
-			m_pFaceTextures[i]->DeleteIfUnreferenced();
-			m_pFaceTextures[i] = nullptr;
+			it->m_pTexture->DecrementReferenceCount();
+			it->m_pTexture->DeleteIfUnreferenced();
 		}
+
+		it = m_vRetired.erase(it);
 	}
+}
+
+void CFlexFOV::Unload()
+{
+	F::Glow.UnloadFlexBuffers();
+
+	RetireFaces();
+	DrainRetired(true);
 }

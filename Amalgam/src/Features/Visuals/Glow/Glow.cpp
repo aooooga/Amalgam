@@ -307,8 +307,10 @@ void CGlow::UnloadFlexBuffers()
 	{
 		if (*ppMat)
 		{
-			(*ppMat)->DecrementReferenceCount();
-			(*ppMat)->DeleteIfUnreferenced();
+			// Through F::Materials.Remove so the m_mMatList entry is erased too -
+			// a raw release leaves a dangling pointer there, and the
+			// CMaterial_Uncache hook blocks teardown for listed materials.
+			F::Materials.Remove(*ppMat);
 			*ppMat = nullptr;
 		}
 	}

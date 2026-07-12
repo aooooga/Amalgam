@@ -537,6 +537,7 @@ NAMESPACE_BEGIN(Vars)
 			CVar(FlexFOVDebug, "Flex FOV debug## FlexFOVDebug", false, VISUAL);
 			CVar(FlexFOVComposite, "Flex FOV composite## FlexFOVComposite", false, VISUAL);
 			CVar(FlexFOVStrength, "Flex FOV strength## FlexFOVStrength", 1.f, VISUAL | SLIDER_MIN | SLIDER_PRECISION, 0.f, 2.f, 0.05f);
+			CVar(FlexFOVTransition, "Flex FOV transition## FlexFOVTransition", FloatRange_t(160.f, 300.f), VISUAL | SLIDER_CLAMP, 90.f, 360.f, 5.f, "%g - %g");
 			CVar(FlexFOVStereographic, "Flex FOV stereographic## FlexFOVStereographic", false, VISUAL);
 			CVar(FlexFOVVertStereo, "Flex FOV vertical stereographic## FlexFOVVertStereo", false, VISUAL);
 			CVar(FlexFOVSkipMainView, "Flex FOV skip main view## FlexFOVSkipMainView", true, VISUAL);

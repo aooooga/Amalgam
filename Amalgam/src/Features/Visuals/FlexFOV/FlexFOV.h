@@ -166,9 +166,14 @@ public:
 	float m_flFovX = 140.f;
 	float m_flAspect = 16.f / 9.f;
 	float m_flStrength = 1.f;
-	// 0 = Panini/Mercator, 1 = stereographic; driven by the stereographic /
-	// vertical-stereographic toggles (the latter blends with pitch).
+	// 0 = base (rectilinear/Panini/Mercator tiers), 1 = pure radial projection
+	// (stereographic at strength 1). The full-stereographic toggle pins 1; the
+	// vertical-stereographic toggle blends with pitch, scaled by the fov-tier
+	// envelope so it fades out as Mercator takes over at high fov.
 	float m_flStereoBlend = 0.f;
+	// Panini->Mercator transition band (FlexFOVTransition slider), snapshotted
+	// alongside the rest so WorldToScreen matches the mesh warp exactly.
+	float m_flTierLo = 160.f, m_flTierHi = 300.f;
 };
 
 ADD_FEATURE(CFlexFOV, FlexFOV);

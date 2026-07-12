@@ -51,66 +51,157 @@ static float WideYawDeg(float flFovX)
 
 static inline float Dot3(const Vec3& a, const Vec3& b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
 
-// --- Stereographic projection --------------------------------------------------
-// Projection from the point opposite the view axis onto the tangent plane at the
-// view axis (unit sphere, plane at z = 1): plane radius r = 2*tan(theta/2) for a
-// ray theta off-axis, so it stays conformal (no shape smear) all the way out and
-// only diverges at theta -> 180. Scaled like PaniniRay/MercatorRay so sx = +-1
-// lands exactly on lon = +-fov/2 along the horizontal axis.
-// Native frame here: forward = +z (callers negate z per the flex-fov convention).
+// --- Projection tiers (ported from flex-fov's screen_to_ray) --------------------
+// The original never renders one projection at full strength on its own: the
+// composite cross-fades rectilinear -> Panini -> Mercator as fov rises, with a
+// fast-in ease (1-(1-t)^2). The rectilinear fade-in runs from 90 up to the
+// transition start; the Mercator fade runs across the transition band itself.
+// Original boundaries: 160 - 300, player-tunable via FlexFOVTransition.
 
-// Stereographic is singular at fov 360 (plane radius -> inf); clamp just short.
-static float StereoPlaneScale(float flFovXDeg)
+static void TransitionBand(float& flLo, float& flHi)
 {
-	const float flHalf = std::min(flFovXDeg, 355.f) * FLEXFOV_DEG2RAD * 0.5f;
-	return 2.f * std::tan(flHalf * 0.5f); // r(theta) = 2*tan(theta/2) at theta = fov/2
+	flLo = std::clamp(Vars::Visuals::UI::FlexFOVTransition.Value.Min, 90.f, 360.f);
+	flHi = std::clamp(Vars::Visuals::UI::FlexFOVTransition.Value.Max, flLo, 360.f);
 }
 
-static Vec3 StereographicRay(float sx, float sy, float flFovXDeg)
+// flex-fov's tier easing: fast in, level off.
+static float TierEase(float t)
 {
-	const float flScale = StereoPlaneScale(flFovXDeg);
+	t = std::clamp(t, 0.f, 1.f);
+	return 1.f - (1.f - t) * (1.f - t);
+}
+
+// Weight of the Panini/vertical-stereo (hybrid) tier at this fov: 0 at 90 (pure
+// rectilinear), easing to 1 at the transition start, easing back to 0 at the
+// transition end (pure Mercator). The vertical-stereo pitch blend is scaled by
+// this envelope so looking straight up converges to the same projection the
+// horizon shows at high fov, instead of popping to full stereographic.
+static float HybridWeight(float flFovXDeg, float flLo, float flHi)
+{
+	if (flFovXDeg >= flHi)
+		return 0.f;
+	if (flFovXDeg >= flLo)
+		return 1.f - TierEase((flFovXDeg - flLo) / std::max(flHi - flLo, 1e-3f));
+	if (flFovXDeg <= 90.f)
+		return 0.f;
+	return TierEase((flFovXDeg - 90.f) / std::max(flLo - 90.f, 1e-3f));
+}
+
+// Blend two ray directions and renormalize (the mix() of the flex-fov shader).
+static Vec3 NormMix(const Vec3& a, const Vec3& b, float t)
+{
+	Vec3 m(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t);
+	const float flLen = std::sqrt(m.x * m.x + m.y * m.y + m.z * m.z);
+	if (flLen > 1e-6f) { m.x /= flLen; m.y /= flLen; m.z /= flLen; }
+	return m;
+}
+
+// --- Radial ("round") Panini projection ------------------------------------------
+// The Panini compression applied radially symmetrically instead of only around
+// the vertical axis: plane radius r(theta) = (d+1)*sin(theta)/(d+cos(theta)) for
+// a ray theta off-axis. At d = 1 this is exactly stereographic (2*tan(theta/2)),
+// the projection the original flex-fov blends toward when pitching; for any
+// other d its central magnification matches PaniniRay's with the same d, so the
+// horizon <-> zenith transition never visibly changes zoom or warp strength.
+// Scaled like PaniniRay/MercatorRay so sx = +-1 lands exactly on lon = +-fov/2
+// along the horizontal axis. Native frame here: forward = +z (callers negate z
+// per the flex-fov convention).
+
+// Largest usable ray angle: r diverges at cos(theta) = -d, and for d > 1 it
+// peaks (stops being invertible) at cos(theta) = -1/d; stay just short of both.
+// (At d = 1 this reproduces the old stereographic near-360 clamp.)
+static float RadialMaxHalfAngle(float d)
+{
+	const float flLimit = std::max(-d, d > 1.f ? -1.f / d : -1.f);
+	return std::acos(std::clamp(flLimit + 0.0015f, -1.f, 1.f));
+}
+
+static float RadialForwardR(float flTheta, float d)
+{
+	return (d + 1.f) * std::sin(flTheta) / (d + std::cos(flTheta));
+}
+
+static float RadialPlaneScale(float flFovXDeg, float d)
+{
+	const float flHalf = std::min(flFovXDeg * FLEXFOV_DEG2RAD * 0.5f, RadialMaxHalfAngle(d));
+	return RadialForwardR(flHalf, d);
+}
+
+static Vec3 RadialRay(float sx, float sy, float flFovXDeg, float d)
+{
+	const float flScale = RadialPlaneScale(flFovXDeg, d);
 	const float x = sx * flScale;
 	const float y = sy * flScale;
-	const float r2 = x * x + y * y;
-	Vec3 vRay(4.f * x / (r2 + 4.f), 4.f * y / (r2 + 4.f), (4.f - r2) / (r2 + 4.f));
-	vRay.z = -vRay.z;
-	return vRay;
+	const float r = std::sqrt(x * x + y * y);
+	if (r < 1e-6f)
+		return Vec3(0.f, 0.f, -1.f);
+	// Solve r = (d+1)sin(t)/(d+cos(t)) for cos(t): the same quadratic as
+	// PaniniInverse's longitude solve (it is that equation with y = 0).
+	const float k = r * r / ((d + 1.f) * (d + 1.f));
+	const float dscr = k * k * d * d - (k + 1.f) * (k * d * d - 1.f);
+	const float ct = std::clamp((-k * d + std::sqrt(std::max(dscr, 0.f))) / (k + 1.f), -1.f, 1.f);
+	const float st = std::sqrt(1.f - ct * ct);
+	return Vec3(x / r * st, y / r * st, -ct);
 }
 
-static bool StereographicForwardScreen(float fx, float fy, float fz, float flFovXDeg, float& sx, float& sy)
+static bool RadialForwardScreen(float fx, float fy, float fz, float flFovXDeg, float d, float& sx, float& sy)
 {
-	// Singular at the exact anti-axis point (fz = -1); reject just short of it.
-	if (fz <= -0.999f)
+	const float flTheta = std::acos(std::clamp(fz, -1.f, 1.f));
+	if (flTheta >= RadialMaxHalfAngle(d))
 		return false;
-	const float flScale = StereoPlaneScale(flFovXDeg);
+	const float flScale = RadialPlaneScale(flFovXDeg, d);
 	if (flScale < 1e-6f)
 		return false;
-	sx = (2.f * fx / (1.f + fz)) / flScale;
-	sy = (2.f * fy / (1.f + fz)) / flScale;
+	const float flLen = std::sqrt(fx * fx + fy * fy);
+	if (flLen < 1e-6f)
+	{
+		sx = sy = 0.f; // exactly on-axis (the anti-axis was rejected above)
+		return true;
+	}
+	const float r = RadialForwardR(flTheta, d) / flScale;
+	sx = fx / flLen * r;
+	sy = fy / flLen * r;
 	return true;
 }
 
-// Stereographic blend factor for the current frame: 1 with the full-stereographic
-// toggle, otherwise (vertical-stereographic toggle) a smoothstep of |pitch|/90 so
-// Panini/Mercator hold when looking at the horizon and stereographic takes over
-// toward straight up/down (the original flex-fov pitch behavior), else 0.
-static float CurrentStereoBlend(float flPitchDeg)
+// Radial-projection blend factor for the current frame: 1 with the full-
+// stereographic toggle (pure radial, tiers bypassed), otherwise (vertical-
+// stereographic toggle) a smoothstep of |pitch|/90 scaled by the fov-tier
+// envelope - Panini/Mercator hold when looking at the horizon, the radial
+// projection takes over toward straight up/down, and the whole effect fades
+// out as Mercator takes over at high fov (the original flex-fov hybrid
+// behavior, which never reaches pure stereographic above the transition
+// start) - else 0.
+static float CurrentStereoBlend(float flPitchDeg, float flFovX)
 {
 	if (Vars::Visuals::UI::FlexFOVStereographic.Value)
 		return 1.f;
 	if (!Vars::Visuals::UI::FlexFOVVertStereo.Value)
 		return 0.f;
+	float flLo, flHi;
+	TransitionBand(flLo, flHi);
 	const float t = std::clamp(std::fabs(flPitchDeg) / 90.f, 0.f, 1.f);
-	return t * t * (3.f - 2.f * t);
+	return t * t * (3.f - 2.f * t) * HybridWeight(flFovX, flLo, flHi);
 }
 
-// Worst-case blend the current toggles can reach, for rig selection: the rig must
-// stay stable while the player pitches (a rig switch tears down / rebuilds the
-// RTs), so it is picked for the extreme of the enabled mode, not the frame value.
-static float MaxStereoBlend()
+// Worst-case blend the current toggles can reach at this fov, for rig selection:
+// the rig must stay stable while the player pitches (a rig switch tears down /
+// rebuilds the RTs), so it is picked for the extreme of the enabled mode, not
+// the frame value.
+static float MaxStereoBlend(float flFovX)
 {
-	return Vars::Visuals::UI::FlexFOVStereographic.Value || Vars::Visuals::UI::FlexFOVVertStereo.Value ? 1.f : 0.f;
+	if (Vars::Visuals::UI::FlexFOVStereographic.Value)
+		return 1.f;
+	if (!Vars::Visuals::UI::FlexFOVVertStereo.Value)
+		return 0.f;
+	float flLo, flHi;
+	TransitionBand(flLo, flHi);
+	return HybridWeight(flFovX, flLo, flHi);
 }
+
+// Full inverse projection, defined below (the tier structure needs the Panini /
+// Mercator helpers that follow); UseWideRig walks the screen border through it.
+static Vec3 ScreenToRay(float sx, float sy, float flFovXDeg, float flStrength, float flStereo, float flLo, float flHi);
 
 // The wide rig covers up to 2*(yaw+65) = 260 horizontally (capped 245 for
 // margin), but the screen corners also need vertical room: at a face's edge
@@ -119,19 +210,22 @@ static float MaxStereoBlend()
 // That works out to roughly fov <= aspect*141deg (16:9 -> ~250). Narrower
 // aspects (4:3) fall back to the cube rig earlier.
 //
-// Stereographic pushes border rays further off-axis than Panini/Mercator at the
-// same fov, so when either stereographic toggle is on the wide rig is only kept
-// if it still contains the whole screen border at full stereographic (the worst
-// case the mode can reach). Blended rays are positive combinations of the two
-// endpoint rays, and a face frustum is a convex cone, so checking the endpoints
-// covers every intermediate blend. This keeps the cheaper 2-face rig for as long
-// as it actually works instead of pessimistically jumping to the cube.
+// The transition band and the stereo toggles both reshape where the border rays
+// actually land, so past the coarse gate the whole screen border is walked
+// through the real inverse projection. The blended ray is affine in the stereo
+// blend and a face frustum is a convex cone, so checking the blend endpoints
+// (0 and the worst case the mode can reach at this fov) covers every pitch.
+// This keeps the cheaper 2-face rig for as long as it actually works instead of
+// pessimistically jumping to the cube.
 static bool UseWideRig(float flFovX, float flAspect)
 {
 	if (flFovX > std::min(245.f, flAspect * 141.f))
 		return false;
-	if (MaxStereoBlend() <= 0.f)
-		return true;
+
+	float flLo, flHi;
+	TransitionBand(flLo, flHi);
+	const float flStrength = Vars::Visuals::UI::FlexFOVStrength.Value;
+	const float flMaxStereo = MaxStereoBlend(flFovX);
 
 	const float flYaw = WideYawDeg(flFovX) * FLEXFOV_DEG2RAD;
 	const float s = std::sin(flYaw), c = std::cos(flYaw);
@@ -139,6 +233,22 @@ static bool UseWideRig(float flFovX, float flAspect)
 	// 0.99) to leave room for boundary triangles.
 	const float flLimW = std::tan(FLEXFOV_FACE_FOV * 0.5f * FLEXFOV_DEG2RAD) * 0.97f;
 	const float flLimH = std::tan(FLEXFOV_WIDE_FOV_V * 0.5f * FLEXFOV_DEG2RAD) * 0.97f;
+
+	auto Contained = [&](const Vec3& r)
+	{
+		for (int f = 0; f < 2; f++)
+		{
+			const float sgn = f == 0 ? 1.f : -1.f;
+			const Vec3 vBack(-sgn * s, 0.f, c);
+			const Vec3 vRight(c, 0.f, sgn * s);
+			const float lz = Dot3(r, vBack);
+			if (lz < -0.05f
+				&& std::fabs(Dot3(r, vRight)) <= -lz * flLimW
+				&& std::fabs(r.y) <= -lz * flLimH)
+				return true;
+		}
+		return false;
+	};
 
 	const int nSamples = 64; // walk the [-1,1]^2 screen border
 	for (int i = 0; i < nSamples; i++)
@@ -150,19 +260,10 @@ static bool UseWideRig(float flFovX, float flAspect)
 		else if (t < 6.f) { cx = 5.f - t;  cy = -1.f; }       // bottom edge
 		else              { cx = -1.f;     cy = t - 7.f; }    // left edge
 
-		const Vec3 r = StereographicRay(cx, cy / flAspect, flFovX);
-		bool bContained = false;
-		for (int f = 0; f < 2 && !bContained; f++)
-		{
-			const float sgn = f == 0 ? 1.f : -1.f;
-			const Vec3 vBack(-sgn * s, 0.f, c);
-			const Vec3 vRight(c, 0.f, sgn * s);
-			const float lz = Dot3(r, vBack);
-			bContained = lz < -0.05f
-				&& std::fabs(Dot3(r, vRight)) <= -lz * flLimW
-				&& std::fabs(r.y) <= -lz * flLimH;
-		}
-		if (!bContained)
+		if (!Contained(ScreenToRay(cx, cy / flAspect, flFovX, flStrength, 0.f, flLo, flHi)))
+			return false;
+		if (flMaxStereo > 0.f
+			&& !Contained(ScreenToRay(cx, cy / flAspect, flFovX, flStrength, flMaxStereo, flLo, flHi)))
 			return false;
 	}
 	return true;
@@ -205,7 +306,8 @@ static Vec3 PaniniRay(float sx, float sy, float flFovXDeg, float d)
 	return vRay;
 }
 
-// Mercator inverse (cylindrical). Used for the 180-270 tier. Scale = fovx/2 rad.
+// Mercator inverse (cylindrical). Takes over across the transition band.
+// Scale = fovx/2 rad.
 static Vec3 MercatorRay(float sx, float sy, float flFovXDeg)
 {
 	const float flScale = flFovXDeg * (3.14159265f / 180.f) * 0.5f;
@@ -216,42 +318,56 @@ static Vec3 MercatorRay(float sx, float sy, float flFovXDeg)
 	return vRay;
 }
 
-// Tier selection (per the project's chosen boundaries): Panini below 180 deg,
-// Mercator above, blended across a band around 180 to avoid a visible pop.
-// (270-360 clamps to Mercator for now; Winkel-Tripel deferred.)
-static Vec3 BaseRay(float sx, float sy, float flFovXDeg, float flStrength)
+// Rectilinear ("standard"), the projection the fov slider fades out of between
+// 90 and the transition start. tan(fov/2) diverges at 180, so the scale fov is
+// clamped: a transition start pushed past ~175 just stops adding rectilinear
+// reach instead of flipping the image.
+static float StandardPlaneScale(float flFovXDeg)
 {
-	const float flLo = 170.f, flHi = 190.f;
-	if (flFovXDeg <= flLo)
-		return PaniniRay(sx, sy, flFovXDeg, flStrength);
-	if (flFovXDeg >= flHi)
-		return MercatorRay(sx, sy, flFovXDeg);
-
-	// Blend the two ray directions and renormalize.
-	const float t = (flFovXDeg - flLo) / (flHi - flLo);
-	const Vec3 a = PaniniRay(sx, sy, flFovXDeg, flStrength);
-	const Vec3 b = MercatorRay(sx, sy, flFovXDeg);
-	Vec3 m(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t);
-	const float len = std::sqrt(m.x * m.x + m.y * m.y + m.z * m.z);
-	if (len > 1e-6f) { m.x /= len; m.y /= len; m.z /= len; }
-	return m;
+	return std::tan(std::min(flFovXDeg, 175.f) * FLEXFOV_DEG2RAD * 0.5f);
 }
 
-// Base (Panini/Mercator) ray blended toward stereographic by flStereo (0 = base,
-// 1 = pure stereographic), same blend-and-renormalize as the fov tier band.
-static Vec3 ScreenToRay(float sx, float sy, float flFovXDeg, float flStrength, float flStereo)
+static Vec3 StandardRay(float sx, float sy, float flFovXDeg)
+{
+	const float flScale = StandardPlaneScale(flFovXDeg);
+	const float x = sx * flScale;
+	const float y = sy * flScale;
+	const float flInv = 1.f / std::sqrt(x * x + y * y + 1.f);
+	return Vec3(x * flInv, y * flInv, -flInv);
+}
+
+// Tier selection (ported from flex-fov's screen_to_ray): rectilinear at 90
+// easing into Panini by the transition start, easing into Mercator across the
+// transition band, pure Mercator past its end. Every boundary is a smooth
+// eased cross-fade, so dragging the fov slider never visibly changes gears -
+// and at low fov the warp fades toward a normal view like the original.
+static Vec3 BaseRay(float sx, float sy, float flFovXDeg, float flStrength, float flLo, float flHi)
+{
+	if (flFovXDeg >= flHi)
+		return MercatorRay(sx, sy, flFovXDeg);
+	if (flFovXDeg > flLo)
+		return NormMix(PaniniRay(sx, sy, flFovXDeg, flStrength), MercatorRay(sx, sy, flFovXDeg),
+			TierEase((flFovXDeg - flLo) / std::max(flHi - flLo, 1e-3f)));
+	if (flFovXDeg <= 90.f)
+		return StandardRay(sx, sy, flFovXDeg);
+	const float w = TierEase((flFovXDeg - 90.f) / std::max(flLo - 90.f, 1e-3f));
+	if (w >= 1.f)
+		return PaniniRay(sx, sy, flFovXDeg, flStrength);
+	return NormMix(StandardRay(sx, sy, flFovXDeg), PaniniRay(sx, sy, flFovXDeg, flStrength), w);
+}
+
+// Base (rectilinear/Panini/Mercator) ray blended toward the radial projection
+// by flStereo (0 = base, 1 = pure radial). flStereo arrives already scaled by
+// the fov-tier envelope (CurrentStereoBlend); 1 only ever means the full-
+// stereographic toggle, which bypasses the tiers entirely.
+static Vec3 ScreenToRay(float sx, float sy, float flFovXDeg, float flStrength, float flStereo, float flLo, float flHi)
 {
 	if (flStereo >= 1.f)
-		return StereographicRay(sx, sy, flFovXDeg);
-	const Vec3 a = BaseRay(sx, sy, flFovXDeg, flStrength);
+		return RadialRay(sx, sy, flFovXDeg, flStrength);
+	const Vec3 a = BaseRay(sx, sy, flFovXDeg, flStrength, flLo, flHi);
 	if (flStereo <= 0.f)
 		return a;
-
-	const Vec3 b = StereographicRay(sx, sy, flFovXDeg);
-	Vec3 m(a.x + (b.x - a.x) * flStereo, a.y + (b.y - a.y) * flStereo, a.z + (b.z - a.z) * flStereo);
-	const float len = std::sqrt(m.x * m.x + m.y * m.y + m.z * m.z);
-	if (len > 1e-6f) { m.x /= len; m.y /= len; m.z /= len; }
-	return m;
+	return NormMix(a, RadialRay(sx, sy, flFovXDeg, flStrength), flStereo);
 }
 
 // --- Forward projection (inverse of ScreenToRay) -----------------------------
@@ -296,53 +412,68 @@ static bool MercatorForwardScreen(float fx, float fy, float fz, float flFovXDeg,
 	return true;
 }
 
-// Tier selection mirroring BaseRay: Panini below 180, Mercator above, blended
-// across 170-190 (blending forward screen-coords is a sub-pixel approximation of
-// inverting the ray-blend; fine for point overlays). Fills the pre-aspect (sx,sy).
-static bool BaseForwardProject(float fx, float fy, float fz, float flFovXDeg, float flStrength, float& sx, float& sy)
+static bool StandardForwardScreen(float fx, float fy, float fz, float flFovXDeg, float& sx, float& sy)
 {
-	const float flLo = 170.f, flHi = 190.f;
-
-	float sxP = 0.f, syP = 0.f, sxM = 0.f, syM = 0.f;
-	const bool bP = (flFovXDeg <= flHi) && PaniniForwardScreen(fx, fy, fz, flFovXDeg, flStrength, sxP, syP);
-	const bool bM = (flFovXDeg >= flLo) && MercatorForwardScreen(fx, fy, fz, flFovXDeg, sxM, syM);
-
-	if (flFovXDeg <= flLo)
-	{
-		if (!bP) return false;
-		sx = sxP; sy = syP;
-	}
-	else if (flFovXDeg >= flHi)
-	{
-		if (!bM) return false;
-		sx = sxM; sy = syM;
-	}
-	else
-	{
-		if (!bP || !bM) return false;
-		const float t = (flFovXDeg - flLo) / (flHi - flLo);
-		sx = sxP + (sxM - sxP) * t;
-		sy = syP + (syM - syP) * t;
-	}
+	// Rectilinear only covers the front hemisphere.
+	if (fz < 1e-3f)
+		return false;
+	const float flScale = StandardPlaneScale(flFovXDeg);
+	if (flScale < 1e-6f)
+		return false;
+	sx = fx / (fz * flScale);
+	sy = fy / (fz * flScale);
 	return true;
 }
 
-// Forward projection mirroring ScreenToRay's stereographic blend (same screen-coord
-// lerp approximation as the fov tier band) so overlays track the warped mesh.
-static bool ForwardProject(float fx, float fy, float fz, float flFovXDeg, float flStrength, float flStereo, float& sx, float& sy)
+// Blend forward screen-coords, tolerating one side being unprojectable (a point
+// far off-axis can fail one sub-projection while the other still covers it; the
+// tier weights make the surviving side the dominant term in that region).
+static bool LerpScreen(bool bA, float sxA, float syA, bool bB, float sxB, float syB, float t, float& sx, float& sy)
+{
+	if (bA && bB) { sx = sxA + (sxB - sxA) * t; sy = syA + (syB - syA) * t; return true; }
+	if (bA) { sx = sxA; sy = syA; return true; }
+	if (bB) { sx = sxB; sy = syB; return true; }
+	return false;
+}
+
+// Tier selection mirroring BaseRay (blending forward screen-coords is a
+// sub-pixel approximation of inverting the ray-blend; fine for point overlays).
+// Fills the pre-aspect (sx,sy).
+static bool BaseForwardProject(float fx, float fy, float fz, float flFovXDeg, float flStrength, float flLo, float flHi, float& sx, float& sy)
+{
+	if (flFovXDeg >= flHi)
+		return MercatorForwardScreen(fx, fy, fz, flFovXDeg, sx, sy);
+
+	float sxA = 0.f, syA = 0.f, sxB = 0.f, syB = 0.f;
+	if (flFovXDeg > flLo)
+	{
+		const bool bP = PaniniForwardScreen(fx, fy, fz, flFovXDeg, flStrength, sxA, syA);
+		const bool bM = MercatorForwardScreen(fx, fy, fz, flFovXDeg, sxB, syB);
+		return LerpScreen(bP, sxA, syA, bM, sxB, syB,
+			TierEase((flFovXDeg - flLo) / std::max(flHi - flLo, 1e-3f)), sx, sy);
+	}
+	if (flFovXDeg <= 90.f)
+		return StandardForwardScreen(fx, fy, fz, flFovXDeg, sx, sy);
+
+	const float w = TierEase((flFovXDeg - 90.f) / std::max(flLo - 90.f, 1e-3f));
+	const bool bS = w < 1.f && StandardForwardScreen(fx, fy, fz, flFovXDeg, sxA, syA);
+	const bool bP = PaniniForwardScreen(fx, fy, fz, flFovXDeg, flStrength, sxB, syB);
+	return LerpScreen(bS, sxA, syA, bP, sxB, syB, w, sx, sy);
+}
+
+// Forward projection mirroring ScreenToRay's radial blend (same screen-coord
+// lerp approximation as the fov tier bands) so overlays track the warped mesh.
+static bool ForwardProject(float fx, float fy, float fz, float flFovXDeg, float flStrength, float flStereo, float flLo, float flHi, float& sx, float& sy)
 {
 	if (flStereo >= 1.f)
-		return StereographicForwardScreen(fx, fy, fz, flFovXDeg, sx, sy);
+		return RadialForwardScreen(fx, fy, fz, flFovXDeg, flStrength, sx, sy);
 	if (flStereo <= 0.f)
-		return BaseForwardProject(fx, fy, fz, flFovXDeg, flStrength, sx, sy);
+		return BaseForwardProject(fx, fy, fz, flFovXDeg, flStrength, flLo, flHi, sx, sy);
 
-	float sxB = 0.f, syB = 0.f, sxS = 0.f, syS = 0.f;
-	if (!BaseForwardProject(fx, fy, fz, flFovXDeg, flStrength, sxB, syB)
-		|| !StereographicForwardScreen(fx, fy, fz, flFovXDeg, sxS, syS))
-		return false;
-	sx = sxB + (sxS - sxB) * flStereo;
-	sy = syB + (syS - syB) * flStereo;
-	return true;
+	float sxB = 0.f, syB = 0.f, sxR = 0.f, syR = 0.f;
+	const bool bB = BaseForwardProject(fx, fy, fz, flFovXDeg, flStrength, flLo, flHi, sxB, syB);
+	const bool bR = RadialForwardScreen(fx, fy, fz, flFovXDeg, flStrength, sxR, syR);
+	return LerpScreen(bB, sxB, syB, bR, sxR, syR, flStereo, sx, sy);
 }
 
 // Cube-face bases in view-local ray coords (x = right, y = up, forward = -z),
@@ -673,11 +804,16 @@ void CFlexFOV::DrawComposite()
 		return;
 	}
 
-	// Stereographic blend for this frame, from the pitch the faces were captured
-	// at. Quantized so the mesh cache below only rebuilds every ~1.5deg of pitch
-	// in vertical-stereographic mode instead of every frame while pitching (the
-	// per-step warp change is far below a pixel at this granularity).
-	const float flStereo = std::round(CurrentStereoBlend(m_vViewAngles.x) * 64.f) / 64.f;
+	// Panini->Mercator transition band from the player's slider.
+	float flLo, flHi;
+	TransitionBand(flLo, flHi);
+
+	// Radial-projection blend for this frame, from the pitch the faces were
+	// captured at. Quantized so the mesh cache below only rebuilds every ~1.5deg
+	// of pitch in vertical-stereographic mode instead of every frame while
+	// pitching (the per-step warp change is far below a pixel at this
+	// granularity).
+	const float flStereo = std::round(CurrentStereoBlend(m_vViewAngles.x, flFovX) * 64.f) / 64.f;
 
 	// Snapshot the projection inputs for WorldToScreen (single source of truth so
 	// overlays reproject with the exact same parameters as the mesh warp).
@@ -685,6 +821,8 @@ void CFlexFOV::DrawComposite()
 	m_flFovX = flFovX;
 	m_flStrength = flStrength;
 	m_flStereoBlend = flStereo;
+	m_flTierLo = flLo;
+	m_flTierHi = flHi;
 
 	// The warp mesh depends only on (fov, strength, aspect, stereo blend) - never
 	// on the view angles directly, because the cube faces are view-aligned (the
@@ -697,11 +835,14 @@ void CFlexFOV::DrawComposite()
 	// level), and a cube-rig mesh drawn with wide-rig textures is garbage.
 	static std::vector<FVert> vBuckets[FACE_COUNT];
 	static float s_flCacheFov = -1.f, s_flCacheStrength = -1.f, s_flCacheAspect = -1.f, s_flCacheStereo = -1.f;
+	static float s_flCacheLo = -1.f, s_flCacheHi = -1.f;
 	static int s_iCacheWide = -1;
 	if (flFovX != s_flCacheFov || flStrength != s_flCacheStrength || flAspect != s_flCacheAspect || flStereo != s_flCacheStereo
+		|| flLo != s_flCacheLo || flHi != s_flCacheHi
 		|| int(m_bWideRig) != s_iCacheWide)
 	{
 		s_flCacheFov = flFovX; s_flCacheStrength = flStrength; s_flCacheAspect = flAspect; s_flCacheStereo = flStereo;
+		s_flCacheLo = flLo; s_flCacheHi = flHi;
 		s_iCacheWide = int(m_bWideRig);
 
 		// Per-rig face set: bases in view-local ray space, per-axis UV scales
@@ -760,7 +901,7 @@ void CFlexFOV::DrawComposite()
 			{
 				const float cx = -1.f + 2.f * i / nGrid;
 				const float cy = -1.f + 2.f * j / nGrid;
-				vRays[j * nSide + i] = ScreenToRay(cx, cy / flAspect, flFovX, flStrength, flStereo);
+				vRays[j * nSide + i] = ScreenToRay(cx, cy / flAspect, flFovX, flStrength, flStereo, flLo, flHi);
 			}
 		}
 
@@ -974,7 +1115,7 @@ bool CFlexFOV::WorldToScreen(const Vec3& vWorld, Vec3& vScreen, bool bAlways)
 	const float fz = Dot3(vDir, m_vViewFwd);
 
 	float sx = 0.f, sy = 0.f;
-	if (ForwardProject(fx, fy, fz, m_flFovX, m_flStrength, m_flStereoBlend, sx, sy))
+	if (ForwardProject(fx, fy, fz, m_flFovX, m_flStrength, m_flStereoBlend, m_flTierLo, m_flTierHi, sx, sy))
 	{
 		const float cx = sx;                 // clip x (-1..1)
 		const float cy = sy * m_flAspect;    // undo ScreenToRay's cy/aspect

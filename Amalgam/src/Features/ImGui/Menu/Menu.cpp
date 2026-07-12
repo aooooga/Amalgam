@@ -1280,6 +1280,7 @@ void CMenu::MenuVisuals(int iTab)
 					PushTransparent(!Vars::Visuals::UI::FlexFOVComposite.Value);
 					{
 						FSlider(Vars::Visuals::UI::FlexFOVStrength);
+						FSlider(Vars::Visuals::UI::FlexFOVTransition);
 						FSlider(Vars::Visuals::UI::FlexFOVQuality);
 						FToggle(Vars::Visuals::UI::FlexFOVStereographic);
 						FToggle(Vars::Visuals::UI::FlexFOVVertStereo);

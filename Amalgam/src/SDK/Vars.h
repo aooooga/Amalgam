@@ -245,6 +245,10 @@ NAMESPACE_BEGIN(Vars)
 		CVar(ShotPathIgnoreZ, "Shot path ignore Z color", Color_t(255, 255, 255, 255), VISUAL);
 		CVar(SplashRadius, "Splash radius color", Color_t(255, 255, 255, 0), VISUAL);
 		CVar(SplashRadiusIgnoreZ, "Splash radius ignore Z color", Color_t(255, 255, 255, 255), VISUAL);
+		CVar(StickyRadius, "Sticky radius color", Color_t(255, 255, 255, 0), VISUAL);
+		CVar(StickyRadiusIgnoreZ, "Sticky radius ignore Z color", Color_t(255, 255, 255, 255), VISUAL);
+		CVar(StickyRadiusPlayerInside, "Sticky radius player inside color", Color_t(255, 50, 50, 0), VISUAL);
+		CVar(StickyRadiusPlayerInsideIgnoreZ, "Sticky radius player inside ignore Z color", Color_t(255, 50, 50, 255), VISUAL);
 		CVar(DoubleStickyPath, "Double sticky path color", Color_t(0, 255, 140, 180), VISUAL);
 		CVar(RealPath, "Real path color", Color_t(255, 255, 255, 0), NOSAVE | DEBUGVAR);
 		CVar(RealPathIgnoreZ, "Real path ignore Z color", Color_t(255, 255, 255, 255), NOSAVE | DEBUGVAR);
@@ -685,6 +689,9 @@ NAMESPACE_BEGIN(Vars)
 				VA_LIST("Rockets", "Stickies", "Pipes", "Flares", "##Divider", "Trace", "Sphere"),
 				Rockets = 1 << 0, Stickies = 1 << 1, Pipes = 1 << 2, Flares = 1 << 3, Trace = 1 << 4, Sphere = 1 << 5,
 				Enabled = Rockets | Stickies | Pipes | Flares);
+			CVarEnum(StickyRadius, "Sticky radius", 0b0, VISUAL | DROPDOWN_MULTI, "Off",
+				VA_LIST("Enabled", "##Divider", "Trace", "Sphere"),
+				Enabled = 1 << 0, Trace = 1 << 1, Sphere = 1 << 2);
 			CVar(ProjectileCamera, "Projectile camera", false, VISUAL);
 			CVar(ProjectileWindow, "Projectile window", WindowBox_t(), VISUAL | NOBIND);
 			CVar(Box, VA_LIST("Box", "Path box"), true, VISUAL);

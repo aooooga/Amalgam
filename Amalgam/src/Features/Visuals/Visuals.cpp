@@ -47,6 +47,117 @@ static std::vector<Vec3> SplashTrace(Vec3 vOrigin, float flRadius, Vec3 vNormal 
 	return vPoints;
 }
 
+struct StickyRadiusCache_t
+{
+	Vec3 m_vRawOrigin = {};
+	Vec3 m_vOrigin = {};
+	float m_flRadius = 0.f;
+	std::vector<Vec3> m_vPoints = {};
+	bool m_bPlayerInside = false;
+};
+
+// this runs once per render pass (up to ~7x/frame with FlexFOV face capture), so the
+// traces (circle + visibility) are computed once per frame and cached per sticky
+void CVisuals::DrawStickyRadius()
+{
+	static std::unordered_map<CBaseEntity*, StickyRadiusCache_t> mCache = {};
+
+	int iValue = Vars::Visuals::Simulation::StickyRadius.Value;
+	if (!(iValue & Vars::Visuals::Simulation::StickyRadiusEnum::Enabled))
+	{
+		mCache.clear();
+		return;
+	}
+
+	static int iLastFrame = -1, iLastValue = 0;
+	if (iLastValue != iValue)
+	{
+		mCache.clear();
+		iLastValue = iValue;
+	}
+	if (iLastFrame != I::GlobalVars->framecount)
+	{
+		iLastFrame = I::GlobalVars->framecount;
+
+		std::unordered_map<CBaseEntity*, StickyRadiusCache_t> mNewCache = {};
+		bool bFriendlyFire = SDK::FriendlyFire();
+		for (auto pEntity : H::Entities.GetGroup(EntityEnum::WorldProjectile))
+		{
+			if (pEntity->GetClassID() != ETFClassID::CTFGrenadePipebombProjectile)
+				continue;
+
+			auto pPipebomb = pEntity->As<CTFGrenadePipebombProjectile>();
+			if (!pPipebomb->HasStickyEffects() || !pPipebomb->m_bTouched())
+				continue;
+
+			auto pWeapon = pPipebomb->m_hOriginalLauncher()->As<CTFWeaponBase>();
+			auto pOwner = pPipebomb->m_hThrower()->As<CTFPlayer>();
+			float flRadius = F::AimbotProjectile.GetSplashRadius(pEntity, pWeapon, pOwner);
+			if (!flRadius)
+				continue;
+
+			auto& tCache = mNewCache[pEntity];
+			auto it = mCache.find(pEntity);
+			if (it != mCache.end() && it->second.m_vRawOrigin == pEntity->m_vecOrigin() && it->second.m_flRadius == flRadius)
+				tCache = std::move(it->second);
+			else
+			{
+				tCache.m_vRawOrigin = pEntity->m_vecOrigin();
+				tCache.m_flRadius = flRadius;
+
+				// the game explodes stuck stickies from a ground-corrected origin, see CAutoDetonate::GetOrigin
+				tCache.m_vOrigin = tCache.m_vRawOrigin;
+				CGameTrace trace = {};
+				CTraceFilterWorldAndPropsOnly filter = {};
+				SDK::Trace(tCache.m_vRawOrigin + Vec3(0, 0, 8), tCache.m_vRawOrigin - Vec3(0, 0, 24), MASK_SHOT_HULL, &filter, &trace);
+				if (trace.fraction != 1.f)
+					tCache.m_vOrigin = trace.endpos + trace.plane.normal;
+
+				if (!(iValue & Vars::Visuals::Simulation::StickyRadiusEnum::Sphere))
+					tCache.m_vPoints = SplashTrace(tCache.m_vOrigin, flRadius, { 0, 0, 1 }, iValue & Vars::Visuals::Simulation::StickyRadiusEnum::Trace);
+			}
+
+			tCache.m_bPlayerInside = false;
+			float flRadiusSqr = powf(flRadius, 2);
+			for (auto pPlayerEntity : H::Entities.GetGroup(EntityEnum::PlayerAll))
+			{
+				auto pPlayer = pPlayerEntity->As<CTFPlayer>();
+				if (!pPlayer->IsAlive() || pPlayer->IsAGhost()
+					|| !bFriendlyFire && pPlayer != pOwner && pPlayer->m_iTeamNum() == pEntity->m_iTeamNum())
+					continue;
+
+				Vec3 vPos; pPlayer->m_Collision()->CalcNearestPoint(tCache.m_vOrigin, &vPos);
+				if (tCache.m_vOrigin.DistToSqr(vPos) > flRadiusSqr)
+					continue;
+
+				if (!SDK::VisPosCollideable(pEntity, pPlayer, tCache.m_vOrigin, pPlayer->GetAbsOrigin() + pPlayer->GetViewOffset(), MASK_SHOT))
+					continue;
+
+				tCache.m_bPlayerInside = true;
+				break;
+			}
+		}
+		mCache = std::move(mNewCache);
+	}
+
+	for (auto& [pEntity, tCache] : mCache)
+	{
+		const Color_t& tColor = tCache.m_bPlayerInside ? Vars::Colors::StickyRadiusPlayerInside.Value : Vars::Colors::StickyRadius.Value;
+		const Color_t& tColorIgnoreZ = tCache.m_bPlayerInside ? Vars::Colors::StickyRadiusPlayerInsideIgnoreZ.Value : Vars::Colors::StickyRadiusIgnoreZ.Value;
+
+		if (!(iValue & Vars::Visuals::Simulation::StickyRadiusEnum::Sphere))
+		{
+			H::Draw.RenderPath(tCache.m_vPoints, tColorIgnoreZ, false, Vars::Visuals::Path::StyleEnum::Line);
+			H::Draw.RenderPath(tCache.m_vPoints, tColor, true, Vars::Visuals::Path::StyleEnum::Line);
+		}
+		else
+		{
+			H::Draw.RenderSphere(tCache.m_vOrigin, tCache.m_flRadius, 36, 36, tColorIgnoreZ);
+			H::Draw.RenderSphere(tCache.m_vOrigin, tCache.m_flRadius, 36, 36, tColor, true);
+		}
+	}
+}
+
 void CVisuals::ProjectileTrace(CTFPlayer* pPlayer, CTFWeaponBase* pWeapon, const bool bInterp)
 {
 	if (bInterp)

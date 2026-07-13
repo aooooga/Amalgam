@@ -23,6 +23,7 @@ MAKE_HOOK(CClientModeShared_DoPostScreenSpaceEffects, U::Memory.GetVirtual(I::Cl
 	// Before the FlexFOV early-returns (like ProjectileTrace) so the arc also renders
 	// into the capture faces and survives the composite.
 	F::DoubleSticky.Draw();
+	F::Visuals.DrawStickyRadius();
 	// Cheap (scene-stripped) main pass: the composite paints over everything this
 	// pass produces, so chams / glow / effects here are pure wasted work.
 	if (F::CameraWindow.m_bDrawing || F::FlexFOV.m_bReplacingView)

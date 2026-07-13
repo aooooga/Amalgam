@@ -509,6 +509,12 @@ void CMenu::MenuAimbot(int iTab)
 					FColorPicker(Vars::Colors::SplashRadiusIgnoreZ, FColorPickerEnum::SameLine, { 0, H::Draw.Scale(20) }, { H::Draw.Scale(10), H::Draw.Scale(20) });
 					FColorPicker(Vars::Colors::SplashRadius, FColorPickerEnum::SameLine, { H::Draw.Scale(-10), H::Draw.Scale(-20) }, { H::Draw.Scale(10), H::Draw.Scale(20) });
 					SameLine(); DebugDummy({ 0, H::Draw.Scale(48) });
+					FDropdown(Vars::Visuals::Simulation::StickyRadius, FDropdownEnum::None, -10);
+					FColorPicker(Vars::Colors::StickyRadiusPlayerInsideIgnoreZ, FColorPickerEnum::SameLine, { 0, H::Draw.Scale(30) }, { H::Draw.Scale(10), H::Draw.Scale(10) });
+					FColorPicker(Vars::Colors::StickyRadiusPlayerInside, FColorPickerEnum::SameLine, { H::Draw.Scale(-10), H::Draw.Scale(-10) }, { H::Draw.Scale(10), H::Draw.Scale(10) });
+					FColorPicker(Vars::Colors::StickyRadiusIgnoreZ, FColorPickerEnum::SameLine, { H::Draw.Scale(-10), H::Draw.Scale(-10) }, { H::Draw.Scale(10), H::Draw.Scale(10) });
+					FColorPicker(Vars::Colors::StickyRadius, FColorPickerEnum::SameLine, { H::Draw.Scale(-10), H::Draw.Scale(-10) }, { H::Draw.Scale(10), H::Draw.Scale(10) });
+					SameLine(); DebugDummy({ 0, H::Draw.Scale(48) });
 					FToggle(Vars::Visuals::Simulation::ProjectileCamera, FToggleEnum::Left);
 					FToggle(Vars::Visuals::Simulation::Box, FToggleEnum::Right);
 				} EndSection();

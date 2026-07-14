@@ -81,6 +81,7 @@ void CVisuals::DrawStickyRadius()
 
 		std::unordered_map<CBaseEntity*, StickyRadiusCache_t> mNewCache = {};
 		bool bFriendlyFire = SDK::FriendlyFire();
+		auto pLocal = H::Entities.GetLocal();
 		for (auto pEntity : H::Entities.GetGroup(EntityEnum::WorldProjectile))
 		{
 			if (pEntity->GetClassID() != ETFClassID::CTFGrenadePipebombProjectile)
@@ -92,6 +93,8 @@ void CVisuals::DrawStickyRadius()
 
 			auto pWeapon = pPipebomb->m_hOriginalLauncher()->As<CTFWeaponBase>();
 			auto pOwner = pPipebomb->m_hThrower()->As<CTFPlayer>();
+			if (!(iValue & Vars::Visuals::Simulation::StickyRadiusEnum::All) && pOwner != pLocal)
+				continue;
 			float flRadius = F::AimbotProjectile.GetSplashRadius(pEntity, pWeapon, pOwner);
 			if (!flRadius)
 				continue;
@@ -140,6 +143,12 @@ void CVisuals::DrawStickyRadius()
 		mCache = std::move(mNewCache);
 	}
 
+	// Scene-stripped (replaced) main pass: the composite paints over anything
+	// drawn here, so skip the draws; the cache above still refreshed, and the
+	// face passes - which do need the circles baked in - reuse it.
+	if (F::FlexFOV.m_bReplacingView)
+		return;
+
 	for (auto& [pEntity, tCache] : mCache)
 	{
 		const Color_t& tColor = tCache.m_bPlayerInside ? Vars::Colors::StickyRadiusPlayerInside.Value : Vars::Colors::StickyRadius.Value;
@@ -158,11 +167,73 @@ void CVisuals::DrawStickyRadius()
 	}
 }
 
+// Interp-path trajectory data, computed once per frame and re-drawn per render
+// pass: the draws must repeat into every FlexFOV face / camera view so the arc
+// survives the composite, but the simulation behind them (hundreds of hull
+// traces) is identical within a frame.
+struct TrajectoryCache_t
+{
+	bool m_bPath = false;
+	std::vector<Vec3> m_vPath = {};
+	bool m_bHit = false;
+	Vec3 m_vHitPos = {};
+	Vec3 m_vBoxSize = {};
+	Vec3 m_vBoxAngles = {};
+	float m_flRadius = 0.f;
+	Vec3 m_vSplashPos = {};
+	std::vector<Vec3> m_vSplashPoints = {};
+};
+static TrajectoryCache_t s_tTrajectory;
+
+static void DrawTrajectory()
+{
+	// Scene-stripped (replaced) main pass: the composite paints over these.
+	if (F::FlexFOV.m_bReplacingView)
+		return;
+
+	if (s_tTrajectory.m_bPath)
+	{
+		H::Draw.RenderPath(s_tTrajectory.m_vPath, Vars::Colors::TrajectoryPathIgnoreZ.Value, false, Vars::Visuals::Simulation::TrajectoryPath.Value);
+		H::Draw.RenderPath(s_tTrajectory.m_vPath, Vars::Colors::TrajectoryPath.Value, true, Vars::Visuals::Simulation::TrajectoryPath.Value);
+
+		if (Vars::Visuals::Simulation::Box.Value && s_tTrajectory.m_bHit)
+		{
+			H::Draw.RenderWireframeBox(s_tTrajectory.m_vHitPos, -s_tTrajectory.m_vBoxSize, s_tTrajectory.m_vBoxSize, s_tTrajectory.m_vBoxAngles, Vars::Colors::TrajectoryPathIgnoreZ.Value);
+			H::Draw.RenderWireframeBox(s_tTrajectory.m_vHitPos, -s_tTrajectory.m_vBoxSize, s_tTrajectory.m_vBoxSize, s_tTrajectory.m_vBoxAngles, Vars::Colors::TrajectoryPath.Value, true);
+		}
+	}
+
+	if (s_tTrajectory.m_flRadius)
+	{
+		if (!(Vars::Visuals::Simulation::SplashRadius.Value & Vars::Visuals::Simulation::SplashRadiusEnum::Sphere))
+		{
+			H::Draw.RenderPath(s_tTrajectory.m_vSplashPoints, Vars::Colors::SplashRadiusIgnoreZ.Value, false, Vars::Visuals::Path::StyleEnum::Line);
+			H::Draw.RenderPath(s_tTrajectory.m_vSplashPoints, Vars::Colors::SplashRadius.Value, true, Vars::Visuals::Path::StyleEnum::Line);
+		}
+		else
+		{
+			H::Draw.RenderSphere(s_tTrajectory.m_vSplashPos, s_tTrajectory.m_flRadius, 36, 36, Vars::Colors::SplashRadiusIgnoreZ.Value);
+			H::Draw.RenderSphere(s_tTrajectory.m_vSplashPos, s_tTrajectory.m_flRadius, 36, 36, Vars::Colors::SplashRadius.Value, true);
+		}
+	}
+}
+
 void CVisuals::ProjectileTrace(CTFPlayer* pPlayer, CTFWeaponBase* pWeapon, const bool bInterp)
 {
 	if (bInterp)
+	{
+		// Re-entrant render passes within the same frame (FlexFOV faces, camera
+		// window): reuse the frame's simulation, repeat only the draws. Any
+		// early-out below leaves the cache empty so later passes draw nothing.
+		static int s_iSimFrame = -1;
+		if (s_iSimFrame == I::GlobalVars->framecount)
+			return DrawTrajectory();
+		s_iSimFrame = I::GlobalVars->framecount;
+		s_tTrajectory = {};
+
 		F::CameraWindow.m_bShouldDraw = false;
-	
+	}
+
 	if (bInterp
 		? !Vars::Visuals::Simulation::TrajectoryPath.Value && !Vars::Visuals::Simulation::ProjectileCamera.Value && !(Vars::Visuals::Simulation::SplashRadius.Value & Vars::Visuals::Simulation::SplashRadiusEnum::Enabled)
 		: !Vars::Visuals::Simulation::ShotPath.Value)
@@ -285,34 +356,27 @@ void CVisuals::ProjectileTrace(CTFPlayer* pPlayer, CTFWeaponBase* pWeapon, const
 
 		if (Vars::Visuals::Simulation::TrajectoryPath.Value)
 		{
-			H::Draw.RenderPath(tProjInfo.m_vPath, Vars::Colors::TrajectoryPathIgnoreZ.Value, false, Vars::Visuals::Simulation::TrajectoryPath.Value);
-			H::Draw.RenderPath(tProjInfo.m_vPath, Vars::Colors::TrajectoryPath.Value, true, Vars::Visuals::Simulation::TrajectoryPath.Value);
-
-			if (Vars::Visuals::Simulation::Box.Value && pNormal)
+			s_tTrajectory.m_bPath = true;
+			s_tTrajectory.m_vPath = tProjInfo.m_vPath;
+			if (pNormal)
 			{
 				const float flSize = std::max(tProjInfo.m_vHull.Min(), 1.f);
-				const Vec3 vSize = { 1.f, flSize, flSize };
-				Vec3 vAngles = Math::VectorAngles(*pNormal);
-
-				H::Draw.RenderWireframeBox(trace.endpos, -vSize, vSize, vAngles, Vars::Colors::TrajectoryPathIgnoreZ.Value);
-				H::Draw.RenderWireframeBox(trace.endpos, -vSize, vSize, vAngles, Vars::Colors::TrajectoryPath.Value, true);
+				s_tTrajectory.m_bHit = true;
+				s_tTrajectory.m_vHitPos = trace.endpos;
+				s_tTrajectory.m_vBoxSize = { 1.f, flSize, flSize };
+				s_tTrajectory.m_vBoxAngles = Math::VectorAngles(*pNormal);
 			}
 		}
 
 		if (flRadius)
 		{
+			s_tTrajectory.m_flRadius = flRadius;
+			s_tTrajectory.m_vSplashPos = vEndPos;
 			if (!(Vars::Visuals::Simulation::SplashRadius.Value & Vars::Visuals::Simulation::SplashRadiusEnum::Sphere))
-			{
-				auto vPoints = SplashTrace(vEndPos, flRadius, pNormal ? *pNormal : Vec3(0, 0, 1), Vars::Visuals::Simulation::SplashRadius.Value & Vars::Visuals::Simulation::SplashRadiusEnum::Trace);
-				H::Draw.RenderPath(vPoints, Vars::Colors::SplashRadiusIgnoreZ.Value, false, Vars::Visuals::Path::StyleEnum::Line);
-				H::Draw.RenderPath(vPoints, Vars::Colors::SplashRadius.Value, true, Vars::Visuals::Path::StyleEnum::Line);
-			}
-			else
-			{
-				H::Draw.RenderSphere(vEndPos, flRadius, 36, 36, Vars::Colors::SplashRadiusIgnoreZ.Value);
-				H::Draw.RenderSphere(vEndPos, flRadius, 36, 36, Vars::Colors::SplashRadius.Value, true);
-			}
+				s_tTrajectory.m_vSplashPoints = SplashTrace(vEndPos, flRadius, pNormal ? *pNormal : Vec3(0, 0, 1), Vars::Visuals::Simulation::SplashRadius.Value & Vars::Visuals::Simulation::SplashRadiusEnum::Trace);
 		}
+
+		DrawTrajectory();
 	}
 	else if (Vars::Visuals::Simulation::ShotPath.Value)
 	{

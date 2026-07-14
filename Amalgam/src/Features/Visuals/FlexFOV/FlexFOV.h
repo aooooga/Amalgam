@@ -26,6 +26,30 @@ public:
 		FACE_COUNT
 	};
 
+	// Mini-vprof buckets for the FlexFOVDebug overlay: the scene-stage hooks in
+	// CViewRender_RenderView.cpp (world / translucent / 3d-skybox, located via
+	// their VPROF strings) and the DrawModelExecute hook time themselves into
+	// these, attributed to the render context they ran under. "Scene" is the
+	// whole ViewDrawScene call, so scene - (world + translucent + sky3d) is the
+	// unaccounted remainder; model draws happen *inside* the world / translucent
+	// stages, so they're a breakdown of those, not additive.
+	enum EProfStage
+	{
+		PROF_SCENE = 0,		// whole ViewDrawScene call
+		PROF_WORLD,			// CSimpleWorldView::Draw (list building + world + opaques)
+		PROF_TRANSLUCENT,	// CRendering3dView::DrawTranslucentRenderables
+		PROF_SKY3D,			// 3d skybox view
+		PROF_MODELS,		// IVModelRender::DrawModelExecute (subset of world/translucent)
+		PROF_COUNT
+	};
+	enum EProfCtx
+	{
+		CTX_MAIN = 0,	// the real main pass (full or scene-stripped)
+		CTX_FACES,		// FlexFOV face captures
+		CTX_AUX,		// camera window / rear view captures
+		CTX_COUNT
+	};
+
 private:
 	// Face RT slots. The cube rig uses all 6; the wide rig (two tall faces yawed
 	// left/right, used for fov <= ~245 on widescreen) uses slots 0..1 only.
@@ -33,6 +57,11 @@ private:
 	IMaterial* m_pFaceMaterials[FACE_COUNT] = {};
 
 	bool m_bWideRig = false;        // rig the current textures were built for
+
+	// Mini-vprof accumulators; latched into the public m_*Frame snapshots once
+	// per frame by SnapshotProfFrame.
+	float m_flProfAccum[PROF_COUNT][CTX_COUNT] = {};
+	int m_nProfModelsAccum[CTX_COUNT] = {};
 
 	// Deferred RT destruction. The queued material system renders on a worker
 	// thread 1-2 frames behind the main thread (the crash logs show it faulting
@@ -85,7 +114,12 @@ public:
 	// redundant main render costs almost nothing, while the engine still runs the
 	// rest of the pass - crucially the in-game HUD paint that lives inside
 	// RenderView, which is what draws the composite. (Skipping CALL_ORIGINAL
-	// entirely skipped that paint too and froze the screen.)
+	// entirely skipped that paint too and froze the screen.) While
+	// m_bReplacingView is set the CViewRender_ViewDrawScene hook additionally
+	// skips the scene call outright, cutting the CPU-side setup (world/renderable
+	// list building, water views) the cvars can't reach; the cvars stay as the
+	// fallback (and still gate the 3d-skybox + viewmodel draws, which live
+	// outside ViewDrawScene).
 	void BeginCheapMainView();
 	void EndCheapMainView();
 
@@ -119,6 +153,12 @@ public:
 	// do NOT (they must be baked into the faces or the composite covers them).
 	bool m_bDrawing = false;
 
+	// True while capturing a non-front cube face with FlexFOVCheapPeriphery on.
+	// The DrawModelExecute hook skips cosmetics and distance-culls small
+	// entities during these passes, and CaptureGlobe strips per-model detail
+	// cvars (eyes/flex/jiggle/LOD) around them.
+	bool m_bCheapFace = false;
+
 	int m_iFaceW = 0, m_iFaceH = 0; // face RT resolution (cube: square, W == H)
 
 	// Frustum of the face currently being captured (valid while m_bDrawing):
@@ -144,6 +184,58 @@ public:
 	// the mesh is rebuilt). CaptureGlobe skips rendering the rest - e.g. BACK is
 	// never sampled below ~180 fov, UP/DOWN often aren't at moderate fov.
 	bool m_bFaceNeeded[FACE_COUNT] = { true, true, true, true, true, true };
+
+	// Per-face capture snapshot: the world-space view basis the face was last
+	// rendered with, plus its capture frame. With staggering (FlexFOVStagger)
+	// peripheral faces refresh round-robin instead of every frame; DrawComposite
+	// rotates its sampling rays from the current view frame into each face's
+	// capture frame, which is exact for camera rotation (no parallax), so stale
+	// faces stay world-aligned and only translation/animation lag. Invalid until
+	// the face is first captured after a rebuild - the composite must not sample
+	// an RT that was never written.
+	Vec3 m_vFaceCapFwd[FACE_COUNT] = {};
+	Vec3 m_vFaceCapRight[FACE_COUNT] = {};
+	Vec3 m_vFaceCapUp[FACE_COUNT] = {};
+	unsigned int m_uFaceCapFrame[FACE_COUNT] = {};
+	bool m_bFaceCapValid[FACE_COUNT] = {};
+	// Round-robin position over the non-keystone faces for the stagger schedule.
+	int m_iStaggerCursor = 0;
+
+	// Main-thread cost of the last frame's passes, for the FlexFOVDebug overlay
+	// (the scene passes are CPU-bound on submission, so main-thread ms is the
+	// number that matters). Per-face entries are 0 when the face was skipped.
+	float m_flFaceMs[FACE_COUNT] = {};
+	float m_flCaptureMs = 0.f;
+	float m_flCompositeMs = 0.f;
+	int m_nFacesCaptured = 0;
+
+	// Accumulate flMs (and a draw count for PROF_MODELS) into the bucket for
+	// the currently active render context. Only records while FlexFOVDebug is
+	// on - callers gate on that before timing.
+	void AddStageMs(int iStage, float flMs, int nCount = 0);
+	// Latches the accumulators into the m_*Frame snapshots and clears them.
+	// Called once per frame at the top of the CViewRender_RenderView hook, so a
+	// snapshot covers exactly one frame: main pass + captures + aux views.
+	void SnapshotProfFrame();
+	float m_flProfFrame[PROF_COUNT][CTX_COUNT] = {};
+	int m_nProfModelsFrame[CTX_COUNT] = {};
+
+	// Timings written by the CViewRender_RenderView / ViewDrawScene hooks:
+	// the whole main-pass CALL_ORIGINAL (cheap or full), whether it ran as the
+	// scene-stripped replacement, whether the ViewDrawScene hook cut the scene
+	// out of it (vs the cvar-only fallback when the signature is missing), the
+	// scene (ViewDrawScene) share of a non-replaced main pass, and the
+	// post-composite viewmodel redraw.
+	float m_flMainPassMs = 0.f;
+	bool m_bMainPassCheap = false;
+	bool m_bSceneSkipped = false;
+	float m_flSceneMs = 0.f;
+	float m_flViewmodelMs = 0.f;
+
+	// Whether the face currently being captured (m_bDrawing) can possibly see a
+	// point, with slack for the entity's own extent. Shared angular cull for the
+	// per-face chams / glow model passes.
+	bool FaceCanSee(const Vec3& vOrigin, float flExtent = 100.f);
 
 	// Whether the wide-FOV pipeline is active this frame (needs the globe
 	// captured). Set by CVisuals::FOV from the debug/composite toggles for now.

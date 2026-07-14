@@ -3,6 +3,7 @@
 #include "../Groups/Groups.h"
 #include "../Materials/Materials.h"
 #include "../FakeAngle/FakeAngle.h"
+#include "../FlexFOV/FlexFOV.h"
 #include "../../Backtrack/Backtrack.h"
 
 void CChams::Begin()
@@ -218,7 +219,14 @@ void CChams::RenderMain()
 	// networked positions, but models render interpolated (~cl_interp behind),
 	// so a tick-time trace visibly desyncs from moving players. At render time
 	// the trace hits the interpolated hitboxes matching what's on screen.
-	m_iTargetedEntity = GetCrosshairTarget(H::Entities.GetLocal());
+	// Cached per frame, not per render pass: with FlexFOV capturing this runs
+	// again for every face and the 8k-unit trace is identical within a frame.
+	static int s_iTargetFrame = -1;
+	if (s_iTargetFrame != I::GlobalVars->framecount)
+	{
+		s_iTargetFrame = I::GlobalVars->framecount;
+		m_iTargetedEntity = GetCrosshairTarget(H::Entities.GetLocal());
+	}
 
 	// The crosshair-targeted entity draws with its group's targeted material on
 	// both the visible and occluded passes (a solid, always-on-top highlight)
@@ -249,6 +257,21 @@ void CChams::RenderMain()
 			const Chams_t* pChams = GetChams(tInfo);
 			if (!pChams)
 				continue;
+
+			// FlexFOV face capture: skip entities this face can't see (the same
+			// angular cull the glow face pass uses) - at wide fov half the cham
+			// set is behind any given face, and each skip saves 2+ model draws.
+			// Still register the entity (DrawModel's side effect) so the
+			// original-model suppression set stays identical across passes.
+			// This MUST stay below the pChams gate: registering an entity chams
+			// never redraws (null pChams, e.g. target-chams-only groups) would
+			// suppress its original model everywhere and turn it invisible.
+			if (F::FlexFOV.m_bDrawing && !F::FlexFOV.FaceCanSee(tInfo.m_pEntity->GetAbsOrigin()))
+			{
+				if (!tInfo.m_iFlags && iModel == ModelEnum::Visible)
+					m_mEntities[tInfo.m_pEntity->entindex()];
+				continue;
+			}
 
 			if (!tInfo.m_iFlags)
 				DrawModel(tInfo.m_pEntity, *pChams, pRenderContext, iModel, true);

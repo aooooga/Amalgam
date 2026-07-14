@@ -355,17 +355,11 @@ void CGlow::RenderOnFlexFace()
 
 	// Skip entities the face being captured can't see: everything here (stencil
 	// mask + colored silhouette) is 2 model draws per entity per face, and at
-	// 245 fov half the glow set is behind any given face. Angular test against
-	// the face axis with slack for the entity's own extent.
+	// 245 fov half the glow set is behind any given face. Shared angular cull
+	// with the chams face pass.
 	auto FaceVisible = [&](CBaseEntity* pEntity)
 	{
-		Vec3 vDelta = pEntity->GetAbsOrigin() - F::FlexFOV.m_vEyeOrigin;
-		const float flDist = vDelta.Length();
-		if (flDist < 150.f) // close enough that the bbox can wrap any frustum
-			return true;
-		const float flSlack = std::asin(std::min(1.f, 100.f / flDist));
-		const float flCos = std::cos(std::min(3.14159f, F::FlexFOV.m_flCaptureHalfAngle + flSlack));
-		return vDelta.Dot(F::FlexFOV.m_vCaptureFwd) > flCos * flDist;
+		return F::FlexFOV.FaceCanSee(pEntity->GetAbsOrigin());
 	};
 
 	// The face RT's stencil survives across frames (the capture pass clears only

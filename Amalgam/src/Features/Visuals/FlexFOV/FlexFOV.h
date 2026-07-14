@@ -88,9 +88,7 @@ private:
 	// bAll, for the real DLL unload).
 	void DrainRetired(bool bAll);
 
-	void RenderFace(void* rcx, const CViewSetup& pViewSetup, int iFace, const Vec3& vAngles);
-	void ComputeFaceAngles(const Vec3& vViewAngles, Vec3 vOut[FACE_COUNT]);
-	void ComputeWideAngles(const Vec3& vViewAngles, float flYawDeg, Vec3 vOut[2]);
+	void RenderFace(void* rcx, const CViewSetup& pViewSetup, int iFace, const Vec3& vAngles, float flFovX, float flAspect);
 
 	// Target square face resolution for the current quality slider (screen height
 	// * fidelity compensation * quality). Rebuilt when this changes.
@@ -200,6 +198,44 @@ public:
 	Vec3 m_vFaceCapUp[FACE_COUNT] = {};
 	unsigned int m_uFaceCapFrame[FACE_COUNT] = {};
 	bool m_bFaceCapValid[FACE_COUNT] = {};
+
+	// Tight face frusta: instead of always rendering the full oversized face
+	// (130 x 130/145), each capture is narrowed to just the region the composite
+	// mesh actually samples off that face (plus a safety margin), re-aiming the
+	// face camera at that region's center. The engine then frustum-culls the
+	// rest of the world/entities out of the pass - the scene passes are
+	// CPU-bound on that work, so this is a direct perf win whenever a face is
+	// only partially sampled (side faces at moderate fov, up/down strips, the
+	// single wide face below 120 fov, ...).
+	//
+	// The frustum a face's texture was CAPTURED with, latched alongside the
+	// capture basis above: camera basis in the capture view frame's ray space
+	// (x = right, y = up, z = -forward) and symmetric half-tangents. All of the
+	// composite's containment / assignment / UV math runs against these (not
+	// the canonical full faces), so tightened captures keep seams and UVs exact.
+	struct FaceFrustum
+	{
+		Vec3 m_vFwd = {}, m_vRight = {}, m_vUp = {};
+		float m_flTanX = 0.f, m_flTanY = 0.f;
+	};
+	FaceFrustum m_tFaceCapFrustum[FACE_COUNT] = {};
+	// Bumped whenever a capture latches a different frustum than the face held
+	// before; part of the composite's mesh cache key (stale UVs otherwise).
+	unsigned int m_uFrustumGen = 0;
+
+	// Wanted capture rects, written by the composite's mesh build (param-keyed
+	// "ideal" assignment against the canonical full faces) and consumed by the
+	// next CaptureGlobe: per face, the tangent-space bounds (canonical face
+	// frame, tx = right/fwd, ty = up/fwd) of every mesh vertex that samples it,
+	// already margin-expanded and quantized. Invalid = no vertex lands on the
+	// face at these params - capture the full face if it's captured at all.
+	float m_flWantX0[FACE_COUNT] = {}, m_flWantX1[FACE_COUNT] = {};
+	float m_flWantY0[FACE_COUNT] = {}, m_flWantY1[FACE_COUNT] = {};
+	bool m_bWantValid[FACE_COUNT] = {};
+	// Forces the next mesh build to recompute the wanted rects even when the
+	// projection params are unchanged (set on Initialize: rig/size rebuilds
+	// invalidate them without necessarily changing any param).
+	bool m_bWantDirty = true;
 	// Round-robin position over the non-keystone faces for the stagger schedule.
 	int m_iStaggerCursor = 0;
 

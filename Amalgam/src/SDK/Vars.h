@@ -562,6 +562,10 @@ NAMESPACE_BEGIN(Vars)
 			// front face - where the player is actually looking - stays full
 			// quality. No effect on the wide (<=2 face) rig.
 			CVar(FlexFOVCheapPeriphery, "Flex FOV cheap periphery## FlexFOVCheapPeriphery", false, VISUAL);
+			// Narrow each face capture to just the region the composite samples
+			// (plus margin) so the engine frustum-culls the rest of the scene
+			// pass; the main perf lever after face-count reduction.
+			CVar(FlexFOVTightFaces, "Flex FOV tight faces## FlexFOVTightFaces", true, VISUAL);
 			CVar(RearView, "Enabled## RearView", false, VISUAL);
 			CVar(RearViewCameras, "Cameras## RearViewCameras", 4, VISUAL, 2, 8);
 			CVar(RearViewFOVOffset, "FOV offset## RearViewFOVOffset", 0.f, VISUAL | SLIDER_CLAMP | SLIDER_PRECISION, -180.f, 180.f, 1.f);

@@ -123,8 +123,7 @@ MAKE_HOOK(CViewRender_RenderView, U::Memory.GetVirtual(I::ViewRender, 6), void,
 	// Latch THIS frame's setup for the post-composite viewmodel redraw (the HUD
 	// paint that runs it happens inside CALL_ORIGINAL below). The viewmodel is
 	// screen-anchored and its bones are set up from this frame's eye, so it must
-	// render with this frame's view too - the end-of-frame setup CaptureGlobe
-	// latches for the composite/W2S math is a frame behind and made it jitter.
+	// render with this frame's view too.
 	F::FlexFOV.m_tViewSetup = tView;
 	F::FlexFOV.m_bViewSetupValid = true;
 
@@ -135,6 +134,15 @@ MAKE_HOOK(CViewRender_RenderView, U::Memory.GetVirtual(I::ViewRender, 6), void,
 	// it with the scene-draw cvars zeroed (and the ViewDrawScene hook cutting
 	// the scene's CPU-side setup out entirely), making the redundant render
 	// near-free.
+	// Capture BEFORE the main pass. The composite is drawn from the HUD paint,
+	// which runs *inside* the main pass' CALL_ORIGINAL below - so capturing after
+	// it meant every composited frame was built from faces (and an eye/angle
+	// snapshot) captured at the end of the PREVIOUS frame. That is a full extra
+	// frame of latency on the whole world view: mouse motion showed up a frame
+	// late, on top of whatever the engine already owes. Capturing first makes the
+	// faces, the composite, W2S and the viewmodel all this frame's.
+	F::FlexFOV.CaptureGlobe(rcx, tView);
+
 	F::FlexFOV.m_flSceneMs = 0.f;
 	F::FlexFOV.m_bSceneSkipped = false;
 	const double flMainStart = SDK::PlatFloatTime();
@@ -158,6 +166,5 @@ MAKE_HOOK(CViewRender_RenderView, U::Memory.GetVirtual(I::ViewRender, 6), void,
 	F::FlexFOV.m_flMainPassMs = float((SDK::PlatFloatTime() - flMainStart) * 1000.0);
 
 	F::CameraWindow.RenderView(rcx, tView);
-	F::FlexFOV.CaptureGlobe(rcx, tView);
 	F::RearView.Capture(rcx, tView);
 }

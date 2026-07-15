@@ -646,8 +646,8 @@ bool CFlexFOV::ShouldReplaceView()
 		|| !H::Entities.GetLocal())
 		return false;
 
-	// On a rig/size switch frame the composite skips drawing (textures are stale
-	// until CaptureGlobe rebuilds them at the end of the frame), so the main view
+	// CaptureGlobe already ran for this frame; if it was mid-rebuild-debounce it
+	// left the rig mismatched, the composite will skip drawing, and the main view
 	// must render normally or the screen would show a stale frame under the HUD.
 	bool bWide; int iW, iH;
 	ComputeRig(bWide, iW, iH);
@@ -773,8 +773,7 @@ void CFlexFOV::CaptureGlobe(void* rcx, const CViewSetup& pViewSetup)
 	Math::AngleVectors(m_vViewAngles, &m_vViewFwd, &m_vViewRight, &m_vViewUp);
 
 	// (m_tViewSetup for DrawViewmodel is latched at the TOP of the RenderView
-	// hook instead - the viewmodel is screen-anchored and must use the current
-	// frame's eye, not this end-of-frame one, or it lags a frame and jitters.)
+	// hook, from the same setup passed in here - both are this frame's.)
 
 	// Canonical rig bases and, per face, the frustum this capture should use:
 	// derived from the composite's wanted rect when tight faces apply, the full
@@ -1302,9 +1301,9 @@ void CFlexFOV::DrawComposite()
 	const float flFovX = CurrentFov();
 	const float flStrength = Vars::Visuals::UI::FlexFOVStrength.Value; // Panini compression d
 
-	// The mesh must match the rig the textures were captured with; on a rig
-	// switch frame skip drawing (CaptureGlobe rebuilds at the end of the frame,
-	// and ShouldReplaceView already fell back to the normal render).
+	// The mesh must match the rig the textures were captured with; while a rig
+	// rebuild is debouncing skip drawing (ShouldReplaceView already fell back to
+	// the normal render for the same reason).
 	if (UseWideRig(flFovX, flAspect) != m_bWideRig)
 	{
 		pRenderContext->Release();

@@ -62,6 +62,8 @@ private:
 	// per frame by SnapshotProfFrame.
 	float m_flProfAccum[PROF_COUNT][CTX_COUNT] = {};
 	int m_nProfModelsAccum[CTX_COUNT] = {};
+	int m_nFaceModelsAccum[FACE_COUNT] = {}; // PROF_MODELS split per capture face
+	int m_nW2SAccum = 0;                     // composite WorldToScreen calls
 
 	// Deferred RT destruction. The queued material system renders on a worker
 	// thread 1-2 frames behind the main thread (the crash logs show it faulting
@@ -244,6 +246,25 @@ public:
 	float m_flCaptureMs = 0.f;
 	float m_flCompositeMs = 0.f;
 	int m_nFacesCaptured = 0;
+
+	// Extra overlay instrumentation. m_iCaptureFace names the face currently
+	// being rendered (valid while m_bDrawing) so the DrawModelExecute samples
+	// can be attributed per face - that's what shows whether stagger / cheap
+	// periphery actually removed model draws, and which face is entity-heavy.
+	int m_iCaptureFace = -1;
+	int m_nFaceModelsFrame[FACE_COUNT] = {}; // model draws per face last frame
+	int m_nW2SFrame = 0;         // composite WorldToScreen calls last frame
+	bool m_bAutoStaggerFront = false; // fps-driven front-stagger engaged
+
+	// Composite mesh stats: triangles per face bucket, dynamic-mesh chunks
+	// drawn, the bucket-rebuild share of the composite cost this frame, and a
+	// rebuild counter DrawDebug drains into a rebuilds/sec rate (per-frame
+	// rebuilds while staggered are expected; per-frame rebuilds while standing
+	// still mean a param is oscillating and the cache never hits).
+	int m_nCompTris[FACE_COUNT] = {};
+	int m_nCompChunks = 0;
+	float m_flMeshBuildMs = 0.f;
+	int m_nMeshRebuilds = 0;
 
 	// Accumulate flMs (and a draw count for PROF_MODELS) into the bucket for
 	// the currently active render context. Only records while FlexFOVDebug is

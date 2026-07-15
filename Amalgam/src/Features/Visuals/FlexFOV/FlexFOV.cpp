@@ -698,7 +698,11 @@ void CFlexFOV::AddStageMs(int iStage, float flMs, int nCount)
 
 	m_flProfAccum[iStage][iCtx] += flMs;
 	if (iStage == PROF_MODELS)
+	{
 		m_nProfModelsAccum[iCtx] += nCount;
+		if (iCtx == CTX_FACES && m_iCaptureFace >= 0 && m_iCaptureFace < FACE_COUNT)
+			m_nFaceModelsAccum[m_iCaptureFace] += nCount;
+	}
 }
 
 void CFlexFOV::SnapshotProfFrame()
@@ -707,6 +711,10 @@ void CFlexFOV::SnapshotProfFrame()
 	memcpy(m_nProfModelsFrame, m_nProfModelsAccum, sizeof(m_nProfModelsFrame));
 	memset(m_flProfAccum, 0, sizeof(m_flProfAccum));
 	memset(m_nProfModelsAccum, 0, sizeof(m_nProfModelsAccum));
+	memcpy(m_nFaceModelsFrame, m_nFaceModelsAccum, sizeof(m_nFaceModelsFrame));
+	memset(m_nFaceModelsAccum, 0, sizeof(m_nFaceModelsAccum));
+	m_nW2SFrame = m_nW2SAccum;
+	m_nW2SAccum = 0;
 }
 
 void CFlexFOV::CaptureGlobe(void* rcx, const CViewSetup& pViewSetup)
@@ -874,6 +882,7 @@ void CFlexFOV::CaptureGlobe(void* rcx, const CViewSetup& pViewSetup)
 		s_bAutoFront = true;
 	else if (s_bAutoFront && flFps < 145.f)
 		s_bAutoFront = false;
+	m_bAutoStaggerFront = s_bAutoFront;
 
 	if (iBudget > 0 && (Vars::Visuals::UI::FlexFOVStaggerFront.Value || s_bAutoFront)
 		&& bCapture[0] && m_bFaceCapValid[0] && !bFrusChanged[0]
@@ -912,6 +921,7 @@ void CFlexFOV::CaptureGlobe(void* rcx, const CViewSetup& pViewSetup)
 			continue;
 
 		const double flFaceStart = SDK::PlatFloatTime();
+		m_iCaptureFace = i; // attribute this pass's model draws to the face
 
 		// Face camera world basis from the (possibly tightened) frustum; ray
 		// space is x = view-right, y = view-up, z = -view-forward. The per-face
@@ -972,6 +982,7 @@ void CFlexFOV::CaptureGlobe(void* rcx, const CViewSetup& pViewSetup)
 		m_flCaptureMs += m_flFaceMs[i];
 		m_nFacesCaptured++;
 	}
+	m_iCaptureFace = -1;
 
 	for (int i = 0; i < nCaptureCvars; i++)
 	{
@@ -1032,11 +1043,18 @@ void CFlexFOV::DrawDebug()
 	struct SAvg
 	{
 		float m_flSum = 0.f; int m_nSamples = 0; float m_flAvg = 0.f;
-		void Add(float v) { m_flSum += v; m_nSamples++; }
-		void Flush() { m_flAvg = m_nSamples ? m_flSum / m_nSamples : 0.f; m_flSum = 0.f; m_nSamples = 0; }
+		float m_flMaxAccum = 0.f, m_flMax = 0.f; // window worst-case (spike finder)
+		void Add(float v) { m_flSum += v; m_nSamples++; if (v > m_flMaxAccum) m_flMaxAccum = v; }
+		void Flush()
+		{
+			m_flAvg = m_nSamples ? m_flSum / m_nSamples : 0.f; m_flSum = 0.f; m_nSamples = 0;
+			m_flMax = m_flMaxAccum; m_flMaxAccum = 0.f;
+		}
 	};
 	static SAvg s_tFace[FACE_COUNT], s_tCapture, s_tComposite, s_tMain, s_tScene, s_tViewmodel, s_tFaces, s_tFrame;
 	static SAvg s_tProf[PROF_COUNT][CTX_COUNT], s_tModelCount[CTX_COUNT];
+	static SAvg s_tFaceModels[FACE_COUNT], s_tFaceAge[FACE_COUNT], s_tW2S, s_tMeshBuild;
+	static float s_flRebuildRate = 0.f;
 	static double s_flLastFrame = 0.0, s_flLastFlush = 0.0;
 	static bool s_bCheap = false, s_bSkipped = false;
 
@@ -1050,13 +1068,20 @@ void CFlexFOV::DrawDebug()
 	s_flLastFrame = flNow;
 
 	for (int i = 0; i < FACE_COUNT; i++)
+	{
 		s_tFace[i].Add(m_flFaceMs[i]);
+		s_tFaceModels[i].Add(float(m_nFaceModelsFrame[i]));
+		if (m_bFaceCapValid[i])
+			s_tFaceAge[i].Add(float(m_uCaptureFrame - m_uFaceCapFrame[i]));
+	}
 	s_tCapture.Add(m_flCaptureMs);
 	s_tComposite.Add(m_flCompositeMs);
+	s_tMeshBuild.Add(m_flMeshBuildMs);
 	s_tMain.Add(m_flMainPassMs);
 	s_tScene.Add(m_flSceneMs);
 	s_tViewmodel.Add(m_flViewmodelMs);
 	s_tFaces.Add(float(m_nFacesCaptured));
+	s_tW2S.Add(float(m_nW2SFrame));
 	for (int s = 0; s < PROF_COUNT; s++)
 		for (int c = 0; c < CTX_COUNT; c++)
 			s_tProf[s][c].Add(m_flProfFrame[s][c]);
@@ -1066,9 +1091,11 @@ void CFlexFOV::DrawDebug()
 	if (s_flLastFlush <= 0.0 || flNow - s_flLastFlush > 0.5)
 	{
 		for (int i = 0; i < FACE_COUNT; i++)
-			s_tFace[i].Flush();
-		s_tCapture.Flush(); s_tComposite.Flush(); s_tMain.Flush();
-		s_tScene.Flush(); s_tViewmodel.Flush(); s_tFaces.Flush(); s_tFrame.Flush();
+		{
+			s_tFace[i].Flush(); s_tFaceModels[i].Flush(); s_tFaceAge[i].Flush();
+		}
+		s_tCapture.Flush(); s_tComposite.Flush(); s_tMeshBuild.Flush(); s_tMain.Flush();
+		s_tScene.Flush(); s_tViewmodel.Flush(); s_tFaces.Flush(); s_tFrame.Flush(); s_tW2S.Flush();
 		for (int s = 0; s < PROF_COUNT; s++)
 			for (int c = 0; c < CTX_COUNT; c++)
 				s_tProf[s][c].Flush();
@@ -1076,6 +1103,10 @@ void CFlexFOV::DrawDebug()
 			s_tModelCount[c].Flush();
 		s_bCheap = m_bMainPassCheap;
 		s_bSkipped = m_bSceneSkipped;
+		// Drain the rebuild counter into a rate over the window just closed.
+		const float flWindow = float(flNow - s_flLastFlush);
+		s_flRebuildRate = s_flLastFlush > 0.0 && flWindow > 0.f ? m_nMeshRebuilds / flWindow : 0.f;
+		m_nMeshRebuilds = 0;
 		s_flLastFlush = flNow;
 	}
 
@@ -1090,9 +1121,17 @@ void CFlexFOV::DrawDebug()
 		iY += iLine;
 	};
 
-	Line(std::format("{} rig {}x{}, {:.1f} face(s)/frame, {:.0f} fps ({:.2f} ms)",
+	Line(std::format("{} rig {}x{}, {:.1f} face(s)/frame, {:.0f} fps ({:.2f} ms avg, {:.2f} max)",
 		m_bWideRig ? "wide" : "cube", m_iFaceW, m_iFaceH, s_tFaces.m_flAvg,
-		s_tFrame.m_flAvg > 0.f ? 1000.f / s_tFrame.m_flAvg : 0.f, s_tFrame.m_flAvg));
+		s_tFrame.m_flAvg > 0.f ? 1000.f / s_tFrame.m_flAvg : 0.f, s_tFrame.m_flAvg, s_tFrame.m_flMax));
+
+	// Settings echo, so a screenshot of the overlay is self-describing: the
+	// front-stagger state also reveals whether the >160fps auto engage is in.
+	Line(std::format("fov {:.0f}  quality {:.2f}  stagger {} (front {})  cheap periphery {}",
+		CurrentFov(), Vars::Visuals::UI::FlexFOVQuality.Value,
+		Vars::Visuals::UI::FlexFOVStagger.Value,
+		Vars::Visuals::UI::FlexFOVStaggerFront.Value ? "on" : m_bAutoStaggerFront ? "auto" : "off",
+		Vars::Visuals::UI::FlexFOVCheapPeriphery.Value ? "on" : "off"));
 
 	// Main pass: "full" is the normal render; "replaced" is the scene-stripped
 	// pass under the composite - "scene skipped" when the ViewDrawScene hook
@@ -1130,7 +1169,64 @@ void CFlexFOV::DrawDebug()
 		Line(std::format("tight frusta  [{}]", sTight));
 	}
 
-	Line(std::format("composite {:.2f} ms  viewmodel {:.2f} ms", s_tComposite.m_flAvg, s_tViewmodel.m_flAvg));
+	// Per-face freshness and entity load: "age" is the mean staleness in frames
+	// (0 = refreshed every frame; the stagger budget is what raises it), "mdl"
+	// the mean model draws the face's scene pass issued - the face to optimize
+	// is the one with a big mdl count that cheap-periphery/stagger isn't
+	// touching. "off" = the composite mesh never samples the face at this fov.
+	std::string sAges;
+	for (int i = 0; i < FACE_COUNT; i++)
+	{
+		if (!m_pFaceMaterials[i])
+			continue;
+		std::string sVal;
+		if (m_bComposite && !m_bFaceNeeded[i])
+			sVal = "off";
+		else if (!m_bFaceCapValid[i])
+			sVal = "-";
+		else
+			sVal = std::format("{:.1f}/{:.0f}", s_tFaceAge[i].m_flAvg, s_tFaceModels[i].m_flAvg);
+		sAges += std::format("{}{} {}", sAges.empty() ? "" : "  ", s_szFaceShort[i], sVal);
+	}
+	Line(std::format("age(frames)/models  [{}]", sAges));
+
+	Line(std::format("composite {:.2f} ms (mesh build {:.2f} ms)  viewmodel {:.2f} ms",
+		s_tComposite.m_flAvg, s_tMeshBuild.m_flAvg, s_tViewmodel.m_flAvg));
+
+	// Composite mesh shape: where the triangles went (fewer faces = fewer scene
+	// passes), the dynamic-mesh chunk count, and how often the buckets rebuilt -
+	// ~fps while staggered+turning is expected, ~0 when the camera is still;
+	// a nonzero rate while stationary means a cache param is oscillating.
+	if (m_bComposite)
+	{
+		int nTris = 0;
+		std::string sTris;
+		for (int i = 0; i < FACE_COUNT; i++)
+		{
+			nTris += m_nCompTris[i];
+			if (m_nCompTris[i])
+				sTris += std::format("{}{} {}", sTris.empty() ? "" : "  ", s_szFaceShort[i], m_nCompTris[i]);
+		}
+		Line(std::format("mesh {} tris [{}]  {} chunk(s)  rebuilds {:.0f}/s ({:.2f} ms ea)",
+			nTris, sTris, m_nCompChunks, s_flRebuildRate, s_tMeshBuild.m_flMax));
+	}
+
+	// Overlay reprojection load (SDK::W2S routed through CFlexFOV::WorldToScreen)
+	// and face RT memory, incl. RTs retired but not yet drained. RGB888 RTs pad
+	// to 32bpp on the GPU; mipmapped faces (quality > 0.6) cost an extra third.
+	size_t uRTBytes = 0;
+	int nLive = 0;
+	for (int i = 0; i < FACE_COUNT; i++)
+	{
+		if (!m_pFaceTextures[i])
+			continue;
+		uRTBytes += size_t(m_pFaceTextures[i]->GetActualWidth()) * m_pFaceTextures[i]->GetActualHeight() * 4;
+		nLive++;
+	}
+	if (std::clamp(Vars::Visuals::UI::FlexFOVQuality.Value, 0.2f, 1.f) > 0.6f)
+		uRTBytes += uRTBytes / 3;
+	Line(std::format("w2s {:.0f} calls/frame  face RTs ~{:.0f} MB ({} live, {} retired)",
+		s_tW2S.m_flAvg, uRTBytes / (1024.0 * 1024.0), nLive, m_vRetired.size()));
 
 	Line(std::format("flexfov total {:.2f} ms (capture + composite + viewmodel + main)",
 		s_tCapture.m_flAvg + s_tComposite.m_flAvg + s_tViewmodel.m_flAvg + s_tMain.m_flAvg));
@@ -1289,9 +1385,11 @@ void CFlexFOV::DrawComposite()
 	const bool bParamsChanged = flFovX != s_flCacheFov || flStrength != s_flCacheStrength || flAspect != s_flCacheAspect || flStereo != s_flCacheStereo
 		|| flLo != s_flCacheLo || flHi != s_flCacheHi
 		|| int(m_bWideRig) != s_iCacheWide;
+	m_flMeshBuildMs = 0.f;
 	const bool bFullRebuild = bParamsChanged || m_bWantDirty;
 	if (bFullRebuild || m_uFrustumGen != s_uCacheFrusGen || !bAllAligned || !s_bBucketsAligned)
 	{
+		const double flMeshStart = SDK::PlatFloatTime();
 		s_flCacheFov = flFovX; s_flCacheStrength = flStrength; s_flCacheAspect = flAspect; s_flCacheStereo = flStereo;
 		s_flCacheLo = flLo; s_flCacheHi = flHi;
 		s_iCacheWide = int(m_bWideRig);
@@ -1612,7 +1710,13 @@ void CFlexFOV::DrawComposite()
 		for (int f = 0; f < FACE_COUNT; f++)
 			m_bFaceNeeded[f] = !vBuckets[f].empty();
 		m_bFaceNeeded[0] = true;
+
+		m_flMeshBuildMs = float((SDK::PlatFloatTime() - flMeshStart) * 1000.0);
+		m_nMeshRebuilds++;
 	}
+	for (int f = 0; f < FACE_COUNT; f++)
+		m_nCompTris[f] = int(vBuckets[f].size()) / 3;
+	m_nCompChunks = 0;
 
 	// Identity model/view/projection so vertex positions are clip coords.
 	pRenderContext->MatrixMode(MATERIAL_PROJECTION);
@@ -1648,6 +1752,7 @@ void CFlexFOV::DrawComposite()
 
 			IMesh* pMesh = pRenderContext->GetDynamicMesh(true, nullptr, nullptr, pMat);
 			pMesh->SetPrimitiveType(MATERIAL_TRIANGLES);
+			m_nCompChunks++;
 
 			MeshDesc_t desc;
 			pMesh->LockMesh(nCount, nCount, desc);
@@ -1728,6 +1833,7 @@ void CFlexFOV::DrawViewmodel()
 // world point -> view-local ray -> forward Panini/Mercator -> clip -> pixel.
 bool CFlexFOV::WorldToScreen(const Vec3& vWorld, Vec3& vScreen, bool bAlways)
 {
+	m_nW2SAccum++; // overlay reprojection load, shown by the debug overlay
 	vScreen.z = 0.f;
 
 	// Ray from the (snapshotted) eye to the target, in the cached view basis.

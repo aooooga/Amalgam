@@ -21,8 +21,12 @@ MAKE_HOOK(CClientModeShared_DoPostScreenSpaceEffects, U::Memory.GetVirtual(I::Cl
 	
 	F::Visuals.ProjectileTrace(H::Entities.GetLocal(), H::Entities.GetWeapon());
 	// Before the FlexFOV early-returns (like ProjectileTrace) so the arc also renders
-	// into the capture faces and survives the composite.
-	F::DoubleSticky.Draw();
+	// into the capture faces and survives the composite. The scene-stripped
+	// (replaced) main pass is the exception: the composite paints over it, so
+	// its draws are skipped (ProjectileTrace / DrawStickyRadius do so
+	// internally, after refreshing their per-frame caches).
+	if (!F::FlexFOV.m_bReplacingView)
+		F::DoubleSticky.Draw();
 	F::Visuals.DrawStickyRadius();
 	// Cheap (scene-stripped) main pass: the composite paints over everything this
 	// pass produces, so chams / glow / effects here are pure wasted work.

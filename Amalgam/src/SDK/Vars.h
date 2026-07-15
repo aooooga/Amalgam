@@ -546,6 +546,26 @@ NAMESPACE_BEGIN(Vars)
 			CVar(FlexFOVVertStereo, "Flex FOV vertical stereographic## FlexFOVVertStereo", false, VISUAL);
 			CVar(FlexFOVSkipMainView, "Flex FOV skip main view## FlexFOVSkipMainView", true, VISUAL);
 			CVar(FlexFOVQuality, "Flex FOV quality## FlexFOVQuality", 1.f, VISUAL | SLIDER_MIN | SLIDER_PRECISION, 0.35f, 1.f, 0.05f);
+			// Peripheral faces re-captured round-robin, N per frame (0 = every face
+			// every frame). The front face always refreshes; stale faces are
+			// rotation-compensated by the composite, so only translation/animation
+			// lag in the periphery. The main lever against the per-face scene cost.
+			CVar(FlexFOVStagger, "Flex FOV stagger## FlexFOVStagger", 2, VISUAL, 0, 5);
+			// Also re-capture the front (keystone) face only every 2nd frame. It's
+			// the most expensive face; rotation compensation keeps turning smooth,
+			// so the cost is one frame of animation/translation lag at the
+			// crosshair on alternate frames - below typical interp latency.
+			CVar(FlexFOVStaggerFront, "Flex FOV stagger front## FlexFOVStaggerFront", false, VISUAL);
+			// Render the non-front cube faces cheap: skip cosmetics, cull small
+			// entities (projectiles/pickups/ragdolls/weapons) past 1500u, and
+			// drop per-model detail (eyes/flex/jiggle, forced low LOD). The
+			// front face - where the player is actually looking - stays full
+			// quality. No effect on the wide (<=2 face) rig.
+			CVar(FlexFOVCheapPeriphery, "Flex FOV cheap periphery## FlexFOVCheapPeriphery", false, VISUAL);
+			// Narrow each face capture to just the region the composite samples
+			// (plus margin) so the engine frustum-culls the rest of the scene
+			// pass; the main perf lever after face-count reduction.
+			CVar(FlexFOVTightFaces, "Flex FOV tight faces## FlexFOVTightFaces", true, VISUAL);
 			CVar(RearView, "Enabled## RearView", false, VISUAL);
 			CVar(RearViewCameras, "Cameras## RearViewCameras", 4, VISUAL, 2, 8);
 			CVar(RearViewFOVOffset, "FOV offset## RearViewFOVOffset", 0.f, VISUAL | SLIDER_CLAMP | SLIDER_PRECISION, -180.f, 180.f, 1.f);
@@ -690,8 +710,9 @@ NAMESPACE_BEGIN(Vars)
 				Rockets = 1 << 0, Stickies = 1 << 1, Pipes = 1 << 2, Flares = 1 << 3, Trace = 1 << 4, Sphere = 1 << 5,
 				Enabled = Rockets | Stickies | Pipes | Flares);
 			CVarEnum(StickyRadius, "Sticky radius", 0b0, VISUAL | DROPDOWN_MULTI, "Off",
-				VA_LIST("Enabled", "##Divider", "Trace", "Sphere"),
-				Enabled = 1 << 0, Trace = 1 << 1, Sphere = 1 << 2);
+				VA_LIST("Local", "All", "##Divider", "Trace", "Sphere"),
+				Local = 1 << 0, All = 1 << 1, Trace = 1 << 2, Sphere = 1 << 3,
+				Enabled = Local | All);
 			CVar(ProjectileCamera, "Projectile camera", false, VISUAL);
 			CVar(ProjectileWindow, "Projectile window", WindowBox_t(), VISUAL | NOBIND);
 			CVar(Box, VA_LIST("Box", "Path box"), true, VISUAL);

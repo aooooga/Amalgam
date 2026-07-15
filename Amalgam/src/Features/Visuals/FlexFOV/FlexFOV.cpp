@@ -2,10 +2,13 @@
 
 #include "../Materials/Materials.h"
 #include "../Glow/Glow.h"
+#include "../CameraWindow/CameraWindow.h"
+#include "../RearView/RearView.h"
 #include "../../../SDK/Definitions/Main/IMesh.h"
 
 #include <cmath>
 #include <algorithm>
+#include <format>
 #include <vector>
 
 // Face fov. Originally 95 (just enough overlap to hide seams); widened to 130
@@ -33,6 +36,17 @@ static constexpr float FLEXFOV_REF_FACE_FOV = 95.f;
 static constexpr float FLEXFOV_WIDE_FOV_V = 145.f;
 
 static constexpr float FLEXFOV_DEG2RAD = 3.14159265f / 180.f;
+
+// Tight face frusta (see FaceFrustum in the header). MARGIN is added around
+// the sampled region on every side before capturing: it's what keeps a stale
+// (staggered) face's content valid while the camera rotates between refreshes
+// - even without stagger a face is one frame old by the time the composite
+// samples it. 8 deg covers ~300 deg/s flicks over the couple-frame windows the
+// stagger schedule allows. QUANT snaps the rect's sides outward to a coarse
+// angular grid so the capture frustum is stable frame-to-frame (a jittering
+// frustum would force a recapture + mesh rebuild every frame).
+static constexpr float FLEXFOV_TIGHT_MARGIN_DEG = 8.f;
+static constexpr float FLEXFOV_TIGHT_QUANT_DEG = 4.f;
 
 static float CurrentFov()
 {
@@ -227,6 +241,21 @@ static bool UseWideRig(float flFovX, float flAspect)
 	const float flStrength = Vars::Visuals::UI::FlexFOVStrength.Value;
 	const float flMaxStereo = MaxStereoBlend(flFovX);
 
+	// The border walk below is ~130 transcendental-heavy ScreenToRay calls and
+	// runs several times per frame (ShouldReplaceView / CaptureGlobe /
+	// DrawComposite all consult the rig), but every input only changes when a
+	// slider or toggle moves - cache the verdict. flMaxStereo folds the stereo
+	// toggles in.
+	static bool s_bResult = false;
+	static float s_flFov = -1.f, s_flAspect = -1.f, s_flStrength = -1.f;
+	static float s_flLo = -1.f, s_flHi = -1.f, s_flMaxStereo = -1.f;
+	if (flFovX == s_flFov && flAspect == s_flAspect && flStrength == s_flStrength
+		&& flLo == s_flLo && flHi == s_flHi && flMaxStereo == s_flMaxStereo)
+		return s_bResult;
+	s_flFov = flFovX; s_flAspect = flAspect; s_flStrength = flStrength;
+	s_flLo = flLo; s_flHi = flHi; s_flMaxStereo = flMaxStereo;
+	s_bResult = false;
+
 	const float flYaw = WideYawDeg(flFovX) * FLEXFOV_DEG2RAD;
 	const float s = std::sin(flYaw), c = std::cos(flYaw);
 	// Same containment test DrawComposite uses, slightly tighter margin (0.97 vs
@@ -266,6 +295,7 @@ static bool UseWideRig(float flFovX, float flAspect)
 			&& !Contained(ScreenToRay(cx, cy / flAspect, flFovX, flStrength, flMaxStereo, flLo, flHi)))
 			return false;
 	}
+	s_bResult = true;
 	return true;
 }
 
@@ -476,13 +506,75 @@ static bool ForwardProject(float fx, float fy, float fz, float flFovXDeg, float 
 	return LerpScreen(bB, sxB, syB, bR, sxR, syR, flStereo, sx, sy);
 }
 
-// Cube-face bases in view-local ray coords (x = right, y = up, forward = -z),
-// consistent with CFlexFOV::ComputeFaceAngles. Order: FRONT,BACK,LEFT,RIGHT,UP,DOWN.
-// Fwd = look direction; Right/Up/Back define the face camera (looks along -Back).
+// Cube-face bases in view-local ray coords (x = right, y = up, forward = -z).
+// Order: FRONT,BACK,LEFT,RIGHT,UP,DOWN. Fwd = look direction; Right/Up complete
+// the face camera basis.
 static const Vec3 s_FaceFwd[6]   = { {0,0,-1}, {0,0,1},  {-1,0,0}, {1,0,0},  {0,1,0},  {0,-1,0} };
 static const Vec3 s_FaceRight[6] = { {1,0,0},  {-1,0,0}, {0,0,-1}, {0,0,1},  {1,0,0},  {1,0,0}  };
 static const Vec3 s_FaceUp[6]    = { {0,1,0},  {0,1,0},  {0,1,0},  {0,1,0},  {0,0,1},  {0,0,-1} };
-static const Vec3 s_FaceBack[6]  = { {0,0,1},  {0,0,-1}, {1,0,0},  {-1,0,0}, {0,-1,0}, {0,1,0}  };
+
+// Canonical (full-fov) face-camera bases for a rig, in view-local ray space
+// (x = right, y = up, z = -forward), plus the full per-axis half-fov in
+// radians. Shared by the composite's wanted-rect pass and CaptureGlobe so both
+// sides agree on what "the whole face" means. Returns the rig's face count.
+static int CanonicalRigBases(bool bWide, float flFovX, Vec3 vFwd[], Vec3 vRight[], Vec3 vUp[], float& flHalfW, float& flHalfH)
+{
+	flHalfW = FLEXFOV_FACE_FOV * 0.5f * FLEXFOV_DEG2RAD;
+	flHalfH = flHalfW;
+	if (bWide)
+	{
+		flHalfH = FLEXFOV_WIDE_FOV_V * 0.5f * FLEXFOV_DEG2RAD;
+		const float flYaw = WideYawDeg(flFovX);
+		const int nFaces = flYaw > 0.f ? 2 : 1;
+		const float s = std::sin(flYaw * FLEXFOV_DEG2RAD);
+		const float c = std::cos(flYaw * FLEXFOV_DEG2RAD);
+		for (int f = 0; f < nFaces; f++)
+		{
+			const float sgn = f == 0 ? 1.f : -1.f; // face 0 right, face 1 left
+			vFwd[f]   = Vec3(sgn * s, 0.f, -c);
+			vRight[f] = Vec3(c, 0.f, sgn * s);
+			vUp[f]    = Vec3(0.f, 1.f, 0.f);
+		}
+		return nFaces;
+	}
+	for (int f = 0; f < CFlexFOV::FACE_COUNT; f++)
+	{
+		vFwd[f] = s_FaceFwd[f];
+		vRight[f] = s_FaceRight[f];
+		vUp[f] = s_FaceUp[f];
+	}
+	return CFlexFOV::FACE_COUNT;
+}
+
+// Symmetric capture frustum covering a tangent-space rect on a canonical face:
+// re-aim the face camera through the rect's angular center, then take the
+// smallest symmetric half-tangents containing the rect's corners in the new
+// frame (central projection maps the rect to a convex quad there, so the
+// corners are the extremes). A full-face rect reproduces the canonical camera
+// and half-tangents exactly.
+static CFlexFOV::FaceFrustum FrustumFromRect(const Vec3& vFwd, const Vec3& vRight, const Vec3& vUp,
+	float x0, float x1, float y0, float y1)
+{
+	CFlexFOV::FaceFrustum tOut;
+	const float cx = std::tan((std::atan(x0) + std::atan(x1)) * 0.5f);
+	const float cy = std::tan((std::atan(y0) + std::atan(y1)) * 0.5f);
+	tOut.m_vFwd = (vFwd + vRight * cx + vUp * cy).Normalized();
+	tOut.m_vRight = (vRight - tOut.m_vFwd * Dot3(vRight, tOut.m_vFwd)).Normalized();
+	tOut.m_vUp = tOut.m_vRight.Cross(tOut.m_vFwd);
+
+	const float xs[2] = { x0, x1 }, ys[2] = { y0, y1 };
+	for (int i = 0; i < 2; i++)
+	{
+		for (int j = 0; j < 2; j++)
+		{
+			const Vec3 d = vFwd + vRight * xs[i] + vUp * ys[j];
+			const float w = std::max(Dot3(d, tOut.m_vFwd), 1e-3f);
+			tOut.m_flTanX = std::max(tOut.m_flTanX, std::fabs(Dot3(d, tOut.m_vRight)) / w);
+			tOut.m_flTanY = std::max(tOut.m_flTanY, std::fabs(Dot3(d, tOut.m_vUp)) / w);
+		}
+	}
+	return tOut;
+}
 
 struct FVert { float x, y, z, u, v; };
 
@@ -503,42 +595,12 @@ static Vec3 AnglesFromBasis(const Vec3& vForward, const Vec3& vLeft, const Vec3&
 	return Math::MatrixAngles(m);
 }
 
-// Computes the 6 view-aligned cube face orientations from the player's view
-// angles, so the front face is always centered on the crosshair (best/most
-// consistent resolution where the player looks).
-void CFlexFOV::ComputeFaceAngles(const Vec3& vViewAngles, Vec3 vOut[FACE_COUNT])
-{
-	Vec3 vF, vR, vU;
-	Math::AngleVectors(vViewAngles, &vF, &vR, &vU);
-	const Vec3 vL = -vR; // matrix "left" column is +Y in Source (= -right)
-
-	vOut[FACE_FRONT] = AnglesFromBasis( vF,  vL,  vU);
-	vOut[FACE_BACK]  = AnglesFromBasis(-vF, -vL,  vU);
-	vOut[FACE_LEFT]  = AnglesFromBasis( vL, -vF,  vU);
-	vOut[FACE_RIGHT] = AnglesFromBasis(-vL,  vF,  vU);
-	vOut[FACE_UP]    = AnglesFromBasis( vU,  vL, -vF);
-	vOut[FACE_DOWN]  = AnglesFromBasis(-vU,  vL,  vF);
-}
-
-// The two wide-face orientations: the view basis yawed +-flYawDeg around the
-// view up axis (face 0 to the right, face 1 to the left).
-void CFlexFOV::ComputeWideAngles(const Vec3& vViewAngles, float flYawDeg, Vec3 vOut[2])
-{
-	Vec3 vF, vR, vU;
-	Math::AngleVectors(vViewAngles, &vF, &vR, &vU);
-	const Vec3 vL = -vR;
-
-	const float s = std::sin(flYawDeg * FLEXFOV_DEG2RAD);
-	const float c = std::cos(flYawDeg * FLEXFOV_DEG2RAD);
-	// fwd' = F*c +- R*s; left' = -(R*c -+ F*s) = L*c +- F*s
-	vOut[0] = AnglesFromBasis(vF * c + vR * s, vL * c + vF * s, vU);
-	vOut[1] = AnglesFromBasis(vF * c - vR * s, vL * c - vF * s, vU);
-}
-
 // Renders the scene into a single face render target. fov is horizontal; the
-// engine derives the vertical fov from the aspect (tan(v/2) = tan(h/2)/aspect),
-// so the cube's square faces get 130x130 and the wide faces 130x145.
-void CFlexFOV::RenderFace(void* rcx, const CViewSetup& pViewSetup, int iFace, const Vec3& vAngles)
+// engine derives the vertical fov from the aspect (tan(v/2) = tan(h/2)/aspect).
+// The frustum is the caller's (possibly tightened) one; the RT stays full size
+// regardless - a narrower frustum in the same RT just means denser texels,
+// and per the resolution testing GPU fill is free (the cost is CPU per pass).
+void CFlexFOV::RenderFace(void* rcx, const CViewSetup& pViewSetup, int iFace, const Vec3& vAngles, float flFovX, float flAspect)
 {
 	ITexture* pTexture = m_pFaceTextures[iFace];
 	if (!pTexture)
@@ -549,10 +611,15 @@ void CFlexFOV::RenderFace(void* rcx, const CViewSetup& pViewSetup, int iFace, co
 	tViewSetup.y = 0;
 	tViewSetup.width = m_iFaceW;
 	tViewSetup.height = m_iFaceH;
-	tViewSetup.m_flAspectRatio = float(m_iFaceW) / float(m_iFaceH);
-	tViewSetup.fov = FLEXFOV_FACE_FOV;	// oversized for seam overlap
+	tViewSetup.m_flAspectRatio = flAspect;
+	tViewSetup.fov = flFovX;
 	tViewSetup.angles = vAngles;
 	// origin left as the player's eye (pViewSetup.origin)
+	// No bloom/tonemap chain per face: it's a downsample+blur+tonemap pass on
+	// every capture for a subtle effect the warp washes out anyway (the
+	// DoEnginePostProcessing hook skips the engine post pass during captures
+	// too; this flag drops the CViewRender-side setup for it).
+	tViewSetup.m_bDoBloomAndToneMapping = false;
 
 	auto pRenderContext = I::MaterialSystem->GetRenderContext();
 	pRenderContext->PushRenderTargetAndViewport();
@@ -621,6 +688,27 @@ void CFlexFOV::EndCheapMainView()
 	m_bReplacingView = false;
 }
 
+void CFlexFOV::AddStageMs(int iStage, float flMs, int nCount)
+{
+	int iCtx = CTX_MAIN;
+	if (m_bDrawing)
+		iCtx = CTX_FACES;
+	else if (F::CameraWindow.m_bDrawing || F::RearView.m_bCapturing)
+		iCtx = CTX_AUX;
+
+	m_flProfAccum[iStage][iCtx] += flMs;
+	if (iStage == PROF_MODELS)
+		m_nProfModelsAccum[iCtx] += nCount;
+}
+
+void CFlexFOV::SnapshotProfFrame()
+{
+	memcpy(m_flProfFrame, m_flProfAccum, sizeof(m_flProfFrame));
+	memcpy(m_nProfModelsFrame, m_nProfModelsAccum, sizeof(m_nProfModelsFrame));
+	memset(m_flProfAccum, 0, sizeof(m_flProfAccum));
+	memset(m_nProfModelsAccum, 0, sizeof(m_nProfModelsAccum));
+}
+
 void CFlexFOV::CaptureGlobe(void* rcx, const CViewSetup& pViewSetup)
 {
 	if (!m_bActive || m_bDrawing || !I::EngineClient->IsInGame())
@@ -681,63 +769,225 @@ void CFlexFOV::CaptureGlobe(void* rcx, const CViewSetup& pViewSetup)
 	m_tViewSetup = pViewSetup;
 	m_bViewSetupValid = true;
 
-	Vec3 vFaceAngles[FACE_COUNT];
-	int nFaces;
-	if (m_bWideRig)
+	// Canonical rig bases and, per face, the frustum this capture should use:
+	// derived from the composite's wanted rect when tight faces apply, the full
+	// oversized face otherwise (bootstrap, debug-only tiles, toggle off).
+	Vec3 vCanFwd[FACE_COUNT], vCanRight[FACE_COUNT], vCanUp[FACE_COUNT];
+	float flHalfW, flHalfH;
+	const int nFaces = CanonicalRigBases(m_bWideRig, CurrentFov(), vCanFwd, vCanRight, vCanUp, flHalfW, flHalfH);
+
+	const bool bTight = m_bComposite && Vars::Visuals::UI::FlexFOVTightFaces.Value;
+	FaceFrustum tWant[FACE_COUNT];
+	bool bFrusChanged[FACE_COUNT] = {};
+	for (int i = 0; i < nFaces; i++)
 	{
-		nFaces = 2;
-		ComputeWideAngles(pViewSetup.angles, WideYawDeg(CurrentFov()), vFaceAngles);
-	}
-	else
-	{
-		nFaces = FACE_COUNT;
-		ComputeFaceAngles(pViewSetup.angles, vFaceAngles);
+		if (bTight && m_bWantValid[i])
+			tWant[i] = FrustumFromRect(vCanFwd[i], vCanRight[i], vCanUp[i],
+				m_flWantX0[i], m_flWantX1[i], m_flWantY0[i], m_flWantY1[i]);
+		else
+		{
+			tWant[i].m_vFwd = vCanFwd[i]; tWant[i].m_vRight = vCanRight[i]; tWant[i].m_vUp = vCanUp[i];
+			tWant[i].m_flTanX = std::tan(flHalfW);
+			tWant[i].m_flTanY = std::tan(flHalfH);
+		}
+		// A face whose next capture uses a different frustum than its texture
+		// holds must recapture NOW (stagger bypass below): the mesh has already
+		// moved to the new wanted region and the old content doesn't cover it.
+		// Fwd + tangents identify the frustum fully (right/up are derived).
+		bFrusChanged[i] = m_bFaceCapValid[i]
+			&& (std::fabs(tWant[i].m_flTanX - m_tFaceCapFrustum[i].m_flTanX) > 1e-4f
+				|| std::fabs(tWant[i].m_flTanY - m_tFaceCapFrustum[i].m_flTanY) > 1e-4f
+				|| tWant[i].m_vFwd.Dot(m_tFaceCapFrustum[i].m_vFwd) < 0.9999995f);
 	}
 
 	// Per-pass work that's expensive and barely visible in the warp, dropped for
-	// the capture passes only: dynamic entity shadows (CPU per pass) and water
-	// reflection (a whole extra scene render per face on water maps).
-	static auto r_shadows = H::ConVars.FindVar("r_shadows");
-	static auto r_WaterDrawReflection = H::ConVars.FindVar("r_WaterDrawReflection");
-	const int iShadows = r_shadows ? r_shadows->GetInt() : 0;
-	const int iWaterReflect = r_WaterDrawReflection ? r_WaterDrawReflection->GetInt() : 0;
-	if (r_shadows)
-		r_shadows->SetValue(0);
-	if (r_WaterDrawReflection)
-		r_WaterDrawReflection->SetValue(0);
-
-	// Half-diagonal of the face frustum (corner angle from the face axis), used
-	// by the glow pass to cull entities this face can't see. Same for every
-	// face of a rig: atan(sqrt(tan(hfov/2)^2 + tan(vfov/2)^2)).
+	// the capture passes only: dynamic entity shadows (CPU per pass), water
+	// reflection/refraction (extra scene renders / framebuffer copies per face
+	// on water maps), the CPU occlusion system (per-view software tests tuned
+	// for a single main view), detail props (per-view sprite list rebuilds) and
+	// dynamic lights (a muzzle flash dlight re-lights and re-renders the world
+	// surfaces it touches in EVERY face pass - the main cause of fps dips while
+	// shooting).
+	static const char* s_szCaptureCvars[] =
 	{
-		const float tw = std::tan(FLEXFOV_FACE_FOV * 0.5f * FLEXFOV_DEG2RAD);
-		const float th = m_bWideRig ? std::tan(FLEXFOV_WIDE_FOV_V * 0.5f * FLEXFOV_DEG2RAD) : tw;
-		m_flCaptureHalfAngle = std::atan(std::sqrt(tw * tw + th * th));
-	}
-
-	// Only render the faces the composite mesh actually samples at the current
-	// fov (recorded when the mesh was built). The debug tiles want all of them.
-	const bool bAllFaces = !m_bComposite || Vars::Visuals::UI::FlexFOVDebug.Value;
-	for (int i = 0; i < nFaces; i++)
+		"r_shadows", "r_WaterDrawReflection", "r_WaterDrawRefraction",
+		"r_occlusion", "r_drawdetailprops", "r_dynamic",
+	};
+	constexpr int nCaptureCvars = sizeof(s_szCaptureCvars) / sizeof(s_szCaptureCvars[0]);
+	int iSavedCaptureCvars[nCaptureCvars] = {};
+	for (int i = 0; i < nCaptureCvars; i++)
 	{
-		if (bAllFaces || m_bFaceNeeded[i])
+		if (auto pVar = H::ConVars.FindVar(s_szCaptureCvars[i]))
 		{
-			Math::AngleVectors(vFaceAngles[i], &m_vCaptureFwd);
-			RenderFace(rcx, pViewSetup, i, vFaceAngles[i]);
+			iSavedCaptureCvars[i] = pVar->GetInt();
+			pVar->SetValue(0);
 		}
 	}
 
-	if (r_shadows)
-		r_shadows->SetValue(iShadows);
-	if (r_WaterDrawReflection)
-		r_WaterDrawReflection->SetValue(iWaterReflect);
+	// Only render the faces the composite mesh actually samples at the current
+	// fov (recorded when the mesh was built). With the composite off the debug
+	// tiles are the only consumer and want every face live; with it on, the
+	// tiles just show whatever the stagger schedule leaves so the debug view
+	// reflects the real capture cost.
+	//
+	// Staggering (FlexFOVStagger > 0): the keystone face 0 (front / wide-right)
+	// refreshes every frame, the remaining needed faces refresh round-robin,
+	// budget per frame. DrawComposite rotation-compensates stale faces from
+	// their latched capture basis, so camera rotation stays exact and only
+	// translation/animation lag a few frames in the periphery. Faces with no
+	// valid capture yet (fresh RTs after a rebuild) and faces that sat unneeded
+	// long enough to hold ancient content are captured unconditionally.
+	const bool bAllFaces = !m_bComposite;
+	const int iBudget = bAllFaces ? 0 : Vars::Visuals::UI::FlexFOVStagger.Value;
+	bool bCapture[FACE_COUNT] = {};
+	for (int i = 0; i < nFaces; i++)
+	{
+		if (!bAllFaces && !m_bFaceNeeded[i])
+			continue;
+		bCapture[i] = i == 0 || iBudget <= 0 || !m_bFaceCapValid[i]
+			|| bFrusChanged[i] || m_uCaptureFrame - m_uFaceCapFrame[i] > 8;
+	}
+	// Front at half rate (FlexFOVStaggerFront): the keystone is the most
+	// expensive face (it sees the action), and rotation compensation keeps
+	// turning smooth while it's stale, so alternate-frame refresh only costs a
+	// frame of animation/translation lag at the crosshair. Never skipped when
+	// invalid (fresh RTs) so rebuild safety is unchanged.
+	//
+	// Also engages automatically above 160 fps, where a half-rate crosshair
+	// refresh (~3ms of world-content lag) is imperceptible. Smoothed fps with
+	// hysteresis (on > 160, off < 145) so it doesn't flap at the boundary -
+	// note the loop is self-reinforcing in the good direction: engaging raises
+	// fps, which keeps it engaged.
+	static float s_flAvgFrameTime = 0.f;
+	static double s_flLastFrameTime = 0.0;
+	static bool s_bAutoFront = false;
+	const double flNow = SDK::PlatFloatTime();
+	if (s_flLastFrameTime > 0.0)
+	{
+		const float flDt = float(flNow - s_flLastFrameTime);
+		if (flDt > 0.f && flDt < 1.f)
+			s_flAvgFrameTime = s_flAvgFrameTime <= 0.f ? flDt : s_flAvgFrameTime + (flDt - s_flAvgFrameTime) * 0.05f;
+	}
+	s_flLastFrameTime = flNow;
+	const float flFps = s_flAvgFrameTime > 0.f ? 1.f / s_flAvgFrameTime : 0.f;
+	if (!s_bAutoFront && flFps > 160.f)
+		s_bAutoFront = true;
+	else if (s_bAutoFront && flFps < 145.f)
+		s_bAutoFront = false;
+
+	if (iBudget > 0 && (Vars::Visuals::UI::FlexFOVStaggerFront.Value || s_bAutoFront)
+		&& bCapture[0] && m_bFaceCapValid[0] && !bFrusChanged[0]
+		&& m_uCaptureFrame - m_uFaceCapFrame[0] < 2)
+		bCapture[0] = false;
+	if (iBudget > 0 && nFaces > 1)
+	{
+		for (int k = 0, nLeft = iBudget; k < nFaces - 1 && nLeft > 0; k++)
+		{
+			const int i = 1 + (m_iStaggerCursor + k) % (nFaces - 1);
+			if (bCapture[i] || !m_bFaceNeeded[i])
+				continue;
+			bCapture[i] = true;
+			if (--nLeft == 0)
+				m_iStaggerCursor = (m_iStaggerCursor + k + 1) % (nFaces - 1);
+		}
+	}
+
+	// Cheap-periphery detail cvars: per-model CPU spent on features nobody can
+	// resolve off the front face (eye/flex/teeth rendering, jiggle bones) plus
+	// forced low model/static-prop LOD. Pushed around individual peripheral
+	// face renders only, so the front face keeps full quality.
+	static const struct { const char* m_szName; int m_iCheap; } s_tCheapFaceCvars[] =
+	{
+		{ "r_eyes", 0 }, { "r_teeth", 0 }, { "r_flex", 0 }, { "r_jiggle_bones", 0 },
+		{ "r_lod", 2 }, { "r_staticprop_lod", 3 },
+	};
+	constexpr int nCheapFaceCvars = sizeof(s_tCheapFaceCvars) / sizeof(s_tCheapFaceCvars[0]);
+
+	m_flCaptureMs = 0.f;
+	m_nFacesCaptured = 0;
+	for (int i = 0; i < nFaces; i++)
+	{
+		m_flFaceMs[i] = 0.f;
+		if (!bCapture[i])
+			continue;
+
+		const double flFaceStart = SDK::PlatFloatTime();
+
+		// Face camera world basis from the (possibly tightened) frustum; ray
+		// space is x = view-right, y = view-up, z = -view-forward. The per-face
+		// half-diagonal cone (glow / chams cull via FaceCanSee) tightens along
+		// with the frustum, so those passes cull harder too.
+		const auto ToWorld = [&](const Vec3& v) { return m_vViewRight * v.x + m_vViewUp * v.y - m_vViewFwd * v.z; };
+		const Vec3 vWorldFwd = ToWorld(tWant[i].m_vFwd);
+		const Vec3 vAngles = AnglesFromBasis(vWorldFwd, ToWorld(tWant[i].m_vRight) * -1.f, ToWorld(tWant[i].m_vUp));
+		m_vCaptureFwd = vWorldFwd;
+		m_flCaptureHalfAngle = std::atan(std::sqrt(
+			tWant[i].m_flTanX * tWant[i].m_flTanX + tWant[i].m_flTanY * tWant[i].m_flTanY));
+
+		// Cheap periphery: every non-front cube face (the wide rig's faces both
+		// cover screen-center regions, so it never applies there).
+		const bool bCheapFace = Vars::Visuals::UI::FlexFOVCheapPeriphery.Value
+			&& !m_bWideRig && i != FACE_FRONT;
+		m_bCheapFace = bCheapFace;
+		int iSavedCheapCvars[nCheapFaceCvars] = {};
+		if (bCheapFace)
+		{
+			for (int c = 0; c < nCheapFaceCvars; c++)
+			{
+				if (auto pVar = H::ConVars.FindVar(s_tCheapFaceCvars[c].m_szName))
+				{
+					iSavedCheapCvars[c] = pVar->GetInt();
+					pVar->SetValue(s_tCheapFaceCvars[c].m_iCheap);
+				}
+			}
+		}
+
+		RenderFace(rcx, pViewSetup, i, vAngles,
+			2.f * std::atan(tWant[i].m_flTanX) / FLEXFOV_DEG2RAD,
+			tWant[i].m_flTanX / std::max(tWant[i].m_flTanY, 1e-4f));
+
+		if (bCheapFace)
+		{
+			for (int c = 0; c < nCheapFaceCvars; c++)
+			{
+				if (auto pVar = H::ConVars.FindVar(s_tCheapFaceCvars[c].m_szName))
+					pVar->SetValue(iSavedCheapCvars[c]);
+			}
+		}
+		m_bCheapFace = false;
+		// The face now holds this frame's view basis; latch it so the composite
+		// can rotate rays into this frame when the face goes stale. The frustum
+		// latch is what the composite's containment/UV math reads; when it
+		// changed (or the face is brand new) the mesh cache must rebuild.
+		if (bFrusChanged[i] || !m_bFaceCapValid[i])
+			m_uFrustumGen++;
+		m_tFaceCapFrustum[i] = tWant[i];
+		m_vFaceCapFwd[i] = m_vViewFwd;
+		m_vFaceCapRight[i] = m_vViewRight;
+		m_vFaceCapUp[i] = m_vViewUp;
+		m_uFaceCapFrame[i] = m_uCaptureFrame;
+		m_bFaceCapValid[i] = true;
+
+		m_flFaceMs[i] = float((SDK::PlatFloatTime() - flFaceStart) * 1000.0);
+		m_flCaptureMs += m_flFaceMs[i];
+		m_nFacesCaptured++;
+	}
+
+	for (int i = 0; i < nCaptureCvars; i++)
+	{
+		if (auto pVar = H::ConVars.FindVar(s_szCaptureCvars[i]))
+			pVar->SetValue(iSavedCaptureCvars[i]);
+	}
 
 	m_bDrawing = false;
 }
 
-// Debug: blit the 6 faces as a 3x2 grid of thumbnails in the top-left corner.
-// Gated on the debug toggle specifically (NOT m_bActive, which is also set by the
-// composite) so the tiles don't show whenever the composite alone is enabled.
+// Debug: blit the 6 faces as a 3x2 grid of thumbnails in the top-left corner,
+// with the per-stage main-thread timings underneath (the scene passes are
+// CPU-bound on submission, so this is the number the stagger/quality knobs
+// move). Gated on the debug toggle specifically (NOT m_bActive, which is also
+// set by the composite) so the tiles don't show whenever the composite alone
+// is enabled.
 void CFlexFOV::DrawDebug()
 {
 	if (!Vars::Visuals::UI::FlexFOVDebug.Value || !m_pFaceMaterials[0] || !I::EngineClient->IsInGame())
@@ -773,6 +1023,166 @@ void CFlexFOV::DrawDebug()
 	}
 
 	pRenderContext->Release();
+
+	// Windowed averages: raw per-frame ms values jitter too much to read, so
+	// every stat accumulates each frame and the *displayed* numbers only
+	// refresh twice a second with the window's mean. Per-face values include
+	// the frames a face was skipped (0 ms), so they read as the amortized
+	// per-frame cost - the number the stagger knobs actually move.
+	struct SAvg
+	{
+		float m_flSum = 0.f; int m_nSamples = 0; float m_flAvg = 0.f;
+		void Add(float v) { m_flSum += v; m_nSamples++; }
+		void Flush() { m_flAvg = m_nSamples ? m_flSum / m_nSamples : 0.f; m_flSum = 0.f; m_nSamples = 0; }
+	};
+	static SAvg s_tFace[FACE_COUNT], s_tCapture, s_tComposite, s_tMain, s_tScene, s_tViewmodel, s_tFaces, s_tFrame;
+	static SAvg s_tProf[PROF_COUNT][CTX_COUNT], s_tModelCount[CTX_COUNT];
+	static double s_flLastFrame = 0.0, s_flLastFlush = 0.0;
+	static bool s_bCheap = false, s_bSkipped = false;
+
+	const double flNow = SDK::PlatFloatTime();
+	if (s_flLastFrame > 0.0)
+	{
+		const float flDt = float(flNow - s_flLastFrame);
+		if (flDt > 0.f && flDt < 1.f)
+			s_tFrame.Add(flDt * 1000.f);
+	}
+	s_flLastFrame = flNow;
+
+	for (int i = 0; i < FACE_COUNT; i++)
+		s_tFace[i].Add(m_flFaceMs[i]);
+	s_tCapture.Add(m_flCaptureMs);
+	s_tComposite.Add(m_flCompositeMs);
+	s_tMain.Add(m_flMainPassMs);
+	s_tScene.Add(m_flSceneMs);
+	s_tViewmodel.Add(m_flViewmodelMs);
+	s_tFaces.Add(float(m_nFacesCaptured));
+	for (int s = 0; s < PROF_COUNT; s++)
+		for (int c = 0; c < CTX_COUNT; c++)
+			s_tProf[s][c].Add(m_flProfFrame[s][c]);
+	for (int c = 0; c < CTX_COUNT; c++)
+		s_tModelCount[c].Add(float(m_nProfModelsFrame[c]));
+
+	if (s_flLastFlush <= 0.0 || flNow - s_flLastFlush > 0.5)
+	{
+		for (int i = 0; i < FACE_COUNT; i++)
+			s_tFace[i].Flush();
+		s_tCapture.Flush(); s_tComposite.Flush(); s_tMain.Flush();
+		s_tScene.Flush(); s_tViewmodel.Flush(); s_tFaces.Flush(); s_tFrame.Flush();
+		for (int s = 0; s < PROF_COUNT; s++)
+			for (int c = 0; c < CTX_COUNT; c++)
+				s_tProf[s][c].Flush();
+		for (int c = 0; c < CTX_COUNT; c++)
+			s_tModelCount[c].Flush();
+		s_bCheap = m_bMainPassCheap;
+		s_bSkipped = m_bSceneSkipped;
+		s_flLastFlush = flNow;
+	}
+
+	const auto& fFont = H::Fonts.GetFont(FONT_INDICATORS);
+	const Color_t tText = { 255, 255, 255, 255 };
+	const Color_t tOutline = { 0, 0, 0, 255 };
+	int iY = iPad * 3 + iTile * 2 + 8; // below the 3x2 tile grid
+	const int iLine = H::Draw.GetTextSize("W", fFont).y + 2;
+	const auto Line = [&](const std::string& sText)
+	{
+		H::Draw.StringOutlined(fFont, iPad, iY, tText, tOutline, ALIGN_TOPLEFT, sText.c_str());
+		iY += iLine;
+	};
+
+	Line(std::format("{} rig {}x{}, {:.1f} face(s)/frame, {:.0f} fps ({:.2f} ms)",
+		m_bWideRig ? "wide" : "cube", m_iFaceW, m_iFaceH, s_tFaces.m_flAvg,
+		s_tFrame.m_flAvg > 0.f ? 1000.f / s_tFrame.m_flAvg : 0.f, s_tFrame.m_flAvg));
+
+	// Main pass: "full" is the normal render; "replaced" is the scene-stripped
+	// pass under the composite - "scene skipped" when the ViewDrawScene hook
+	// cut the scene's CPU setup out, "cvars only" on the fallback path. The
+	// scene share is what the skip removes (only measurable while not skipped).
+	const char* szMode = !s_bCheap ? "full" : s_bSkipped ? "replaced, scene skipped" : "replaced, cvars only";
+	Line(s_bSkipped
+		? std::format("main {:.2f} ms ({})", s_tMain.m_flAvg, szMode)
+		: std::format("main {:.2f} ms ({})  scene {:.2f} ms", s_tMain.m_flAvg, szMode, s_tScene.m_flAvg));
+
+	static const char* s_szFaceShort[FACE_COUNT] = { "F", "B", "L", "R", "U", "D" };
+	std::string sFaces;
+	for (int i = 0; i < FACE_COUNT; i++)
+	{
+		if (!m_pFaceMaterials[i])
+			continue;
+		sFaces += std::format("{}{} {}", sFaces.empty() ? "" : "  ", s_szFaceShort[i],
+			s_tFace[i].m_flAvg > 0.f ? std::format("{:.2f}", s_tFace[i].m_flAvg) : std::string("-"));
+	}
+	Line(std::format("capture {:.2f} ms  [{}]", s_tCapture.m_flAvg, sFaces));
+
+	// Per-face capture frusta (h x v degrees) so the tight-faces narrowing is
+	// verifiable in-game: full faces read 130x130 (cube) / 130x145 (wide).
+	if (Vars::Visuals::UI::FlexFOVTightFaces.Value)
+	{
+		std::string sTight;
+		for (int i = 0; i < FACE_COUNT; i++)
+		{
+			if (!m_pFaceMaterials[i] || !m_bFaceCapValid[i])
+				continue;
+			sTight += std::format("{}{} {:.0f}x{:.0f}", sTight.empty() ? "" : "  ", s_szFaceShort[i],
+				2.f * std::atan(m_tFaceCapFrustum[i].m_flTanX) / FLEXFOV_DEG2RAD,
+				2.f * std::atan(m_tFaceCapFrustum[i].m_flTanY) / FLEXFOV_DEG2RAD);
+		}
+		Line(std::format("tight frusta  [{}]", sTight));
+	}
+
+	Line(std::format("composite {:.2f} ms  viewmodel {:.2f} ms", s_tComposite.m_flAvg, s_tViewmodel.m_flAvg));
+
+	Line(std::format("flexfov total {:.2f} ms (capture + composite + viewmodel + main)",
+		s_tCapture.m_flAvg + s_tComposite.m_flAvg + s_tViewmodel.m_flAvg + s_tMain.m_flAvg));
+
+	// Scene-stage breakdown (the mini-vprof buckets), one row per stage with
+	// per-context columns, sorted by total cost so the top row is the thing to
+	// optimize next. "scene other" is the ViewDrawScene remainder no stage hook
+	// accounts for; "models" runs inside world/translucent (a breakdown, not an
+	// addition), so it's listed last with its draw counts instead of sorted in.
+	iY += iLine / 2;
+	Line("stage ms: main / faces / aux");
+
+	struct SRow { const char* m_szName; const SAvg* m_pCtx; };
+	SRow tRows[] =
+	{
+		{ "world", s_tProf[PROF_WORLD] },
+		{ "translucent", s_tProf[PROF_TRANSLUCENT] },
+		{ "3d skybox", s_tProf[PROF_SKY3D] },
+		{ "scene other", nullptr }, // computed below
+	};
+	float flOther[CTX_COUNT];
+	for (int c = 0; c < CTX_COUNT; c++)
+		flOther[c] = std::max(0.f, s_tProf[PROF_SCENE][c].m_flAvg - s_tProf[PROF_WORLD][c].m_flAvg
+			- s_tProf[PROF_TRANSLUCENT][c].m_flAvg - s_tProf[PROF_SKY3D][c].m_flAvg);
+
+	const auto Cell = [](float flMs) {
+		return flMs >= 0.005f ? std::format("{:.2f}", flMs) : std::string("-");
+	};
+	const auto RowTotal = [&](const SRow& tRow) {
+		float flTotal = 0.f;
+		for (int c = 0; c < CTX_COUNT; c++)
+			flTotal += tRow.m_pCtx ? tRow.m_pCtx[c].m_flAvg : flOther[c];
+		return flTotal;
+	};
+	std::sort(std::begin(tRows), std::end(tRows),
+		[&](const SRow& a, const SRow& b) { return RowTotal(a) > RowTotal(b); });
+
+	for (const auto& tRow : tRows)
+	{
+		std::string sCells;
+		for (int c = 0; c < CTX_COUNT; c++)
+			sCells += std::format("{}{}", c ? " / " : "", Cell(tRow.m_pCtx ? tRow.m_pCtx[c].m_flAvg : flOther[c]));
+		Line(std::format("{:<12} {}  ({:.2f})", tRow.m_szName, sCells, RowTotal(tRow)));
+	}
+
+	std::string sModelCells, sModelCounts;
+	for (int c = 0; c < CTX_COUNT; c++)
+	{
+		sModelCells += std::format("{}{}", c ? " / " : "", Cell(s_tProf[PROF_MODELS][c].m_flAvg));
+		sModelCounts += std::format("{}{:.0f}", c ? "/" : "", s_tModelCount[c].m_flAvg);
+	}
+	Line(std::format("{:<12} {}  ({} draws, inside world+transl)", "models", sModelCells, sModelCounts));
 }
 
 // M4: full reprojection. Tessellate the screen into a grid, map each vertex
@@ -785,6 +1195,8 @@ void CFlexFOV::DrawComposite()
 	m_bPaintedComposite = false;
 	if (!m_bComposite || !m_pFaceMaterials[FACE_FRONT] || !I::EngineClient->IsInGame())
 		return;
+
+	const double flCompositeStart = SDK::PlatFloatTime();
 
 	auto pRenderContext = I::MaterialSystem->GetRenderContext();
 
@@ -824,84 +1236,296 @@ void CFlexFOV::DrawComposite()
 	m_flTierLo = flLo;
 	m_flTierHi = flHi;
 
-	// The warp mesh depends only on (fov, strength, aspect, stereo blend) - never
-	// on the view angles directly, because the cube faces are view-aligned (the
-	// warp is done entirely in view-local ray space). So the whole grid - inverse
-	// projection, triangle face assignment, UVs - is rebuilt only when one of
-	// those inputs changes, not per frame. Per frame we just upload the cached
-	// buckets.
+	// Rotation compensation for staggered faces: build, per face, the rotation
+	// taking a mesh ray from the current view frame (the one m_vView* was
+	// latched with, same vintage as the freshest faces) into the frame the face
+	// was CAPTURED in. Rotation-only reprojection of world content is exact (no
+	// parallax), so a stale face still shows world-correct orientation. Ray
+	// space is x = right, y = up, z = -forward; the columns below are the
+	// images of those axes (world-ify with the current basis, project onto the
+	// capture basis).
+	const int nRigFaces = m_bWideRig ? (WideYawDeg(flFovX) > 0.f ? 2 : 1) : FACE_COUNT;
+	Vec3 vCapX[FACE_COUNT], vCapY[FACE_COUNT], vCapZ[FACE_COUNT];
+	bool bFaceUsable[FACE_COUNT] = {}, bFaceAligned[FACE_COUNT] = {};
+	bool bAllAligned = true;
+	for (int f = 0; f < nRigFaces; f++)
+	{
+		if (!m_bFaceCapValid[f] || !m_pFaceMaterials[f])
+			continue; // RT never written since the last rebuild: not a candidate
+		bFaceUsable[f] = true;
+		bFaceAligned[f] = m_vFaceCapFwd[f].Dot(m_vViewFwd) > 0.9999995f
+			&& m_vFaceCapUp[f].Dot(m_vViewUp) > 0.9999995f;
+		if (bFaceAligned[f])
+			continue;
+		// Only faces the cached mesh actually samples can invalidate it: an
+		// unneeded stale face (e.g. BACK at moderate fov, never re-captured)
+		// still gets its matrix as a rebuild candidate but must not force a
+		// bucket rebuild every frame.
+		if (m_bFaceNeeded[f])
+			bAllAligned = false;
+		vCapX[f] = Vec3(m_vViewRight.Dot(m_vFaceCapRight[f]), m_vViewRight.Dot(m_vFaceCapUp[f]), -m_vViewRight.Dot(m_vFaceCapFwd[f]));
+		vCapY[f] = Vec3(m_vViewUp.Dot(m_vFaceCapRight[f]), m_vViewUp.Dot(m_vFaceCapUp[f]), -m_vViewUp.Dot(m_vFaceCapFwd[f]));
+		vCapZ[f] = Vec3(-m_vViewFwd.Dot(m_vFaceCapRight[f]), -m_vViewFwd.Dot(m_vFaceCapUp[f]), m_vViewFwd.Dot(m_vFaceCapFwd[f]));
+	}
+
+	// The screen-space warp (the ray grid) depends only on (fov, strength,
+	// aspect, stereo blend) - never on the view angles directly, because the
+	// warp is done entirely in view-local ray space. The triangle buckets (face
+	// assignment + UVs) additionally depend on the per-face capture alignment:
+	// with every face fresh (identity) they're cached until a param changes;
+	// with any stale face they rebuild per frame from the cached rays (cheap -
+	// dot products and a rotate per vertex, no transcendentals).
 	// The rig is part of the key: the stereo toggles can flip it while every
 	// float input stays identical (e.g. toggling vertical-stereo while looking
-	// level), and a cube-rig mesh drawn with wide-rig textures is garbage.
+	// level), and a cube-rig mesh drawn with wide-rig textures is garbage. The
+	// frustum generation is too: a face recaptured with a different (tightened)
+	// frustum invalidates the cached UVs even when every param is identical.
 	static std::vector<FVert> vBuckets[FACE_COUNT];
 	static float s_flCacheFov = -1.f, s_flCacheStrength = -1.f, s_flCacheAspect = -1.f, s_flCacheStereo = -1.f;
 	static float s_flCacheLo = -1.f, s_flCacheHi = -1.f;
 	static int s_iCacheWide = -1;
-	if (flFovX != s_flCacheFov || flStrength != s_flCacheStrength || flAspect != s_flCacheAspect || flStereo != s_flCacheStereo
+	static unsigned int s_uCacheFrusGen = 0xffffffffu;
+	static bool s_bBucketsAligned = true; // cached buckets were built all-identity
+	const bool bParamsChanged = flFovX != s_flCacheFov || flStrength != s_flCacheStrength || flAspect != s_flCacheAspect || flStereo != s_flCacheStereo
 		|| flLo != s_flCacheLo || flHi != s_flCacheHi
-		|| int(m_bWideRig) != s_iCacheWide)
+		|| int(m_bWideRig) != s_iCacheWide;
+	const bool bFullRebuild = bParamsChanged || m_bWantDirty;
+	if (bFullRebuild || m_uFrustumGen != s_uCacheFrusGen || !bAllAligned || !s_bBucketsAligned)
 	{
 		s_flCacheFov = flFovX; s_flCacheStrength = flStrength; s_flCacheAspect = flAspect; s_flCacheStereo = flStereo;
 		s_flCacheLo = flLo; s_flCacheHi = flHi;
 		s_iCacheWide = int(m_bWideRig);
+		s_uCacheFrusGen = m_uFrustumGen;
+		s_bBucketsAligned = bAllAligned;
 
-		// Per-rig face set: bases in view-local ray space, per-axis UV scales
-		// (d = 0.5/tan(halfFov), the stitching invariant - per axis now that wide
-		// faces are taller than wide) and containment limits (tan(halfFov)*0.99).
-		Vec3 vBFwd[FACE_COUNT], vBRight[FACE_COUNT], vBUp[FACE_COUNT], vBBack[FACE_COUNT];
+		// Canonical (full-fov) face set for the rig, plus assignment priority.
+		Vec3 vCanFwd[FACE_COUNT], vCanRight[FACE_COUNT], vCanUp[FACE_COUNT];
+		float flHalfW, flHalfH;
+		const int nFaces = CanonicalRigBases(m_bWideRig, flFovX, vCanFwd, vCanRight, vCanUp, flHalfW, flHalfH);
 		int iPriority[FACE_COUNT];
-		int nFaces;
-		const float flHalfW = FLEXFOV_FACE_FOV * 0.5f * FLEXFOV_DEG2RAD;
-		float flHalfH = flHalfW;
 		if (m_bWideRig)
 		{
-			flHalfH = FLEXFOV_WIDE_FOV_V * 0.5f * FLEXFOV_DEG2RAD;
-			const float flYaw = WideYawDeg(flFovX);
-			nFaces = flYaw > 0.f ? 2 : 1;
-			const float s = std::sin(flYaw * FLEXFOV_DEG2RAD);
-			const float c = std::cos(flYaw * FLEXFOV_DEG2RAD);
 			for (int f = 0; f < nFaces; f++)
-			{
-				const float sgn = f == 0 ? 1.f : -1.f; // face 0 right, face 1 left
-				vBFwd[f]   = Vec3(sgn * s, 0.f, -c);
-				vBRight[f] = Vec3(c, 0.f, sgn * s);
-				vBUp[f]    = Vec3(0.f, 1.f, 0.f);
-				vBBack[f]  = Vec3(-sgn * s, 0.f, c);
 				iPriority[f] = f;
-			}
 		}
 		else
 		{
-			nFaces = FACE_COUNT;
 			// Priority: front first, then sides, back last - pack triangles into
 			// the fewest (and cheapest-to-have) faces.
 			static const int s_iCubePriority[FACE_COUNT] =
 				{ FACE_FRONT, FACE_LEFT, FACE_RIGHT, FACE_UP, FACE_DOWN, FACE_BACK };
 			for (int f = 0; f < FACE_COUNT; f++)
-			{
-				vBFwd[f] = s_FaceFwd[f]; vBRight[f] = s_FaceRight[f];
-				vBUp[f] = s_FaceUp[f]; vBBack[f] = s_FaceBack[f];
 				iPriority[f] = s_iCubePriority[f];
-			}
 		}
-		const float dU = 0.5f / std::tan(flHalfW);
-		const float dV = 0.5f / std::tan(flHalfH);
-		const float flLimW = std::tan(flHalfW) * 0.99f;
-		const float flLimH = std::tan(flHalfH) * 0.99f;
+		const float flFullTanX = std::tan(flHalfW);
+		const float flFullTanY = std::tan(flHalfH);
 
-		const int nGrid = 96; // finer grid: peripheral triangles span less angle at wide FOV
+		// Per-face frustum the current textures were CAPTURED with: bases in the
+		// capture view frame's ray space, containment limits (tan * 0.99) and UV
+		// scales (d = 0.5/tan, the stitching invariant - now per face and axis).
+		// With tight faces off (or before any tightening) these are exactly the
+		// canonical full-face values, reproducing the original behavior.
+		Vec3 vBFwd[FACE_COUNT], vBRight[FACE_COUNT], vBUp[FACE_COUNT];
+		float flLimX[FACE_COUNT] = {}, flLimY[FACE_COUNT] = {};
+		float dU[FACE_COUNT] = {}, dV[FACE_COUNT] = {};
+		for (int f = 0; f < nFaces; f++)
+		{
+			if (!bFaceUsable[f])
+				continue;
+			const FaceFrustum& tFrus = m_tFaceCapFrustum[f];
+			vBFwd[f] = tFrus.m_vFwd; vBRight[f] = tFrus.m_vRight; vBUp[f] = tFrus.m_vUp;
+			flLimX[f] = tFrus.m_flTanX * 0.99f;
+			flLimY[f] = tFrus.m_flTanY * 0.99f;
+			dU[f] = 0.5f / tFrus.m_flTanX;
+			dV[f] = 0.5f / tFrus.m_flTanY;
+		}
+
+		// Peripheral triangles only span enough angle to need the fine grid at
+		// very wide fov; below that a coarser mesh is visually identical and
+		// cuts the per-frame rebuild + dynamic upload cost by ~2.25x (the
+		// composite's whole cost scales with triangle count). Part of the cache
+		// key via flFovX.
+		const int nGrid = flFovX > 250.f ? 96 : 64;
 		const int nSide = nGrid + 1;
 
-		// Per-vertex rays and clip positions.
+		// Per-vertex rays and clip positions. Param-keyed only (never depend on
+		// the capture bases), so they survive the per-frame bucket rebuilds
+		// staggering causes while the camera turns.
 		static std::vector<Vec3> vRays;
-		vRays.resize(nSide * nSide);
-		for (int j = 0; j < nSide; j++)
+		if (bParamsChanged || int(vRays.size()) != nSide * nSide)
 		{
-			for (int i = 0; i < nSide; i++)
+			vRays.resize(nSide * nSide);
+			for (int j = 0; j < nSide; j++)
 			{
-				const float cx = -1.f + 2.f * i / nGrid;
-				const float cy = -1.f + 2.f * j / nGrid;
-				vRays[j * nSide + i] = ScreenToRay(cx, cy / flAspect, flFovX, flStrength, flStereo, flLo, flHi);
+				for (int i = 0; i < nSide; i++)
+				{
+					const float cx = -1.f + 2.f * i / nGrid;
+					const float cy = -1.f + 2.f * j / nGrid;
+					vRays[j * nSide + i] = ScreenToRay(cx, cy / flAspect, flFovX, flStrength, flStereo, flLo, flHi);
+				}
+			}
+		}
+
+		// --- Wanted capture rects (param-keyed) --------------------------------
+		// Redo the triangle assignment against the CANONICAL full-fov faces -
+		// deliberately ignoring the (possibly tightened) frusta the current
+		// textures hold - and record, per face, the tangent-space bounds of
+		// every vertex that lands on it. CaptureGlobe narrows each face's next
+		// capture to this rect plus margin. Computing it against the full faces
+		// is what lets a face's rect GROW again when the params change: deriving
+		// it from the drawn buckets would shrink-lock, since the drawn mask can
+		// only assign what the last (tight) capture contains.
+		if (bFullRebuild)
+		{
+			static std::vector<unsigned char> vIdealMask;
+			vIdealMask.assign(vRays.size(), 0);
+			for (int f = 0; f < nFaces; f++)
+			{
+				const unsigned char uBit = 1 << f;
+				for (size_t n = 0; n < vRays.size(); n++)
+				{
+					const Vec3& r = vRays[n];
+					const float lz = -Dot3(r, vCanFwd[f]);
+					if (lz < -0.05f
+						&& std::fabs(Dot3(r, vCanRight[f])) <= -lz * flFullTanX * 0.99f
+						&& std::fabs(Dot3(r, vCanUp[f])) <= -lz * flFullTanY * 0.99f)
+						vIdealMask[n] |= uBit;
+				}
+			}
+
+			float flX0[FACE_COUNT], flX1[FACE_COUNT], flY0[FACE_COUNT], flY1[FACE_COUNT];
+			for (int f = 0; f < FACE_COUNT; f++)
+			{
+				flX0[f] = flY0[f] = 1e30f;
+				flX1[f] = flY1[f] = -1e30f;
+			}
+			const auto AccumVert = [&](int iFace, int idx)
+			{
+				const Vec3& r = vRays[idx];
+				float lz = -Dot3(r, vCanFwd[iFace]);
+				if (lz > -0.2f)
+					lz = -0.2f; // same guard as the UV path (fallback verts can straddle)
+				const float tx = std::clamp(-Dot3(r, vCanRight[iFace]) / lz, -flFullTanX, flFullTanX);
+				const float ty = std::clamp(-Dot3(r, vCanUp[iFace]) / lz, -flFullTanY, flFullTanY);
+				flX0[iFace] = std::min(flX0[iFace], tx); flX1[iFace] = std::max(flX1[iFace], tx);
+				flY0[iFace] = std::min(flY0[iFace], ty); flY1[iFace] = std::max(flY1[iFace], ty);
+			};
+			const auto AccumTri = [&](int a, int b, int c)
+			{
+				// Same priority-then-fallback assignment as EmitTri below, on the
+				// canonical faces with the unrotated rays.
+				const unsigned char uMask = vIdealMask[a] & vIdealMask[b] & vIdealMask[c];
+				int iFace = -1;
+				for (int p = 0; p < nFaces && iFace < 0; p++)
+				{
+					const int f = iPriority[p];
+					if (uMask & (1 << f))
+						iFace = f;
+				}
+				if (iFace < 0)
+				{
+					const int tri[3] = { a, b, c };
+					float flBestMin = -1e30f;
+					for (int f = 0; f < nFaces; f++)
+					{
+						float flMin = 1e30f;
+						for (int t = 0; t < 3; t++)
+							flMin = std::min(flMin, Dot3(vRays[tri[t]], vCanFwd[f]));
+						if (flMin > flBestMin) { flBestMin = flMin; iFace = f; }
+					}
+				}
+				AccumVert(iFace, a); AccumVert(iFace, b); AccumVert(iFace, c);
+			};
+			for (int j = 0; j < nGrid; j++)
+			{
+				for (int i = 0; i < nGrid; i++)
+				{
+					const int v00 = j * nSide + i;
+					AccumTri(v00, v00 + nSide, v00 + nSide + 1);
+					AccumTri(v00, v00 + nSide + 1, v00 + 1);
+				}
+			}
+
+			// Margin + outward quantization per side, in angle space, clamped to
+			// the full face. Margin keeps a stale (staggered) face's content valid
+			// while the camera rotates between refreshes; quantization keeps the
+			// frustum stable so tiny mesh jitter doesn't force recaptures.
+			const auto Widen = [](float flLoTan, float flHiTan, float flHalfDeg, float& flOut0, float& flOut1)
+			{
+				float a0 = std::atan(flLoTan) / FLEXFOV_DEG2RAD - FLEXFOV_TIGHT_MARGIN_DEG;
+				float a1 = std::atan(flHiTan) / FLEXFOV_DEG2RAD + FLEXFOV_TIGHT_MARGIN_DEG;
+				a0 = std::floor(a0 / FLEXFOV_TIGHT_QUANT_DEG) * FLEXFOV_TIGHT_QUANT_DEG;
+				a1 = std::ceil(a1 / FLEXFOV_TIGHT_QUANT_DEG) * FLEXFOV_TIGHT_QUANT_DEG;
+				flOut0 = std::tan(std::max(a0, -flHalfDeg) * FLEXFOV_DEG2RAD);
+				flOut1 = std::tan(std::min(a1, flHalfDeg) * FLEXFOV_DEG2RAD);
+			};
+			const float flHalfDegW = flHalfW / FLEXFOV_DEG2RAD;
+			const float flHalfDegH = flHalfH / FLEXFOV_DEG2RAD;
+			for (int f = 0; f < FACE_COUNT; f++)
+			{
+				m_bWantValid[f] = f < nFaces && flX1[f] >= flX0[f];
+				if (!m_bWantValid[f])
+					continue;
+				Widen(flX0[f], flX1[f], flHalfDegW, m_flWantX0[f], m_flWantX1[f]);
+				Widen(flY0[f], flY1[f], flHalfDegH, m_flWantY0[f], m_flWantY1[f]);
+			}
+		}
+		m_bWantDirty = false;
+
+		// Per-face view of the rays: fresh (aligned) faces read the shared grid
+		// directly; stale faces get the grid rotated into their capture frame;
+		// unusable faces (never captured) are excluded from assignment entirely.
+		// Only faces the mesh can sample are candidates: in view-local ray space
+		// the needed set is fixed by the projection params (rotation never
+		// changes which view-local directions the screen shows), so the
+		// previous build's m_bFaceNeeded is the right filter - it keeps the
+		// per-vertex work below off faces like UP/DOWN/BACK that hold no
+		// triangles at this fov. A boundary sliver a rotated stale face drops
+		// can then only land on a needed face via the fallback (worst case a
+		// one-frame clamp smear at the extreme periphery, subtler than the
+		// ancient content the unneeded face would show).
+		//
+		// Containment is also resolved here, once per vertex per face, into a
+		// bitmask - each grid vertex is shared by up to 6 triangles, so testing
+		// at the vertex level instead of inside EmitTri does the same work
+		// several times cheaper.
+		static std::vector<Vec3> vFaceRays[FACE_COUNT];
+		static std::vector<unsigned char> vMask; // bit f: vertex ray inside face f's frustum
+		vMask.assign(vRays.size(), 0);
+		const Vec3* pRays[FACE_COUNT] = {};
+		for (int f = 0; f < nFaces; f++)
+		{
+			// The previous build's needed-set is only a valid filter while the
+			// projection params are unchanged (stagger-driven rebuilds): a param
+			// change (fov/strength/transition/stereo/rig) can make a previously
+			// unneeded face needed, and filtering it out here would push its
+			// triangles onto a neighbor's clamped edge (a stretched smear of that
+			// face's border) - and leave its bucket empty, latching m_bFaceNeeded
+			// false so it never recovers.
+			if (!bFaceUsable[f] || (!bFullRebuild && !m_bFaceNeeded[f]))
+				continue;
+			if (bFaceAligned[f])
+				pRays[f] = vRays.data();
+			else
+			{
+				vFaceRays[f].resize(vRays.size());
+				for (size_t n = 0; n < vRays.size(); n++)
+				{
+					const Vec3& r = vRays[n];
+					vFaceRays[f][n] = vCapX[f] * r.x + vCapY[f] * r.y + vCapZ[f] * r.z;
+				}
+				pRays[f] = vFaceRays[f].data();
+			}
+
+			const unsigned char uBit = 1 << f;
+			for (size_t n = 0; n < vRays.size(); n++)
+			{
+				const Vec3& r = pRays[f][n];
+				const float lz = -Dot3(r, vBFwd[f]);
+				if (lz < -0.05f
+					&& std::fabs(Dot3(r, vBRight[f])) <= -lz * flLimX[f]
+					&& std::fabs(Dot3(r, vBUp[f])) <= -lz * flLimY[f])
+					vMask[n] |= uBit;
 			}
 		}
 
@@ -917,23 +1541,18 @@ void CFlexFOV::DrawComposite()
 			const int tri[3] = { a, b, c };
 
 			// Assign the triangle to the highest-priority face that fully contains
-			// all three vertices. Nearest-face assignment would spread triangles
-			// across faces that the wide face fov makes unnecessary.
+			// all three vertices (precomputed per-vertex masks - containment was
+			// evaluated in each face's CAPTURE frame, so a stale face only claims
+			// triangles its content actually covers; as it rotates away, its
+			// border triangles migrate to fresher faces automatically). Nearest-
+			// face assignment would spread triangles across faces that the wide
+			// face fov makes unnecessary.
+			const unsigned char uMask = vMask[a] & vMask[b] & vMask[c];
 			int iFace = -1;
 			for (int p = 0; p < nFaces && iFace < 0; p++)
 			{
 				const int f = iPriority[p];
-				bool bContained = true;
-				for (int t = 0; t < 3 && bContained; t++)
-				{
-					const Vec3& r = vRays[tri[t]];
-					const float lz = Dot3(r, vBBack[f]);
-					if (lz > -0.05f
-						|| std::fabs(Dot3(r, vBRight[f])) > -lz * flLimW
-						|| std::fabs(Dot3(r, vBUp[f])) > -lz * flLimH)
-						bContained = false;
-				}
-				if (bContained)
+				if (uMask & (1 << f))
 					iFace = f;
 			}
 
@@ -945,28 +1564,32 @@ void CFlexFOV::DrawComposite()
 				float flBestMin = -1e30f;
 				for (int f = 0; f < nFaces; f++)
 				{
+					if (!pRays[f])
+						continue;
 					float flMin = 1e30f;
 					for (int t = 0; t < 3; t++)
-						flMin = std::min(flMin, Dot3(vRays[tri[t]], vBFwd[f]));
+						flMin = std::min(flMin, Dot3(pRays[f][tri[t]], vBFwd[f]));
 					if (flMin > flBestMin) { flBestMin = flMin; iFace = f; }
 				}
 			}
+			if (iFace < 0)
+				return; // no usable face at all (first frames after a rebuild)
 
 			for (int t = 0; t < 3; t++)
 			{
-				const Vec3& r = vRays[tri[t]];
-				float lz = Dot3(r, vBBack[iFace]); // < 0 for the owning face
+				const Vec3& r = pRays[iFace][tri[t]];
+				float lz = -Dot3(r, vBFwd[iFace]); // < 0 for the owning face
 				if (lz > -0.2f)
 					lz = -0.2f; // guard: never let a straddling vertex blow the UV to infinity
 				const float lx = Dot3(r, vBRight[iFace]);
 				const float ly = Dot3(r, vBUp[iFace]);
 				FVert fv;
 				fv.x = ClipX(tri[t]); fv.y = ClipY(tri[t]); fv.z = 0.5f;
-				// No UV clamp: faces are captured oversized (fov > the area the
-				// containment assigns them) so boundary triangles sample the
-				// overlap region and stitch seamlessly.
-				fv.u = -lx / lz * dU + 0.5f;
-				fv.v = 0.5f + ly / lz * dV; // v flipped for D3D top-left origin
+				// No UV clamp: faces are captured with margin around the containment
+				// rect (tight) or oversized outright (full), so boundary triangles
+				// sample the overlap region and stitch seamlessly.
+				fv.u = -lx / lz * dU[iFace] + 0.5f;
+				fv.v = 0.5f + ly / lz * dV[iFace]; // v flipped for D3D top-left origin
 				vBuckets[iFace].push_back(fv);
 			}
 		};
@@ -1062,6 +1685,7 @@ void CFlexFOV::DrawComposite()
 
 	pRenderContext->Release();
 
+	m_flCompositeMs = float((SDK::PlatFloatTime() - flCompositeStart) * 1000.0);
 	m_bPaintedComposite = true;
 }
 
@@ -1074,8 +1698,10 @@ void CFlexFOV::DrawComposite()
 // range expecting a fresh buffer.
 void CFlexFOV::DrawViewmodel()
 {
+	m_flViewmodelMs = 0.f;
 	if (!m_bPaintedComposite || !m_bViewSetupValid)
 		return;
+	const double flStart = SDK::PlatFloatTime();
 
 	auto pRenderContext = I::MaterialSystem->GetRenderContext();
 	pRenderContext->ClearBuffers(false, true, false);
@@ -1094,6 +1720,8 @@ void CFlexFOV::DrawViewmodel()
 
 	if (r_drawviewmodel)
 		r_drawviewmodel->SetValue(iOld);
+
+	m_flViewmodelMs = float((SDK::PlatFloatTime() - flStart) * 1000.0);
 }
 
 // Forward flex-FOV projection used by SDK::W2S while the composite is active.
@@ -1138,6 +1766,21 @@ bool CFlexFOV::WorldToScreen(const Vec3& vWorld, Vec3& vScreen, bool bAlways)
 		vScreen.y = (0.5f - 0.5f * cy) * H::Draw.m_nScreenH;
 	}
 	return false;
+}
+
+// Whether the face currently being captured (m_bDrawing) can possibly see a
+// point: angular test against the face axis, with slack for the entity's own
+// extent. Everything the per-face chams / glow passes draw is 2+ model draws
+// per entity per face, and at wide fov half the set is behind any given face.
+bool CFlexFOV::FaceCanSee(const Vec3& vOrigin, float flExtent)
+{
+	Vec3 vDelta = vOrigin - m_vEyeOrigin;
+	const float flDist = vDelta.Length();
+	if (flDist < 150.f) // close enough that the bbox can wrap any frustum
+		return true;
+	const float flSlack = std::asin(std::min(1.f, flExtent / flDist));
+	const float flCos = std::cos(std::min(3.14159f, m_flCaptureHalfAngle + flSlack));
+	return vDelta.Dot(m_vCaptureFwd) > flCos * flDist;
 }
 
 // Desired face width. Pixels-per-radian at a face center is
@@ -1208,6 +1851,19 @@ void CFlexFOV::Initialize()
 	for (int i = 0; i < FACE_COUNT; i++)
 		m_bFaceNeeded[i] = true;
 
+	// The new RTs hold no content yet: invalidate the capture snapshots so
+	// CaptureGlobe force-captures everything needed (bypassing the stagger
+	// schedule) before the composite samples any of them. The wanted rects are
+	// stale too (face indices remap across a rig switch): drop them so the
+	// first captures take the full faces, and have the next mesh build
+	// recompute them even if no projection param changed (size-only rebuilds).
+	for (int i = 0; i < FACE_COUNT; i++)
+	{
+		m_bFaceCapValid[i] = false;
+		m_bWantValid[i] = false;
+	}
+	m_bWantDirty = true;
+
 	// Generation-suffixed names: the old faces are deliberately kept alive for
 	// several frames after a rebuild (see RetireFaces/DrainRetired), and
 	// CreateNamedRenderTargetTextureEx resolves by name - a recurring name
@@ -1217,6 +1873,13 @@ void CFlexFOV::Initialize()
 	// rebuild's names unique.
 	static unsigned int s_uGeneration = 0;
 	s_uGeneration++;
+
+	// Auto-mipmap gives the reprojection trilinear filtering where faces are
+	// minified toward the composite edges, but regenerates the full mip chain
+	// on every face write. At low quality the faces render near/below screen
+	// density (little minification anywhere), so drop the mips there and save
+	// the per-write regeneration on the GPU-limited machines that slider is for.
+	const bool bMipmaps = std::clamp(Vars::Visuals::UI::FlexFOVQuality.Value, 0.2f, 1.f) > 0.6f;
 
 	const int nFaces = m_bWideRig ? 2 : FACE_COUNT;
 	for (int i = 0; i < nFaces; i++)
@@ -1236,9 +1899,7 @@ void CFlexFOV::Initialize()
 				// the screen, so the shared (framebuffer-sized) depth no longer fits.
 				MATERIAL_RT_DEPTH_SEPARATE,
 				TEXTUREFLAGS_CLAMPS | TEXTUREFLAGS_CLAMPT,
-				// Auto-mipmap so the reprojection samples with trilinear filtering
-				// (reduces aliasing where faces are minified toward the edges).
-				CREATERENDERTARGETFLAGS_HDR | CREATERENDERTARGETFLAGS_AUTOMIPMAP
+				CREATERENDERTARGETFLAGS_HDR | (bMipmaps ? CREATERENDERTARGETFLAGS_AUTOMIPMAP : 0)
 			);
 			if (!m_pFaceTextures[i]) // allocation failure (VRAM) - skip, don't deref
 				continue;

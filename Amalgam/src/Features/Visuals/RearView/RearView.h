@@ -35,7 +35,6 @@ private:
 	std::vector<CTFPlayer*> m_vVisible = {}; // enemies with LOS, gathered once per frame
 
 	int m_iLastW = 0, m_iLastH = 0, m_iLastCams = 0;
-	bool m_bCapturing = false;
 
 	bool SetupTargets(int iScrW, int iScrH, int iCams);
 	void FreeTargets();
@@ -45,6 +44,10 @@ private:
 	void RenderGlow(int iCamW, int iScrH); // outline glow into the currently-bound flank RT
 
 public:
+	// True while the flank cameras re-render the scene, so other hooks (e.g.
+	// FlexFOV's scene timing) can tell these sub-renders from the main pass.
+	bool m_bCapturing = false;
+
 	// Re-renders the flank cameras into their RTs. Called from the
 	// CViewRender_RenderView hook after the main-view render (guards against the
 	// FlexFOV / camera-window sub-renders that re-enter that same hook).

@@ -1166,6 +1166,10 @@ void CMenu::MenuVisuals(int iTab)
 						FSlider(Vars::Visuals::UI::FlexFOVStrength);
 						FSlider(Vars::Visuals::UI::FlexFOVTransition);
 						FSlider(Vars::Visuals::UI::FlexFOVQuality);
+						FSlider(Vars::Visuals::UI::FlexFOVStagger);
+						FToggle(Vars::Visuals::UI::FlexFOVStaggerFront);
+						FToggle(Vars::Visuals::UI::FlexFOVCheapPeriphery);
+						FToggle(Vars::Visuals::UI::FlexFOVTightFaces);
 						FToggle(Vars::Visuals::UI::FlexFOVStereographic);
 						FToggle(Vars::Visuals::UI::FlexFOVVertStereo);
 					}

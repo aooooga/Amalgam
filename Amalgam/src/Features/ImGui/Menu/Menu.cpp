@@ -1169,6 +1169,11 @@ void CMenu::MenuVisuals(int iTab)
 						FSlider(Vars::Visuals::UI::FlexFOVStagger);
 						FToggle(Vars::Visuals::UI::FlexFOVStaggerFront);
 						FToggle(Vars::Visuals::UI::FlexFOVCheapPeriphery);
+						PushTransparent(!Vars::Visuals::UI::FlexFOVCheapPeriphery.Value);
+						{
+							FToggle(Vars::Visuals::UI::FlexFOVCheapSky);
+						}
+						PopTransparent();
 						FToggle(Vars::Visuals::UI::FlexFOVTightFaces);
 						FToggle(Vars::Visuals::UI::FlexFOVStereographic);
 						FToggle(Vars::Visuals::UI::FlexFOVVertStereo);
@@ -1480,7 +1485,8 @@ void CMenu::MenuMisc(int iTab)
 				{
 					FToggle(Vars::Misc::Game::NetworkFix, FToggleEnum::Left);
 					FToggle(Vars::Misc::Game::SetupBonesOptimization, FToggleEnum::Right);
-					FToggle(Vars::Misc::Game::AntiCheatCompatibility);
+					FToggle(Vars::Misc::Game::AttributeCacheOptimization, FToggleEnum::Left);
+					FToggle(Vars::Misc::Game::AntiCheatCompatibility, FToggleEnum::Right);
 				} EndSection();
 				if (Vars::Debug::Options.Value)
 				{
@@ -4200,13 +4206,12 @@ static inline void ManageVars()
 		Vars::ESP::ActiveGroups.m_vValues.push_back(tGroup.m_sName.c_str());
 }
 
-void CMenu::Render()
+// Menu-toggle key handling, split out of Render so CRender can poll it every
+// Present even on frames where the whole ImGui pass is skipped (menu closed,
+// nothing ImGui-drawn pending) - otherwise the menu could never open again.
+// No ImGui calls in here.
+void CMenu::HandleToggle()
 {
-	using namespace ImGui;
-
-	if (!(GetIO().DisplaySize.x > 160.f && GetIO().DisplaySize.y > 28.f))
-		return;
-
 	m_bInKeybind = false;
 	if (m_bIsOpen)
 	{
@@ -4220,6 +4225,14 @@ void CMenu::Render()
 	}
 	if (U::KeyHandler.Pressed(Vars::Menu::PrimaryKey.Value) || U::KeyHandler.Pressed(Vars::Menu::SecondaryKey.Value))
 		I::MatSystemSurface->SetCursorAlwaysVisible(m_bIsOpen = !m_bIsOpen);
+}
+
+void CMenu::Render()
+{
+	using namespace ImGui;
+
+	if (!(GetIO().DisplaySize.x > 160.f && GetIO().DisplaySize.y > 28.f))
+		return;
 
 	PushFont(F::Render.FontRegular);
 	if (m_bIsOpen)

@@ -9,6 +9,8 @@
 #include "Fonts/Roboto/RobotoBlack.h"
 #include "Menu/Menu.h"
 #include "Menu/Components.h"
+#include "Notifications/Notifications.h"
+#include "../Binds/Binds.h"
 
 void CRender::Render(IDirect3DDevice9* pDevice)
 {
@@ -16,6 +18,17 @@ void CRender::Render(IDirect3DDevice9* pDevice)
 	{
 		Initialize(pDevice);
 	});
+
+	// Menu toggle keys are polled outside the ImGui frame so the frame itself
+	// can be skipped: with the menu closed and nothing ImGui-drawn pending
+	// (binds display, notifications), NewFrame/Render/RenderDrawData are a fixed
+	// per-Present cost for an empty draw list - pure frame time (= input
+	// latency) for nothing. ImGui is immediate-mode, so resuming after skipped
+	// frames is seamless.
+	F::Menu.HandleToggle();
+	if (!F::Menu.m_bIsOpen && !F::Notifications.Active()
+		&& !(F::Binds.m_bDisplay && !F::Binds.m_vBinds.empty()))
+		return;
 
 	LoadColors();
 	{

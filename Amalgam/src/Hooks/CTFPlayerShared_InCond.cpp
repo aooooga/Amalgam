@@ -13,37 +13,45 @@ MAKE_HOOK(CTFPlayerShared_InCond, S::CTFPlayerShared_InCond(), bool,
 {
 	DEBUG_RETURN(CTFPlayerShared_InCond, rcx, nCond);
 
-	const auto dwRetAddr = uintptr_t(_ReturnAddress());
-	const auto dwZoomPlayer = S::CTFPlayer_ShouldDraw_InCond_Call();
-	const auto dwZoomWearable = S::CTFWearable_ShouldDraw_InCond_Call();
-	const auto dwZoomHudScope = S::CHudScope_ShouldDraw_InCond_Call();
-	const auto dwTaunt = S::CTFPlayer_CreateMove_InCondTaunt_Call();
-	const auto dwKart1 = S::CTFPlayer_CreateMove_InCondKart_Call();
-	const auto dwKart2 = S::CTFInput_ApplyMouse_InCond_Call();
-
-	auto pLocal = H::Entities.GetLocal();
-	auto pShared = pLocal ? pLocal->m_Shared() : nullptr;
+	// InCond is one of the hottest functions in client.dll (every weapon /
+	// movement / HUD think checks conditions), so keep the fall-through path
+	// lean: no entity-list lookups before the switch - only the two cases that
+	// compare against the local player's shared pointer pay for GetLocal, and
+	// only after their (rarely-enabled) toggles pass.
+	const auto LocalShared = []() -> void*
+	{
+		auto pLocal = H::Entities.GetLocal();
+		return pLocal ? pLocal->m_Shared() : nullptr;
+	};
 
 	switch (nCond)
 	{
 	case TF_COND_ZOOMED:
-		if (dwRetAddr == dwZoomPlayer || dwRetAddr == dwZoomWearable || dwRetAddr == dwZoomHudScope && Vars::Visuals::Removals::Scope.Value)
+	{
+		const auto dwRetAddr = uintptr_t(_ReturnAddress());
+		if (dwRetAddr == S::CTFPlayer_ShouldDraw_InCond_Call() || dwRetAddr == S::CTFWearable_ShouldDraw_InCond_Call()
+			|| dwRetAddr == S::CHudScope_ShouldDraw_InCond_Call() && Vars::Visuals::Removals::Scope.Value)
 			return false;
 		break;
+	}
 	case TF_COND_DISGUISED:
-		if (Vars::Visuals::Removals::Disguises.Value && pShared != rcx)
+		if (Vars::Visuals::Removals::Disguises.Value && LocalShared() != rcx)
 			return false;
 		break;
 	case TF_COND_TAUNTING:
-		if (dwRetAddr == dwTaunt && Vars::Misc::Automation::TauntControl.Value)
+		if (uintptr_t(_ReturnAddress()) == S::CTFPlayer_CreateMove_InCondTaunt_Call() && Vars::Misc::Automation::TauntControl.Value)
 			return false;
-		if (Vars::Visuals::Removals::Taunts.Value && pShared != rcx)
+		if (Vars::Visuals::Removals::Taunts.Value && LocalShared() != rcx)
 			return false;
 		break;
 	case TF_COND_HALLOWEEN_KART:
-		if ((dwRetAddr == dwKart1 || dwRetAddr == dwKart2) && Vars::Misc::Automation::KartControl.Value)
+	{
+		const auto dwRetAddr = uintptr_t(_ReturnAddress());
+		if ((dwRetAddr == S::CTFPlayer_CreateMove_InCondKart_Call() || dwRetAddr == S::CTFInput_ApplyMouse_InCond_Call())
+			&& Vars::Misc::Automation::KartControl.Value)
 			return false;
 		break;
+	}
 	case TF_COND_FREEZE_INPUT:
 		if (!CALL_ORIGINAL(rcx, TF_COND_HALLOWEEN_KART) || Vars::Misc::Automation::KartControl.Value)
 			return false;

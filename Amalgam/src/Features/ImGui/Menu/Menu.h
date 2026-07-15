@@ -34,6 +34,7 @@ private:
 	size_t m_iMaxOutputSize = 1000;
 
 public:
+	void HandleToggle();
 	void Render();
 	void AddOutput(const char* sFunction, const char* sLog, Color_t tColor = Vars::Menu::Theme::Accent.Value);
 

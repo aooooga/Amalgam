@@ -562,6 +562,11 @@ NAMESPACE_BEGIN(Vars)
 			// front face - where the player is actually looking - stays full
 			// quality. No effect on the wide (<=2 face) rig.
 			CVar(FlexFOVCheapPeriphery, "Flex FOV cheap periphery## FlexFOVCheapPeriphery", false, VISUAL);
+			// Also skip the 3D skybox pass on cheap (non-front cube) faces: it's a
+			// whole extra world render per face for distant scenery. The missing
+			// skybox geometry makes a visible seam against faces that still draw
+			// it, so this is off by default - for fps-starved setups at 245+ fov.
+			CVar(FlexFOVCheapSky, "Flex FOV cheap periphery sky## FlexFOVCheapSky", false, VISUAL);
 			// Narrow each face capture to just the region the composite samples
 			// (plus margin) so the engine frustum-culls the rest of the scene
 			// pass; the main perf lever after face-count reduction.
@@ -811,6 +816,12 @@ NAMESPACE_BEGIN(Vars)
 		NAMESPACE_BEGIN(Game)
 			CVar(NetworkFix, "Network fix", false);
 			CVar(SetupBonesOptimization, "Bones optimization", false);
+			// Memoize CAttributeManager::AttribHookValue results for the rest of
+			// the frame. Item attributes are static per item, so within one frame
+			// the lookup is pure - but the engine (and our own weapon/aim logic)
+			// re-walks the attribute lists hundreds of times per frame (~2-3% of
+			// frame time on a full server per vprof).
+			CVar(AttributeCacheOptimization, "Attribute cache optimization", true);
 			CVar(AntiCheatCompatibility, "Anti-cheat compatibility", false);
 
 			CVar(AntiCheatCritHack, "Anti-cheat crit hack", false, NOSAVE | DEBUGVAR);

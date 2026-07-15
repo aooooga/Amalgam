@@ -4,6 +4,8 @@
 
 #include <vector>
 
+class IMesh;
+
 // Wide-angle FOV via globe reprojection (blinky / flex-fov technique).
 //
 // Phase 1: capture the scene as a view-aligned cube of 6 faces rendered from
@@ -80,6 +82,34 @@ private:
 	};
 	std::vector<RetiredFace> m_vRetired;
 	unsigned int m_uCaptureFrame = 0;
+
+	// Retained composite meshes. The triangle buckets are cached across frames,
+	// but the dynamic-mesh draw path still re-uploaded them every frame (~tens
+	// of thousands of identical vertex writes whenever the camera was still).
+	// One frame after the buckets stabilize they're baked into per-face static
+	// meshes and drawn with zero per-frame upload; frames where the buckets
+	// rebuilt (param change, stagger while turning) draw through the dynamic
+	// mesh as before, so the per-frame-rebuild case never churns static
+	// buffers. m_uCompBucketGen bumps on every bucket rebuild; m_uCompMeshGen
+	// is the generation the retained meshes were baked from (0 = none) - the
+	// retained path only draws when they match.
+	IMesh* m_pCompMesh[FACE_COUNT] = {};
+	unsigned int m_uCompBucketGen = 1;
+	unsigned int m_uCompMeshGen = 0;
+
+	// Like RetiredFace: the queued render thread can still replay draw commands
+	// referencing a static mesh for a couple frames after it went stale, so
+	// retired meshes wait out the same safety margin before DestroyStaticMesh.
+	struct RetiredMesh
+	{
+		IMesh* m_pMesh;
+		unsigned int m_uFrame;
+	};
+	std::vector<RetiredMesh> m_vRetiredMeshes;
+
+	// Moves the retained composite meshes onto the retired list and marks the
+	// retained generation stale (geometry changed or is going away).
+	void RetireCompMeshes();
 
 	// Moves the current face materials/textures onto the retired list (no
 	// destruction) so Initialize can build the replacement set.

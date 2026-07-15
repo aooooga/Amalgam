@@ -950,10 +950,26 @@ void CFlexFOV::CaptureGlobe(void* rcx, const CViewSetup& pViewSetup)
 			}
 		}
 
+		// Optional (FlexFOVCheapSky): drop the 3D skybox on cheap faces too. Each
+		// face draws the whole skybox world (its own DrawWorld/opaques pass, ~5%
+		// of frame time across faces in vprof) for distant scenery only. Kept
+		// separate from the always-on cheap list: the missing skybox geometry
+		// leaves a visible seam against faces that still draw it.
+		static auto r_3dsky = H::ConVars.FindVar("r_3dsky");
+		const bool bCheapSky = bCheapFace && Vars::Visuals::UI::FlexFOVCheapSky.Value && r_3dsky;
+		int iSavedSky = 0;
+		if (bCheapSky)
+		{
+			iSavedSky = r_3dsky->GetInt();
+			r_3dsky->SetValue(0);
+		}
+
 		RenderFace(rcx, pViewSetup, i, vAngles,
 			2.f * std::atan(tWant[i].m_flTanX) / FLEXFOV_DEG2RAD,
 			tWant[i].m_flTanX / std::max(tWant[i].m_flTanY, 1e-4f));
 
+		if (bCheapSky)
+			r_3dsky->SetValue(iSavedSky);
 		if (bCheapFace)
 		{
 			for (int c = 0; c < nCheapFaceCvars; c++)
@@ -1385,7 +1401,8 @@ void CFlexFOV::DrawComposite()
 		|| int(m_bWideRig) != s_iCacheWide;
 	m_flMeshBuildMs = 0.f;
 	const bool bFullRebuild = bParamsChanged || m_bWantDirty;
-	if (bFullRebuild || m_uFrustumGen != s_uCacheFrusGen || !bAllAligned || !s_bBucketsAligned)
+	const bool bRebuiltNow = bFullRebuild || m_uFrustumGen != s_uCacheFrusGen || !bAllAligned || !s_bBucketsAligned;
+	if (bRebuiltNow)
 	{
 		const double flMeshStart = SDK::PlatFloatTime();
 		s_flCacheFov = flFovX; s_flCacheStrength = flStrength; s_flCacheAspect = flAspect; s_flCacheStereo = flStereo;
@@ -1711,6 +1728,7 @@ void CFlexFOV::DrawComposite()
 
 		m_flMeshBuildMs = float((SDK::PlatFloatTime() - flMeshStart) * 1000.0);
 		m_nMeshRebuilds++;
+		m_uCompBucketGen++; // retained composite meshes (if any) are now stale
 	}
 	for (int f = 0; f < FACE_COUNT; f++)
 		m_nCompTris[f] = int(vBuckets[f].size()) / 3;
@@ -1727,55 +1745,118 @@ void CFlexFOV::DrawComposite()
 	pRenderContext->PushMatrix();
 	pRenderContext->LoadIdentity();
 
-	// One draw pass per face. Chunk each bucket to stay within dynamic limits.
-	for (int f = 0; f < FACE_COUNT; f++)
+	// Vertex/index fill shared by the dynamic and retained (static) mesh paths.
+	const auto FillVerts = [](MeshDesc_t& desc, const std::vector<FVert>& vBucket, int base, int nCount)
 	{
-		IMaterial* pMat = m_pFaceMaterials[f];
-		if (!pMat || vBuckets[f].empty())
-			continue;
-
-		pRenderContext->Bind(pMat);
-
-		int nMaxVerts = pRenderContext->GetMaxVerticesToRender(pMat);
-		int nMaxIndices = pRenderContext->GetMaxIndicesToRender();
-		int nChunk = std::min(nMaxVerts, nMaxIndices);
-		nChunk -= nChunk % 3; // whole triangles
-		if (nChunk < 3)
-			continue;
-
-		const int nTotal = static_cast<int>(vBuckets[f].size());
-		for (int base = 0; base < nTotal; base += nChunk)
+		for (int n = 0; n < nCount; n++)
 		{
-			const int nCount = std::min(nChunk, nTotal - base);
+			const FVert& fv = vBucket[base + n];
 
-			IMesh* pMesh = pRenderContext->GetDynamicMesh(true, nullptr, nullptr, pMat);
-			pMesh->SetPrimitiveType(MATERIAL_TRIANGLES);
-			m_nCompChunks++;
+			float* pPos = reinterpret_cast<float*>(reinterpret_cast<unsigned char*>(desc.m_pPosition) + n * desc.m_VertexSize_Position);
+			pPos[0] = fv.x; pPos[1] = fv.y; pPos[2] = fv.z;
 
-			MeshDesc_t desc;
-			pMesh->LockMesh(nCount, nCount, desc);
+			float* pUV = reinterpret_cast<float*>(reinterpret_cast<unsigned char*>(desc.m_pTexCoord[0]) + n * desc.m_VertexSize_TexCoord[0]);
+			pUV[0] = fv.u; pUV[1] = fv.v;
 
-			for (int n = 0; n < nCount; n++)
+			if (desc.m_VertexSize_Color)
 			{
-				const FVert& fv = vBuckets[f][base + n];
-
-				float* pPos = reinterpret_cast<float*>(reinterpret_cast<unsigned char*>(desc.m_pPosition) + n * desc.m_VertexSize_Position);
-				pPos[0] = fv.x; pPos[1] = fv.y; pPos[2] = fv.z;
-
-				float* pUV = reinterpret_cast<float*>(reinterpret_cast<unsigned char*>(desc.m_pTexCoord[0]) + n * desc.m_VertexSize_TexCoord[0]);
-				pUV[0] = fv.u; pUV[1] = fv.v;
-
-				if (desc.m_VertexSize_Color)
-				{
-					unsigned char* pCol = desc.m_pColor + n * desc.m_VertexSize_Color;
-					pCol[0] = pCol[1] = pCol[2] = pCol[3] = 255;
-				}
-
-				desc.m_pIndices[n] = static_cast<unsigned short>(desc.m_nFirstVertex + n);
+				unsigned char* pCol = desc.m_pColor + n * desc.m_VertexSize_Color;
+				pCol[0] = pCol[1] = pCol[2] = pCol[3] = 255;
 			}
 
-			pMesh->UnlockMesh(nCount, nCount, desc);
-			pMesh->Draw();
+			desc.m_pIndices[n] = static_cast<unsigned short>(desc.m_nFirstVertex + n);
+		}
+	};
+
+	// Retained-mesh upkeep. On a rebuild frame the old baked meshes no longer
+	// match the buckets - retire them (deferred destroy; queued draws may still
+	// reference them) and draw dynamic below. On the first stable frame after,
+	// bake the buckets into per-face static meshes; every later stable frame
+	// draws those with no vertex upload at all. IMesh::Draw routes through the
+	// material system's OnDrawMesh, so static draws queue exactly like dynamic
+	// ones under mat_queue_mode.
+	if (bRebuiltNow)
+		RetireCompMeshes();
+	else if (m_uCompMeshGen != m_uCompBucketGen)
+	{
+		bool bBaked = true;
+		for (int f = 0; f < FACE_COUNT; f++)
+		{
+			IMaterial* pMat = m_pFaceMaterials[f];
+			if (!pMat || vBuckets[f].empty())
+				continue;
+
+			// Single lock per face: a bucket tops out at nGrid^2*2 tris = ~55k
+			// verts/indices (96 grid, every triangle on one face), inside the
+			// unsigned-short index limit static meshes share with dynamic ones.
+			const int nTotal = static_cast<int>(vBuckets[f].size());
+			IMesh* pMesh = pRenderContext->CreateStaticMesh(pMat->GetVertexFormat(), "FlexFOV_Composite", pMat);
+			if (!pMesh)
+			{
+				bBaked = false; // OOM etc.: stay on the dynamic path this frame
+				continue;
+			}
+			pMesh->SetPrimitiveType(MATERIAL_TRIANGLES);
+
+			MeshDesc_t desc;
+			pMesh->LockMesh(nTotal, nTotal, desc);
+			FillVerts(desc, vBuckets[f], 0, nTotal);
+			pMesh->UnlockMesh(nTotal, nTotal, desc);
+
+			m_pCompMesh[f] = pMesh;
+		}
+		if (bBaked)
+			m_uCompMeshGen = m_uCompBucketGen;
+		else
+			RetireCompMeshes(); // partial bake is useless; retry next frame
+	}
+
+	if (m_uCompMeshGen == m_uCompBucketGen)
+	{
+		// Retained path: bind + draw, zero upload.
+		for (int f = 0; f < FACE_COUNT; f++)
+		{
+			if (!m_pFaceMaterials[f] || !m_pCompMesh[f])
+				continue;
+			pRenderContext->Bind(m_pFaceMaterials[f]);
+			m_pCompMesh[f]->Draw();
+			m_nCompChunks++;
+		}
+	}
+	else
+	{
+		// Dynamic path (buckets rebuilt this frame). One draw pass per face,
+		// chunked to stay within dynamic limits.
+		for (int f = 0; f < FACE_COUNT; f++)
+		{
+			IMaterial* pMat = m_pFaceMaterials[f];
+			if (!pMat || vBuckets[f].empty())
+				continue;
+
+			pRenderContext->Bind(pMat);
+
+			int nMaxVerts = pRenderContext->GetMaxVerticesToRender(pMat);
+			int nMaxIndices = pRenderContext->GetMaxIndicesToRender();
+			int nChunk = std::min(nMaxVerts, nMaxIndices);
+			nChunk -= nChunk % 3; // whole triangles
+			if (nChunk < 3)
+				continue;
+
+			const int nTotal = static_cast<int>(vBuckets[f].size());
+			for (int base = 0; base < nTotal; base += nChunk)
+			{
+				const int nCount = std::min(nChunk, nTotal - base);
+
+				IMesh* pMesh = pRenderContext->GetDynamicMesh(true, nullptr, nullptr, pMat);
+				pMesh->SetPrimitiveType(MATERIAL_TRIANGLES);
+				m_nCompChunks++;
+
+				MeshDesc_t desc;
+				pMesh->LockMesh(nCount, nCount, desc);
+				FillVerts(desc, vBuckets[f], base, nCount);
+				pMesh->UnlockMesh(nCount, nCount, desc);
+				pMesh->Draw();
+			}
 		}
 	}
 
@@ -2049,11 +2130,38 @@ void CFlexFOV::RetireFaces()
 	}
 }
 
+void CFlexFOV::RetireCompMeshes()
+{
+	for (int f = 0; f < FACE_COUNT; f++)
+	{
+		if (m_pCompMesh[f])
+			m_vRetiredMeshes.push_back({ m_pCompMesh[f], m_uCaptureFrame });
+		m_pCompMesh[f] = nullptr;
+	}
+	m_uCompMeshGen = 0; // retained set no longer matches any bucket generation
+}
+
 void CFlexFOV::DrainRetired(bool bAll)
 {
 	// The queued material system runs at most a couple of frames behind; 8
 	// capture frames is a comfortable margin before really destroying anything.
 	constexpr unsigned int uSafeAge = 8;
+
+	if (!m_vRetiredMeshes.empty())
+	{
+		auto pRenderContext = I::MaterialSystem->GetRenderContext();
+		for (auto it = m_vRetiredMeshes.begin(); it != m_vRetiredMeshes.end();)
+		{
+			if (!bAll && m_uCaptureFrame - it->m_uFrame < uSafeAge)
+			{
+				++it;
+				continue;
+			}
+			pRenderContext->DestroyStaticMesh(it->m_pMesh);
+			it = m_vRetiredMeshes.erase(it);
+		}
+		pRenderContext->Release();
+	}
 
 	for (auto it = m_vRetired.begin(); it != m_vRetired.end();)
 	{
@@ -2088,5 +2196,6 @@ void CFlexFOV::Unload()
 	F::Glow.UnloadFlexBuffers();
 
 	RetireFaces();
+	RetireCompMeshes();
 	DrainRetired(true);
 }

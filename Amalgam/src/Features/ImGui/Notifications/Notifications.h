@@ -21,6 +21,10 @@ public:
 	void Add(const std::string& sText, const char* sIcon, Color_t tColor = Vars::Menu::Theme::Accent.Value, float flLifeTime = Vars::Logging::NotificationTime.Value, float flPanTime = 0.2f);
 	void Add(const std::string& sText, Color_t tColor = Vars::Menu::Theme::Accent.Value, float flLifeTime = Vars::Logging::NotificationTime.Value, float flPanTime = 0.2f);
 	void Draw();
+
+	// Whether any notification is alive (expired ones included until Draw prunes
+	// them). CRender uses this to decide if the ImGui frame can be skipped.
+	bool Active() const { return !m_vNotifications.empty(); }
 };
 
 ADD_FEATURE(CNotifications, Notifications);

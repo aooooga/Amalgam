@@ -772,10 +772,9 @@ void CFlexFOV::CaptureGlobe(void* rcx, const CViewSetup& pViewSetup)
 	m_vViewAngles = pViewSetup.angles;
 	Math::AngleVectors(m_vViewAngles, &m_vViewFwd, &m_vViewRight, &m_vViewUp);
 
-	// Latch the whole view setup for DrawViewmodel (same vintage as the faces
-	// the next composite will show, so the viewmodel tracks the warped world).
-	m_tViewSetup = pViewSetup;
-	m_bViewSetupValid = true;
+	// (m_tViewSetup for DrawViewmodel is latched at the TOP of the RenderView
+	// hook instead - the viewmodel is screen-anchored and must use the current
+	// frame's eye, not this end-of-frame one, or it lags a frame and jitters.)
 
 	// Canonical rig bases and, per face, the frustum this capture should use:
 	// derived from the composite's wanted rect when tight faces apply, the full
@@ -1812,19 +1811,26 @@ void CFlexFOV::DrawViewmodel()
 	pRenderContext->ClearBuffers(false, true, false);
 	pRenderContext->Release();
 
-	// This runs inside the cheap main pass, where BeginCheapMainView zeroed
-	// r_drawviewmodel - and DrawViewModels re-checks that cvar internally
-	// (ShouldDrawViewModel), so without forcing it back on nothing draws.
+	// This runs inside the cheap main pass, where BeginCheapMainView zeroed the
+	// scene cvars - and DrawViewModels re-checks them internally: its
+	// ShouldDrawViewModel gate needs r_drawviewmodel AND (via ShouldDrawEntities)
+	// r_drawentities, so both must be forced back on or nothing draws.
 	static auto r_drawviewmodel = H::ConVars.FindVar("r_drawviewmodel");
-	const int iOld = r_drawviewmodel ? r_drawviewmodel->GetInt() : 1;
+	static auto r_drawentities = H::ConVars.FindVar("r_drawentities");
+	const int iOldViewmodel = r_drawviewmodel ? r_drawviewmodel->GetInt() : 1;
+	const int iOldEntities = r_drawentities ? r_drawentities->GetInt() : 1;
 	if (r_drawviewmodel)
 		r_drawviewmodel->SetValue(1);
+	if (r_drawentities)
+		r_drawentities->SetValue(1);
 
 	static auto CViewRender_DrawViewModels = U::Hooks.m_mHooks["CViewRender_DrawViewModels"];
 	CViewRender_DrawViewModels->Call<void>(I::ViewRender, m_tViewSetup, true);
 
 	if (r_drawviewmodel)
-		r_drawviewmodel->SetValue(iOld);
+		r_drawviewmodel->SetValue(iOldViewmodel);
+	if (r_drawentities)
+		r_drawentities->SetValue(iOldEntities);
 
 	m_flViewmodelMs = float((SDK::PlatFloatTime() - flStart) * 1000.0);
 }

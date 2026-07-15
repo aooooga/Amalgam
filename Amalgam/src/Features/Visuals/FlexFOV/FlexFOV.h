@@ -171,8 +171,11 @@ public:
 	// DrawViewmodel knows the viewmodels need re-drawing on top.
 	bool m_bPaintedComposite = false;
 
-	// Main-view setup latched in CaptureGlobe (same vintage as the face textures
-	// the composite shows), used to re-render viewmodels after the composite.
+	// Main-view setup latched at the top of the CViewRender_RenderView hook
+	// (current frame, since the HUD paint that redraws the viewmodel runs inside
+	// that same RenderView call), used to re-render viewmodels after the
+	// composite. Deliberately fresher than the composite's face captures: the
+	// viewmodel is screen-anchored, so a frame-old setup makes it jitter.
 	CViewSetup m_tViewSetup = {};
 	bool m_bViewSetupValid = false;
 

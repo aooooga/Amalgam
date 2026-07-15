@@ -120,6 +120,14 @@ MAKE_HOOK(CViewRender_RenderView, U::Memory.GetVirtual(I::ViewRender, 6), void,
 	if (Vars::Visuals::UI::ViewmodelFOV.Value)
 		tView.fovViewmodel = Vars::Visuals::UI::ViewmodelFOV.Value;
 
+	// Latch THIS frame's setup for the post-composite viewmodel redraw (the HUD
+	// paint that runs it happens inside CALL_ORIGINAL below). The viewmodel is
+	// screen-anchored and its bones are set up from this frame's eye, so it must
+	// render with this frame's view too - the end-of-frame setup CaptureGlobe
+	// latches for the composite/W2S math is a frame behind and made it jitter.
+	F::FlexFOV.m_tViewSetup = tView;
+	F::FlexFOV.m_bViewSetupValid = true;
+
 	// When the FlexFOV composite owns the frame it repaints every pixel from the
 	// captured faces, so the scene part of the main pass is pure wasted work.
 	// The pass itself must still run - the in-game HUD paint (which draws the

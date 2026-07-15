@@ -130,6 +130,11 @@ void CBacktrack::UpdateDatagram()
 
 bool CBacktrack::GetRecords(CBaseEntity* pEntity, std::vector<TickRecord*>& vReturn)
 {
+	// Demand stamp for WantRecords - set even when no records exist yet, so a
+	// consumer that starts asking (backtrack chams, medigun lagcomp, ...) turns
+	// recording on and gets records within a net update or two.
+	m_flRecordsWanted = I::GlobalVars->realtime;
+
 	if (!m_mRecords.contains(pEntity))
 		return false;
 
@@ -321,9 +326,27 @@ void CBacktrack::Store()
 
 	static auto sv_maxunlag = H::ConVars.FindVar("sv_maxunlag");
 	m_flMaxUnlag = sv_maxunlag->GetFloat();
-	
-	MakeRecords();
+
+	if (WantRecords())
+		MakeRecords();
 	CleanRecords();
+}
+
+// MakeRecords is the most expensive thing in the net-update pipeline: a full
+// SetupBones(BONE_USED_BY_ANYTHING, at sim time) per updated player per packet,
+// which bypasses the engine's per-frame bone cache AND leaves it latched at sim
+// time, forcing the render pass to redo those players too. Skip it entirely
+// when nothing can consume records: the aim paths are known statically from
+// their vars (never a warmup gap), everything else (backtrack chams/glow, the
+// medigun pseudo-lagcomp, future callers) is covered demand-driven - any
+// GetRecords call keeps recording alive, and a consumer that just woke up only
+// waits a few packets while the record window refills.
+bool CBacktrack::WantRecords()
+{
+	return Vars::Aimbot::General::AimType.Value
+		|| Vars::Aimbot::Healing::AutoHeal.Value
+		|| GetFakeLatency() > 0.f || GetFakeInterp() > G::Lerp
+		|| I::GlobalVars->realtime - m_flRecordsWanted < 3.f;
 }
 
 void CBacktrack::ResolverUpdate(CBaseEntity* pEntity)

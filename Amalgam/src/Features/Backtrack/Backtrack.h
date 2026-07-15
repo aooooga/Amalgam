@@ -26,6 +26,11 @@ private:
 	void MakeRecords();
 	void CleanRecords();
 
+	// Whether anything can consume tick records right now (see Store).
+	bool WantRecords();
+	// Last realtime any consumer asked for records (GetRecords/GetBones).
+	float m_flRecordsWanted = -1e9f;
+
 	std::unordered_map<CBaseEntity*, std::deque<TickRecord>> m_mRecords = {};
 	std::unordered_map<int, bool> m_mDidShoot = {};
 

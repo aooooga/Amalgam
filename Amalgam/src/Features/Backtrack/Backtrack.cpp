@@ -135,10 +135,11 @@ bool CBacktrack::GetRecords(CBaseEntity* pEntity, std::vector<TickRecord*>& vRet
 	// recording on and gets records within a net update or two.
 	m_flRecordsWanted = I::GlobalVars->realtime;
 
-	if (!m_mRecords.contains(pEntity))
+	auto it = m_mRecords.find(pEntity);
+	if (it == m_mRecords.end())
 		return false;
 
-	auto& vRecords = m_mRecords[pEntity];
+	auto& vRecords = it->second;
 	vReturn.reserve(vRecords.size());
 	for (auto& tRecord : vRecords)
 		vReturn.push_back(&tRecord);
@@ -155,6 +156,7 @@ std::vector<TickRecord*> CBacktrack::GetValidRecords(std::vector<TickRecord*>& v
 		return {};
 
 	std::vector<TickRecord*> vReturn = {};
+	vReturn.reserve(vRecords.size()); // filtering only ever shrinks; sizes one alloc
 	float flCorrect = std::clamp(GetReal(MAX_FLOWS, false) + ROUND_TO_TICKS(GetFakeInterp()), 0.f, m_flMaxUnlag) + flTimeMod;
 	int iServerTick = m_iTickCount + TIME_TO_TICKS(GetReal(FLOW_OUTGOING)) + GetAnticipatedChoke() + Vars::Backtrack::Offset.Value;
 
@@ -172,11 +174,16 @@ std::vector<TickRecord*> CBacktrack::GetValidRecords(std::vector<TickRecord*>& v
 
 	if (vReturn.empty())
 	{	// make sure there is at least 1 record
+		// flMinDelta tracks the best *absolute* delta so far; storing the signed
+		// delta here used to drive it negative on the first record past the
+		// correct time, after which every fabsf() compared greater and the rest of
+		// the loop was skipped - so this picked the first in-window record rather
+		// than the nearest one.
 		float flMinDelta = 0.2f;
 		for (auto pRecord : vRecords)
 		{
-			float flDelta = flCorrect - TICKS_TO_TIME(iServerTick - TIME_TO_TICKS(pRecord->m_flSimTime));
-			if (fabsf(flDelta) > flMinDelta)
+			float flDelta = fabsf(flCorrect - TICKS_TO_TIME(iServerTick - TIME_TO_TICKS(pRecord->m_flSimTime)));
+			if (flDelta > flMinDelta)
 				continue;
 
 			flMinDelta = flDelta;
@@ -210,10 +217,17 @@ std::vector<TickRecord*> CBacktrack::GetValidRecords(std::vector<TickRecord*>& v
 
 matrix3x4* CBacktrack::GetBones(CBaseEntity* pEntity)
 {
-	std::vector<TickRecord*> vRecords = {};
-	if (F::Backtrack.GetRecords(pEntity, vRecords) && !vRecords.empty())
-		return vRecords.front()->m_aBones;
-	return nullptr;
+	// Reads the front record directly: going through GetRecords built a pointer
+	// vector over every stored record just to look at the first one, once per
+	// candidate player per tick.
+	// The demand stamp is GetRecords' other job and is load-bearing - without it
+	// WantRecords() would stop recording out from under this caller.
+	m_flRecordsWanted = I::GlobalVars->realtime;
+
+	auto it = m_mRecords.find(pEntity);
+	if (it == m_mRecords.end() || it->second.empty())
+		return nullptr;
+	return it->second.front().m_aBones;
 }
 
 

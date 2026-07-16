@@ -1,11 +1,12 @@
 #pragma once
 #include "../../Vars.h"
-#include <unordered_map>
+#include <array>
 
 enum EFonts
 {
 	FONT_ESP,
-	FONT_INDICATORS
+	FONT_INDICATORS,
+	FONT_COUNT
 };
 
 struct Font_t
@@ -18,7 +19,8 @@ struct Font_t
 class CFonts
 {
 private:
-	std::unordered_map<EFonts, Font_t> m_mFonts = {};
+	// Indexed by EFonts. A hash lookup per drawn text element bought nothing here.
+	std::array<Font_t, FONT_COUNT> m_aFonts = {};
 
 public:
 	void Reload(float flDPI = Vars::Menu::Scale[DEFAULT_BIND], bool bOutline = Vars::Menu::CheapText[DEFAULT_BIND]);

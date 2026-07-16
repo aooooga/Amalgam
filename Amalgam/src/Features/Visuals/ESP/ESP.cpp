@@ -789,11 +789,17 @@ void CESP::DrawPlayers()
 				int iRightCalf = pPlayer->GetBaseToHitbox(HITBOX_RIGHT_CALF);
 				int iRightFoot = pPlayer->GetBaseToHitbox(HITBOX_RIGHT_FOOT);
 
-				DrawBones(pPlayer, s_aBones, { iHead, iSpine2, iPelvis }, tCache.m_tColor);
-				DrawBones(pPlayer, s_aBones, { iSpine2, iLeftUpperarm, iLeftForearm, iLeftHand }, tCache.m_tColor);
-				DrawBones(pPlayer, s_aBones, { iSpine2, iRightUpperarm, iRightForearm, iRightHand }, tCache.m_tColor);
-				DrawBones(pPlayer, s_aBones, { iPelvis, iLeftThigh, iLeftCalf, iLeftFoot }, tCache.m_tColor);
-				DrawBones(pPlayer, s_aBones, { iPelvis, iRightThigh, iRightCalf, iRightFoot }, tCache.m_tColor);
+				const int aSpine[] = { iHead, iSpine2, iPelvis };
+				const int aLeftArm[] = { iSpine2, iLeftUpperarm, iLeftForearm, iLeftHand };
+				const int aRightArm[] = { iSpine2, iRightUpperarm, iRightForearm, iRightHand };
+				const int aLeftLeg[] = { iPelvis, iLeftThigh, iLeftCalf, iLeftFoot };
+				const int aRightLeg[] = { iPelvis, iRightThigh, iRightCalf, iRightFoot };
+
+				DrawBones(pPlayer, s_aBones, aSpine, tCache.m_tColor);
+				DrawBones(pPlayer, s_aBones, aLeftArm, tCache.m_tColor);
+				DrawBones(pPlayer, s_aBones, aRightArm, tCache.m_tColor);
+				DrawBones(pPlayer, s_aBones, aLeftLeg, tCache.m_tColor);
+				DrawBones(pPlayer, s_aBones, aRightLeg, tCache.m_tColor);
 			}
 		}
 
@@ -1028,7 +1034,7 @@ bool CESP::GetDrawBounds(CBaseEntity* pEntity, float& x, float& y, float& w, flo
 	return !(x > H::Draw.m_nScreenW || x + w < 0 || y > H::Draw.m_nScreenH || y + h < 0);
 }
 
-void CESP::DrawBones(CTFPlayer* pPlayer, matrix3x4* aBones, std::vector<int> vBones, Color_t tColor)
+void CESP::DrawBones(CTFPlayer* pPlayer, matrix3x4* aBones, std::span<const int> vBones, Color_t tColor)
 {
 	for (size_t n = 1; n < vBones.size(); n++)
 	{

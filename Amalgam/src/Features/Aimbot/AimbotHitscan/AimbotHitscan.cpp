@@ -343,40 +343,37 @@ void CAimbotHitscan::GetHullInfo(CBaseEntity* pTarget, TickRecord* pRecord, cons
 		*pTransform = &m_mHullMatrix, Math::MatrixInitialize(m_mHullMatrix, pRecord->m_vOrigin, false);
 }
 
-std::vector<Vec3> CAimbotHitscan::GetHitboxPoints(CBaseEntity* pTarget, CTFWeaponBase* pWeapon, const Vec3& vMins, const Vec3& vMaxs, int nHitbox)
+int CAimbotHitscan::GetHitboxPoints(CBaseEntity* pTarget, CTFWeaponBase* pWeapon, const Vec3& vMins, const Vec3& vMaxs, std::array<Vec3, MAX_HITBOX_POINTS>& aPoints, int nHitbox)
 {
-	std::vector<Vec3> vPoints = { Vec3() };
+	aPoints[0] = Vec3();
 
 	bool bPlayer = pTarget->IsPlayer();
 	if (bPlayer && !F::AimbotGlobal.ShouldMultipoint(pTarget, nHitbox, Vars::Aimbot::Hitscan::MultipointHitboxes.Value)
 		|| pWeapon->GetWeaponID() == TF_WEAPON_LASER_POINTER)
-		return vPoints;
+		return 1;
 
 	switch (Vars::Aimbot::General::AimType.Value)
 	{
 	case Vars::Aimbot::General::AimTypeEnum::Smooth:
 	case Vars::Aimbot::General::AimTypeEnum::Assistive:
 		if (!Vars::Aimbot::General::AssistStrength.Value)
-			return vPoints; // triggerbot
+			return 1; // triggerbot
 	}
 
 	float flScale = !bPlayer ? 0.5f : Vars::Aimbot::Hitscan::MultipointScale.Value / 100;
 	Vec3 vMinsS = (vMins - vMaxs) / 2 * flScale;
 	Vec3 vMaxsS = (vMaxs - vMins) / 2 * flScale;
 
-	vPoints = {
-		Vec3(),
-		Vec3(vMinsS.x, vMinsS.y, vMaxsS.z),
-		Vec3(vMaxsS.x, vMinsS.y, vMaxsS.z),
-		Vec3(vMinsS.x, vMaxsS.y, vMaxsS.z),
-		Vec3(vMaxsS.x, vMaxsS.y, vMaxsS.z),
-		Vec3(vMinsS.x, vMinsS.y, vMinsS.z),
-		Vec3(vMaxsS.x, vMinsS.y, vMinsS.z),
-		Vec3(vMinsS.x, vMaxsS.y, vMinsS.z),
-		Vec3(vMaxsS.x, vMaxsS.y, vMinsS.z)
-	};
+	aPoints[1] = Vec3(vMinsS.x, vMinsS.y, vMaxsS.z);
+	aPoints[2] = Vec3(vMaxsS.x, vMinsS.y, vMaxsS.z);
+	aPoints[3] = Vec3(vMinsS.x, vMaxsS.y, vMaxsS.z);
+	aPoints[4] = Vec3(vMaxsS.x, vMaxsS.y, vMaxsS.z);
+	aPoints[5] = Vec3(vMinsS.x, vMinsS.y, vMinsS.z);
+	aPoints[6] = Vec3(vMaxsS.x, vMinsS.y, vMinsS.z);
+	aPoints[7] = Vec3(vMinsS.x, vMaxsS.y, vMinsS.z);
+	aPoints[8] = Vec3(vMaxsS.x, vMaxsS.y, vMinsS.z);
 
-	return vPoints;
+	return MAX_HITBOX_POINTS;
 }
 
 int CAimbotHitscan::CanHit(Target_t& tTarget, CTFPlayer* pLocal, CTFWeaponBase* pWeapon)
@@ -462,9 +459,11 @@ int CAimbotHitscan::CanHit(Target_t& tTarget, CTFPlayer* pLocal, CTFWeaponBase* 
 			Vec3 vCenter; Math::VectorTransform((vMins + vMaxs) / 2, *pTransform, vCenter);
 			Vec3 vOffset = vCenter - vOrigin;
 
-			std::vector<Vec3> vPoints = GetHitboxPoints(tTarget.m_pEntity, pWeapon, vMins, vMaxs, tHitbox.m_iHitbox);
-			for (auto& vPoint : vPoints)
+			std::array<Vec3, MAX_HITBOX_POINTS> aPoints;
+			const int nPoints = GetHitboxPoints(tTarget.m_pEntity, pWeapon, vMins, vMaxs, aPoints, tHitbox.m_iHitbox);
+			for (int nPoint = 0; nPoint < nPoints; nPoint++)
 			{
+				const Vec3& vPoint = aPoints[nPoint];
 				Math::VectorTransform(vPoint, *pTransform, vOrigin); vOrigin += vOffset;
 				if (m_vEyePos.DistToSqr(vOrigin) > flMaxRangeSqr)
 					continue;
@@ -476,7 +475,7 @@ int CAimbotHitscan::CanHit(Target_t& tTarget, CTFPlayer* pLocal, CTFWeaponBase* 
 						goto skip; // if we can't hit our primary hitbox, don't bother
 				}
 
-				Vec3 vAngles; bool bChanged = Aim(G::CurrentUserCmd->viewangles, Math::CalcAngle(m_vEyePos, vOrigin), vAngles);
+				Vec3 vAngles; bool bChanged = Aim(G::CurrentUserCmd->viewangles, Math::CalcAngle(m_vEyePos, vOrigin), vAngles, pLocal);
 				if (pHoldAngle) vAngles -= F::NoSpread.GetOffset(); // hold angle recorded with nospread, correct it
 				if (!F::AimbotGlobal.ShouldAimAtAngle(vAngles) || !bChanged && !SDK::VisPos(pLocal, tTarget.m_pEntity, m_vEyePos, vOrigin))
 					continue;
@@ -585,7 +584,7 @@ bool CAimbotHitscan::ShouldFire(CTFPlayer* pLocal, CTFWeaponBase* pWeapon, CUser
 	return true;
 }
 
-bool CAimbotHitscan::Aim(const Vec3& vCurAngle, Vec3 vToAngle, Vec3& vOut, int iMethod)
+bool CAimbotHitscan::Aim(const Vec3& vCurAngle, Vec3 vToAngle, Vec3& vOut, CTFPlayer* pLocal, int iMethod)
 {
 	if (Vec3* pHoldAngle = F::Ticks.GetShootAngle())
 	{
@@ -594,7 +593,7 @@ bool CAimbotHitscan::Aim(const Vec3& vCurAngle, Vec3 vToAngle, Vec3& vOut, int i
 	}
 
 	bool bReturn = false;
-	if (auto pLocal = H::Entities.GetLocal())
+	if (pLocal)
 		vToAngle -= pLocal->m_vecPunchAngle();
 	switch (iMethod)
 	{

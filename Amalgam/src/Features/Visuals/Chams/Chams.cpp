@@ -25,8 +25,28 @@ void CChams::DrawModel(CBaseEntity* pEntity, const Chams_t& tChams, IMatRenderCo
 		m_mEntities[pEntity->entindex()];
 
 	// Local player's distance to the entity, for distance-based material colors.
-	auto pLocal = H::Entities.GetLocal();
-	const float flDistance = pLocal ? pLocal->GetAbsOrigin().DistTo(pEntity->GetAbsOrigin()) : -1.f;
+	// Resolved lazily: this runs per entity per render pass (x6 under FlexFOV's cube
+	// rig), while distance colors are off by default, so the GetLocal virtual calls
+	// and the sqrt would otherwise be spent for a value nothing reads. -1 means
+	// "unknown", which is what GetColor already falls back to.
+	float flDistance = -1.f;
+	bool bDistanceValid = false;
+	const auto GetDistance = [&]() -> float
+	{
+		if (!bDistanceValid)
+		{
+			bDistanceValid = true;
+			if (auto pLocal = H::Entities.GetLocal())
+				flDistance = pLocal->GetAbsOrigin().DistTo(pEntity->GetAbsOrigin());
+		}
+		return flDistance;
+	};
+	// Matches GetColor exactly: with the gradient off it resolves to the flat color
+	// regardless of distance, so there is no reason to go and measure one.
+	const auto ResolveColor = [&](const MaterialColor_t& tColor) -> Color_t
+	{
+		return tColor.Distance.Enabled ? tColor.GetColor(GetDistance()) : tColor.Color;
+	};
 
 	bool bOccluded = !tChams.Occluded.empty();
 	bool bSame = tChams.Visible == tChams.Occluded;
@@ -59,7 +79,7 @@ void CChams::DrawModel(CBaseEntity* pEntity, const Chams_t& tChams, IMatRenderCo
 		{
 			auto pMaterial = F::Materials.GetMaterial(FNV1A::Hash32(sName.c_str()));
 
-			F::Materials.SetColor(pMaterial, tColor.GetColor(flDistance));
+			F::Materials.SetColor(pMaterial, ResolveColor(tColor));
 			I::ModelRender->ForcedMaterialOverride(pMaterial ? pMaterial->m_pMaterial : nullptr);
 			if (pMaterial)
 			{
@@ -111,7 +131,7 @@ void CChams::DrawModel(CBaseEntity* pEntity, const Chams_t& tChams, IMatRenderCo
 		{
 			auto pMaterial = F::Materials.GetMaterial(FNV1A::Hash32(sName.c_str()));
 
-			F::Materials.SetColor(pMaterial, tColor.GetColor(flDistance));
+			F::Materials.SetColor(pMaterial, ResolveColor(tColor));
 			I::ModelRender->ForcedMaterialOverride(pMaterial ? pMaterial->m_pMaterial : nullptr);
 			if (pMaterial && pMaterial->m_bInvertCull)
 				pRenderContext->CullMode(MATERIAL_CULLMODE_CW);

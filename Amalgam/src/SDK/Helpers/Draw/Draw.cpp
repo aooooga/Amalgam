@@ -95,7 +95,10 @@ void CDraw::String(const Font_t& tFont, int x, int y, Color_t tColor, EAlign eAl
 	wsprintfW(s_wstr, L"%hs", str);
 	const auto dwFont = tFont.m_dwFont;
 
-	Vec2 vSize = GetTextSize(str, tFont);
+	// Measure the buffer we just converted, not the source string: the const char*
+	// overload would redo the whole conversion (and heap-allocate) for the same text.
+	// StringOutlined already does it this way.
+	Vec2 vSize = GetTextSize(s_wstr, tFont);
 	switch (eAlign)
 	{
 	case ALIGN_TOPLEFT: break;

@@ -47,7 +47,8 @@ bool CConVars::Modify(bool bUnlock)
 ConVar* CConVars::FindVar(const char* sCVar)
 {
 	auto uHash = FNV1A::Hash32(sCVar);
-	if (!m_mCVarMap.contains(uHash))
-		m_mCVarMap[uHash] = I::CVar->FindVar(sCVar);
-	return m_mCVarMap[uHash];
+	auto it = m_mCVarMap.find(uHash);
+	if (it == m_mCVarMap.end())
+		it = m_mCVarMap.emplace(uHash, I::CVar->FindVar(sCVar)).first;
+	return it->second;
 }

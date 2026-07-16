@@ -21,13 +21,15 @@ namespace FNV1A
 	}
 
 	// runtime hashes
+	// The char is sign-extended on purpose, matching Hash32Const/Hash64Const - hashes
+	// are compared against those and persisted in configs, so it must not change.
 	inline uint32_t Hash32(const char* szString)
 	{
 		uint32_t uHashed = uHash32;
 
-		for (std::size_t i = 0U; i < strlen(szString); ++i)
+		for (; *szString; ++szString)
 		{
-			uHashed ^= szString[i];
+			uHashed ^= uint32_t(*szString);
 			uHashed *= uPrime32;
 		}
 
@@ -37,9 +39,9 @@ namespace FNV1A
 	{
 		uint64_t uHashed = uHash64;
 
-		for (std::size_t i = 0U; i < strlen(szString); ++i)
+		for (; *szString; ++szString)
 		{
-			uHashed ^= szString[i];
+			uHashed ^= uint64_t(*szString);
 			uHashed *= uPrime64;
 		}
 

@@ -1603,10 +1603,15 @@ int CAimbotProjectile::CanHit(Target_t& tTarget, CTFPlayer* pLocal, CTFWeaponBas
 		if (i < 0)
 			continue;
 
-		for (auto& [iIndex, tOffset] : mDirects)
+		// Explicit iterator walk: the erase below removes the element being visited,
+		// which invalidated the range-for's own iterator before its implicit ++it.
+		for (auto it = mDirects.begin(); it != mDirects.end(); )
 		{
 			if (m_tInfo.m_iArmTime && m_tInfo.m_iArmTime > i && !m_tMoveStorage.m_MoveData.m_vecVelocity.IsZero())
 				break;
+
+			const uint8_t iIndex = it->first;
+			auto& tOffset = it->second;
 
 			Vec3& vOffset = tOffset.m_vOffset;
 			uint8_t iType = tOffset.m_iFlags & -tOffset.m_iFlags;
@@ -1642,8 +1647,12 @@ int CAimbotProjectile::CanHit(Target_t& tTarget, CTFPlayer* pLocal, CTFWeaponBas
 			case CalculateResultEnum::Bad:
 				tOffset.m_iFlags &= ~iType;
 				if (!(tOffset.m_iFlags /*& (PointFlagsEnum::Regular | PointFlagsEnum::Lob)*/))
-					mDirects.erase(iIndex);
+				{
+					it = mDirects.erase(it);
+					continue;
+				}
 			}
+			++it;
 		}
 
 		for (auto it = vSplashes.begin(); it != vSplashes.end();)
@@ -2342,8 +2351,13 @@ bool CAimbotProjectile::CanHit(Target_t& tTarget, CTFPlayer* pLocal, CTFWeaponBa
 		if (i < 0)
 			continue;
 
-		for (auto& [iIndex, tOffset] : mDirects)
+		// Explicit iterator walk: the erase below removes the element being visited,
+		// which invalidated the range-for's own iterator before its implicit ++it.
+		for (auto it = mDirects.begin(); it != mDirects.end(); )
 		{
+			const uint8_t iIndex = it->first;
+			auto& tOffset = it->second;
+
 			Vec3& vOffset = tOffset.m_vOffset;
 			uint8_t iType = tOffset.m_iFlags & -tOffset.m_iFlags;
 
@@ -2378,8 +2392,12 @@ bool CAimbotProjectile::CanHit(Target_t& tTarget, CTFPlayer* pLocal, CTFWeaponBa
 			case CalculateResultEnum::Bad:
 				tOffset.m_iFlags &= ~iType;
 				if (!(tOffset.m_iFlags /*& (PointFlagsEnum::Regular | PointFlagsEnum::Lob)*/))
-					mDirects.erase(iIndex);
+				{
+					it = mDirects.erase(it);
+					continue;
+				}
 			}
+			++it;
 		}
 
 		for (auto it = vSplashes.begin(); it != vSplashes.end();)

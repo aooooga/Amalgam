@@ -665,12 +665,28 @@ static const char* s_szSceneCvars[] =
 static constexpr int SCENE_CVAR_COUNT = sizeof(s_szSceneCvars) / sizeof(s_szSceneCvars[0]);
 static int s_iSavedSceneCvars[SCENE_CVAR_COUNT] = {};
 
+// FindVar hashes the name on every call and this list is walked twice per frame.
+// Resolve once - FindVar itself already caches the pointer (nullptr included) for
+// the process lifetime, so holding it here is the same lookup, minus the hashing.
+static ConVar* SceneCvar(int i)
+{
+	static ConVar* s_pSceneCvars[SCENE_CVAR_COUNT] = {};
+	static bool s_bResolved = false;
+	if (!s_bResolved)
+	{
+		for (int n = 0; n < SCENE_CVAR_COUNT; n++)
+			s_pSceneCvars[n] = H::ConVars.FindVar(s_szSceneCvars[n]);
+		s_bResolved = true;
+	}
+	return s_pSceneCvars[i];
+}
+
 void CFlexFOV::BeginCheapMainView()
 {
 	m_bReplacingView = true;
 	for (int i = 0; i < SCENE_CVAR_COUNT; i++)
 	{
-		if (auto pVar = H::ConVars.FindVar(s_szSceneCvars[i]))
+		if (auto pVar = SceneCvar(i))
 		{
 			s_iSavedSceneCvars[i] = pVar->GetInt();
 			pVar->SetValue(0);
@@ -682,7 +698,7 @@ void CFlexFOV::EndCheapMainView()
 {
 	for (int i = 0; i < SCENE_CVAR_COUNT; i++)
 	{
-		if (auto pVar = H::ConVars.FindVar(s_szSceneCvars[i]))
+		if (auto pVar = SceneCvar(i))
 			pVar->SetValue(s_iSavedSceneCvars[i]);
 	}
 	m_bReplacingView = false;
@@ -820,10 +836,19 @@ void CFlexFOV::CaptureGlobe(void* rcx, const CViewSetup& pViewSetup)
 		"r_occlusion", "r_drawdetailprops", "r_dynamic",
 	};
 	constexpr int nCaptureCvars = sizeof(s_szCaptureCvars) / sizeof(s_szCaptureCvars[0]);
+	// Resolved once rather than re-hashed twice per frame (see SceneCvar above).
+	static ConVar* s_pCaptureCvars[nCaptureCvars] = {};
+	static bool s_bCaptureCvarsResolved = false;
+	if (!s_bCaptureCvarsResolved)
+	{
+		for (int i = 0; i < nCaptureCvars; i++)
+			s_pCaptureCvars[i] = H::ConVars.FindVar(s_szCaptureCvars[i]);
+		s_bCaptureCvarsResolved = true;
+	}
 	int iSavedCaptureCvars[nCaptureCvars] = {};
 	for (int i = 0; i < nCaptureCvars; i++)
 	{
-		if (auto pVar = H::ConVars.FindVar(s_szCaptureCvars[i]))
+		if (auto pVar = s_pCaptureCvars[i])
 		{
 			iSavedCaptureCvars[i] = pVar->GetInt();
 			pVar->SetValue(0);
@@ -887,6 +912,15 @@ void CFlexFOV::CaptureGlobe(void* rcx, const CViewSetup& pViewSetup)
 		{ "r_lod", 2 }, { "r_staticprop_lod", 3 },
 	};
 	constexpr int nCheapFaceCvars = sizeof(s_tCheapFaceCvars) / sizeof(s_tCheapFaceCvars[0]);
+	// Resolved once rather than re-hashed per face per frame (see SceneCvar above).
+	static ConVar* s_pCheapFaceCvars[nCheapFaceCvars] = {};
+	static bool s_bCheapFaceCvarsResolved = false;
+	if (!s_bCheapFaceCvarsResolved)
+	{
+		for (int c = 0; c < nCheapFaceCvars; c++)
+			s_pCheapFaceCvars[c] = H::ConVars.FindVar(s_tCheapFaceCvars[c].m_szName);
+		s_bCheapFaceCvarsResolved = true;
+	}
 
 	m_flCaptureMs = 0.f;
 	m_nFacesCaptured = 0;
@@ -920,7 +954,7 @@ void CFlexFOV::CaptureGlobe(void* rcx, const CViewSetup& pViewSetup)
 		{
 			for (int c = 0; c < nCheapFaceCvars; c++)
 			{
-				if (auto pVar = H::ConVars.FindVar(s_tCheapFaceCvars[c].m_szName))
+				if (auto pVar = s_pCheapFaceCvars[c])
 				{
 					iSavedCheapCvars[c] = pVar->GetInt();
 					pVar->SetValue(s_tCheapFaceCvars[c].m_iCheap);
@@ -952,7 +986,7 @@ void CFlexFOV::CaptureGlobe(void* rcx, const CViewSetup& pViewSetup)
 		{
 			for (int c = 0; c < nCheapFaceCvars; c++)
 			{
-				if (auto pVar = H::ConVars.FindVar(s_tCheapFaceCvars[c].m_szName))
+				if (auto pVar = s_pCheapFaceCvars[c])
 					pVar->SetValue(iSavedCheapCvars[c]);
 			}
 		}
@@ -978,7 +1012,7 @@ void CFlexFOV::CaptureGlobe(void* rcx, const CViewSetup& pViewSetup)
 
 	for (int i = 0; i < nCaptureCvars; i++)
 	{
-		if (auto pVar = H::ConVars.FindVar(s_szCaptureCvars[i]))
+		if (auto pVar = s_pCaptureCvars[i])
 			pVar->SetValue(iSavedCaptureCvars[i]);
 	}
 

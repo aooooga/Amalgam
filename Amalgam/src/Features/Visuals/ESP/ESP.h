@@ -1,6 +1,8 @@
 #pragma once
 #include "../../../SDK/SDK.h"
 
+#include <span>
+
 struct Text_t
 {
 	int m_iMode = ALIGN_TOP;
@@ -47,7 +49,9 @@ private:
 	void DrawWorld();
 	
 	bool GetDrawBounds(CBaseEntity* pEntity, float& x, float& y, float& w, float& h);
-	void DrawBones(CTFPlayer* pPlayer, matrix3x4* aBones, std::vector<int> vBones, Color_t tColor);
+	// Takes a span: the braced bone lists at the call sites used to heap-allocate a
+	// vector each, five times per player per frame.
+	void DrawBones(CTFPlayer* pPlayer, matrix3x4* aBones, std::span<const int> vBones, Color_t tColor);
 
 	std::unordered_map<CBaseEntity*, PlayerCache_t> m_mPlayerCache = {};
 	std::unordered_map<CBaseEntity*, BuildingCache_t> m_mBuildingCache = {};

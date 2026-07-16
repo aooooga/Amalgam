@@ -858,31 +858,9 @@ void CFlexFOV::CaptureGlobe(void* rcx, const CViewSetup& pViewSetup)
 	// turning smooth while it's stale, so alternate-frame refresh only costs a
 	// frame of animation/translation lag at the crosshair. Never skipped when
 	// invalid (fresh RTs) so rebuild safety is unchanged.
-	//
-	// Also engages automatically above 160 fps, where a half-rate crosshair
-	// refresh (~3ms of world-content lag) is imperceptible. Smoothed fps with
-	// hysteresis (on > 160, off < 145) so it doesn't flap at the boundary -
-	// note the loop is self-reinforcing in the good direction: engaging raises
-	// fps, which keeps it engaged.
-	static float s_flAvgFrameTime = 0.f;
-	static double s_flLastFrameTime = 0.0;
-	static bool s_bAutoFront = false;
-	const double flNow = SDK::PlatFloatTime();
-	if (s_flLastFrameTime > 0.0)
-	{
-		const float flDt = float(flNow - s_flLastFrameTime);
-		if (flDt > 0.f && flDt < 1.f)
-			s_flAvgFrameTime = s_flAvgFrameTime <= 0.f ? flDt : s_flAvgFrameTime + (flDt - s_flAvgFrameTime) * 0.05f;
-	}
-	s_flLastFrameTime = flNow;
-	const float flFps = s_flAvgFrameTime > 0.f ? 1.f / s_flAvgFrameTime : 0.f;
-	if (!s_bAutoFront && flFps > 160.f)
-		s_bAutoFront = true;
-	else if (s_bAutoFront && flFps < 145.f)
-		s_bAutoFront = false;
-	m_bAutoStaggerFront = s_bAutoFront;
+	m_bAutoStaggerFront = false;
 
-	if (iBudget > 0 && (Vars::Visuals::UI::FlexFOVStaggerFront.Value || s_bAutoFront)
+	if (iBudget > 0 && Vars::Visuals::UI::FlexFOVStaggerFront.Value
 		&& bCapture[0] && m_bFaceCapValid[0] && !bFrusChanged[0]
 		&& m_uCaptureFrame - m_uFaceCapFrame[0] < 2)
 		bCapture[0] = false;

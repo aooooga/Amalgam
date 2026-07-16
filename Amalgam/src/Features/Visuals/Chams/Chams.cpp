@@ -169,7 +169,7 @@ void CChams::Store(CTFPlayer* pLocal)
 
 		const bool bChams = pGroup->m_tChams();
 		// Targeted material candidates: any entity whose group has it enabled. Which
-		// one is actually under the crosshair is resolved per frame in RenderMain(),
+		// one is actually under the crosshair is resolved per frame in UpdateTarget(),
 		// after interpolation, so the highlight matches the rendered model.
 		const bool bTarget = pGroup->m_tTargetChams(false);
 		if ((bChams || bTarget) && !pEntity->IsWearableVM()
@@ -202,6 +202,42 @@ void CChams::Store(CTFPlayer* pLocal)
 	}
 }
 
+// Resolve the crosshair target and fix up the original-model suppression set
+// before the scene renders. The trace runs here, per frame, rather than in
+// Store(): Store() runs at FRAME_NET_UPDATE_END where entities sit at their
+// latest networked positions, but models render interpolated (~cl_interp
+// behind), so a tick-time trace visibly desyncs from moving players.
+// FRAME_RENDER_START runs after interpolation, so the trace hits the hitbox
+// pose this frame actually renders.
+//
+// It must NOT run in RenderMain(): that draws after the scene, so the
+// suppression set (m_mEntities) it rebuilds only takes effect on the NEXT
+// frame's scene pass. On the frame the targeted state flips, a target-chams-
+// only entity (null m_pChams, registered only while targeted) would then have
+// its original model suppressed with no cham drawn over it - and with the
+// trace flickering through hitbox gaps as the crosshair settles on a player,
+// that repeats for several frames: the "no material" flash. Reconciling
+// membership here keeps the scene's suppression in lockstep with what
+// RenderMain() draws this same frame.
+void CChams::UpdateTarget()
+{
+	m_iTargetedEntity = GetCrosshairTarget(H::Entities.GetLocal());
+
+	for (auto& tInfo : m_vEntities)
+	{
+		// Entities with regular chams (or backtrack/fakeangle flags) draw every
+		// frame regardless of targeting - their membership never flips.
+		if (tInfo.m_iFlags || tInfo.m_pChams || !tInfo.m_pTargetChams)
+			continue;
+
+		const int iIndex = tInfo.m_pEntity->entindex();
+		if (m_iTargetedEntity && iIndex == m_iTargetedEntity)
+			m_mEntities[iIndex];
+		else
+			m_mEntities.erase(iIndex);
+	}
+}
+
 void CChams::RenderMain()
 {
 	auto pRenderContext = I::MaterialSystem->GetRenderContext();
@@ -213,20 +249,6 @@ void CChams::RenderMain()
 		return;
 
 	pRenderContext->ClearBuffers(false, false, true);
-
-	// Resolve the crosshair target here, per frame, rather than in Store():
-	// Store() runs at FRAME_NET_UPDATE_END where entities sit at their latest
-	// networked positions, but models render interpolated (~cl_interp behind),
-	// so a tick-time trace visibly desyncs from moving players. At render time
-	// the trace hits the interpolated hitboxes matching what's on screen.
-	// Cached per frame, not per render pass: with FlexFOV capturing this runs
-	// again for every face and the 8k-unit trace is identical within a frame.
-	static int s_iTargetFrame = -1;
-	if (s_iTargetFrame != I::GlobalVars->framecount)
-	{
-		s_iTargetFrame = I::GlobalVars->framecount;
-		m_iTargetedEntity = GetCrosshairTarget(H::Entities.GetLocal());
-	}
 
 	// The crosshair-targeted entity draws with its group's targeted material on
 	// both the visible and occluded passes (a solid, always-on-top highlight)

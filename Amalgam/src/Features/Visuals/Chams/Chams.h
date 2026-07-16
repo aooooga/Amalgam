@@ -15,8 +15,10 @@ private:
 	void RenderFakeAngle(const DrawModelState_t& pState, const ModelRenderInfo_t& pInfo);
 
 	// Entindex of the entity the local player's crosshair is currently on (eye
-	// trace through the aim direction), or 0. Resolved per frame in RenderMain()
-	// so it tracks interpolated (rendered) hitbox positions, not net-tick ones.
+	// trace through the aim direction), or 0. Resolved per frame in
+	// UpdateTarget() (FRAME_RENDER_START, post-interpolation) so it tracks
+	// rendered hitbox positions and the scene's original-model suppression
+	// matches what RenderMain() draws the same frame.
 	int GetCrosshairTarget(CTFPlayer* pLocal);
 	int m_iTargetedEntity = 0;
 
@@ -38,6 +40,7 @@ private:
 
 public:
 	void Store(CTFPlayer* pLocal);
+	void UpdateTarget();
 	void RenderMain();
 	void RenderHandler(const DrawModelState_t& pState, const ModelRenderInfo_t& pInfo, matrix3x4* pBoneToWorld);
 

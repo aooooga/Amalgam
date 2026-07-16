@@ -61,6 +61,11 @@ MAKE_HOOK(CHLClient_FrameStageNotify, U::Memory.GetVirtual(I::Client, 35), void,
 		break;
 	}
 	case FRAME_RENDER_START:
+		// Post-interpolation, pre-scene: the crosshair-target trace hits the
+		// hitbox pose this frame renders, and the targeted-chams suppression
+		// set updates before the scene consumes it (see CChams::UpdateTarget).
+		F::Chams.UpdateTarget();
+
 		for (auto& tBind : F::Binds.m_vBinds)
 		{	// don't drop inputs for binds
 			if (tBind.m_iType != BindEnum::Key)

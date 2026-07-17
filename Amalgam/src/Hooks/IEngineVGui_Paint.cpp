@@ -8,6 +8,7 @@
 #include "../Features/Visuals/Visuals.h"
 #include "../Features/Ticks/Ticks.h"
 #include "../Features/CritHack/CritHack.h"
+#include "../Features/Visuals/CritBar/CritBar.h"
 #include "../Features/Visuals/SpectatorList/SpectatorList.h"
 #include "../Features/Backtrack/Backtrack.h"
 #include "../Features/Visuals/PlayerConditions/PlayerConditions.h"
@@ -62,6 +63,7 @@ MAKE_HOOK(IEngineVGui_Paint, U::Memory.GetVirtual(I::EngineVGui, 14), void,
 			F::Backtrack.Draw(pLocal);
 			F::SpectatorList.Draw(pLocal);
 			F::CritHack.Draw(pLocal);
+			F::CritBar.Draw(pLocal);
 			F::Ticks.Draw(pLocal);
 
 #ifdef DEBUG_INFO

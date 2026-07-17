@@ -588,6 +588,21 @@ NAMESPACE_BEGIN(Vars)
 			CVar(CleanScreenshots, "Clean screenshots", true);
 		NAMESPACE_END(UI)
 
+		NAMESPACE_BEGIN(CritBar)
+			CVar(Enabled, "Crit bar", false, VISUAL);
+			CVar(Text, "Crit bar text", true, VISUAL);
+			CVar(Display, "Crit bar display", DragBox_t(), VISUAL | NOBIND);
+			CVar(Width, "Crit bar width", 160, VISUAL | SLIDER_CLAMP, 20, 600, 5);
+			CVar(Height, "Crit bar height", 14, VISUAL | SLIDER_CLAMP, 4, 80, 1);
+			CVar(Border, "Crit bar border", 1, VISUAL | SLIDER_CLAMP, 0, 10, 1);
+			CVar(BorderColor, "Crit bar border color", Color_t(0, 0, 0, 255), VISUAL);
+			CVar(BackgroundColor, "Crit bar background color", Color_t(20, 20, 20, 180), VISUAL);
+			CVar(CellColor, "Crit bar cell color", Color_t(0, 255, 100, 255), VISUAL);
+			CVar(ProgressColor, "Crit bar progress color", Color_t(120, 220, 160, 255), VISUAL);
+			CVar(BannedCellColor, "Crit bar banned cell color", Color_t(255, 50, 50, 255), VISUAL);
+			CVar(BannedProgressColor, "Crit bar banned progress color", Color_t(255, 140, 40, 255), VISUAL);
+		NAMESPACE_END(CritBar)
+
 		NAMESPACE_BEGIN(Thirdperson)
 			CVar(Enabled, "Thirdperson", false, VISUAL);
 			CVar(Crosshair, VA_LIST("Crosshair", "Thirdperson crosshair"), false, VISUAL);

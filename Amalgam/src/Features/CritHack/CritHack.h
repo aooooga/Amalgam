@@ -44,9 +44,13 @@ private:
 
 	float m_flDamage = 0.f;
 	float m_flCost = 0.f;
+	float m_flCritDamagePerCrit = 0.f; // expected crit damage dealt per crit token (full window for rapid-fire)
 	int m_iAvailableCrits = 0;
 	int m_iPotentialCrits = 0;
 	int m_iNextCrit = 0;
+	float m_flCritProgress = 0.f;  // [0,1] token-bucket charge toward the next crit becoming available
+	float m_flUnbanProgress = 1.f; // [0,1] recovery toward being allowed to crit again (1 = allowed)
+	int m_iSafeCrits = 0;          // crits that can be fired now before re-triggering a crit-ban
 
 	int m_iEntIndex = 0;
 	bool m_bMelee = false;
@@ -67,6 +71,15 @@ public:
 
 	float GetCritDamage() { return m_iCritDamage; }
 	float GetRangedDamage() { return m_iRangedDamage; }
+
+	// Accessors for the crit availability bar (F::CritBar)
+	int GetAvailableCrits() { return m_iAvailableCrits; }
+	int GetPotentialCrits() { return m_iPotentialCrits; }
+	int GetSafeCrits() { return m_iSafeCrits; }              // crits safe to fire before re-triggering a ban
+	float GetCritProgress() { return m_flCritProgress; }     // [0,1] charge toward the next crit
+	float GetUnbanProgress() { return m_flUnbanProgress; }   // [0,1] recovery toward being allowed again
+	float GetDamageTilFlip() { return m_flDamageTilFlip; }   // damage to deal to un-ban (when banned)
+	bool IsCritBanned() { return m_bCritBanned; }
 };
 
 ADD_FEATURE(CCritHack, CritHack);

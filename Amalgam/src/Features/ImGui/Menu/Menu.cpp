@@ -1359,6 +1359,20 @@ void CMenu::MenuVisuals(int iTab)
 					if (FToggle(Vars::Menu::CheapText))
 						H::Fonts.Reload();
 				} EndSection();
+				if (Section("Crit Bar"))
+				{
+					FToggle(Vars::Visuals::CritBar::Enabled, FToggleEnum::Left);
+					FToggle(Vars::Visuals::CritBar::Text, FToggleEnum::Right);
+					FSlider(Vars::Visuals::CritBar::Width, FSliderEnum::Left);
+					FSlider(Vars::Visuals::CritBar::Height, FSliderEnum::Right);
+					FSlider(Vars::Visuals::CritBar::Border, FSliderEnum::Left);
+					FColorPicker(Vars::Visuals::CritBar::CellColor, FColorPickerEnum::Left);
+					FColorPicker(Vars::Visuals::CritBar::ProgressColor, FColorPickerEnum::Right);
+					FColorPicker(Vars::Visuals::CritBar::BannedCellColor, FColorPickerEnum::Left);
+					FColorPicker(Vars::Visuals::CritBar::BannedProgressColor, FColorPickerEnum::Right);
+					FColorPicker(Vars::Visuals::CritBar::BorderColor, FColorPickerEnum::Left);
+					FColorPicker(Vars::Visuals::CritBar::BackgroundColor, FColorPickerEnum::Right);
+				} EndSection();
 				if (Vars::Debug::Options.Value)
 				{
 					if (Section("##Debug"))
@@ -4246,6 +4260,7 @@ void CMenu::Render()
 		AddDraggable("Ping", Vars::Menu::PingDisplay, FGet(Vars::Menu::Indicators) & Vars::Menu::IndicatorsEnum::Ping);
 		AddDraggable("Conditions", Vars::Menu::ConditionsDisplay, FGet(Vars::Menu::Indicators) & Vars::Menu::IndicatorsEnum::Conditions);
 		AddDraggable("Seed prediction", Vars::Menu::SeedPredictionDisplay, FGet(Vars::Menu::Indicators) & Vars::Menu::IndicatorsEnum::SeedPrediction);
+		AddDraggable("Crit bar", Vars::Visuals::CritBar::Display, FGet(Vars::Visuals::CritBar::Enabled));
 		AddResizableDraggable("Camera", Vars::Visuals::Simulation::ProjectileWindow, FGet(Vars::Visuals::Simulation::ProjectileCamera), OptionalConstraints);
 
 		F::Render.Cursor = GetMouseCursor();

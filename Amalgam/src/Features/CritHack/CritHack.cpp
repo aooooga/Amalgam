@@ -200,9 +200,15 @@ void CCritHack::UpdateWeaponInfo(CTFPlayer* pLocal, CTFWeaponBase* pWeapon)
 
 	m_flDamage = flBaseDamage;
 	m_flCost = flCost * flMult;
+	// Expected crit damage dealt per crit token: one shot's crit damage for single-fire, a full
+	// crit window's worth for rapid-fire. Uncapped (unlike the bucket cost) because the ban
+	// tracks damage actually dealt.
+	m_flCritDamagePerCrit = flBaseDamage * TF_DAMAGE_CRIT_MULTIPLIER
+		* (bRapidFire && flFireRate > 0.f ? TF_DAMAGE_CRIT_DURATION_RAPID / flFireRate : 1.f);
 	m_iPotentialCrits = iPotentialCrits;
 	m_iAvailableCrits = iAvailableCrits;
 	m_iNextCrit = iNextCrit;
+	m_flCritProgress = flBucketCap > 0.f ? std::clamp(flBucket / flBucketCap, 0.f, 1.f) : 0.f;
 }
 
 void CCritHack::UpdateInfo(CTFPlayer* pLocal, CTFWeaponBase* pWeapon)
@@ -211,6 +217,7 @@ void CCritHack::UpdateInfo(CTFPlayer* pLocal, CTFWeaponBase* pWeapon)
 
 	m_bCritBanned = false;
 	m_flDamageTilFlip = 0;
+	m_flUnbanProgress = 1.f; // recovery toward being allowed; 1 = allowed (not banned)
 	if (!m_bMelee)
 	{
 		const float flNormalizedDamage = m_iCritDamage / TF_DAMAGE_CRIT_MULTIPLIER;
@@ -219,12 +226,32 @@ void CCritHack::UpdateInfo(CTFPlayer* pLocal, CTFWeaponBase* pWeapon)
 		{
 			const float flObservedCritChance = flNormalizedDamage / (flNormalizedDamage + m_iRangedDamage - m_iCritDamage);
 			m_bCritBanned = flObservedCritChance > flCritChance;
+			// While banned, observed > allowed; dealing non-crit damage lowers observed back toward
+			// allowed. Ratio rises to 1 as we approach the un-ban threshold = "close to allowed".
+			if (m_bCritBanned && flObservedCritChance > 0.f)
+				m_flUnbanProgress = std::clamp(flCritChance / flObservedCritChance, 0.f, 1.f);
 		}
 
 		if (m_bCritBanned)
 			m_flDamageTilFlip = flNormalizedDamage / flCritChance + flNormalizedDamage * 2 - m_iRangedDamage;
 		else
 			m_flDamageTilFlip = TF_DAMAGE_CRIT_MULTIPLIER * (flNormalizedDamage - flCritChance * (flNormalizedDamage + m_iRangedDamage - m_iCritDamage)) / (flCritChance - 1);
+	}
+
+	// How many crits can be fired now before racking up enough crit damage to re-trigger a ban.
+	// Melee has no such damage-driven ban here, so every banked crit is safe.
+	if (m_bMelee)
+		m_iSafeCrits = m_iAvailableCrits;
+	else if (m_bCritBanned)
+		m_iSafeCrits = 0;
+	else
+	{
+		// m_flDamageTilFlip is the crit-damage headroom before a ban. The crit that *reaches* the
+		// threshold is itself still allowed (the game checks the pre-shot observed chance), so a
+		// non-banned weapon can always fire at least one crit -> floor(headroom / perCrit) + 1.
+		m_iSafeCrits = m_flCritDamagePerCrit > 0.f && m_flDamageTilFlip > 0.f
+			? int(m_flDamageTilFlip / m_flCritDamagePerCrit) + 1
+			: 1;
 	}
 
 	if (auto pResource = H::Entities.GetResource())

@@ -5,6 +5,7 @@
 #include "../Features/Visuals/CameraWindow/CameraWindow.h"
 #include "../Features/Visuals/FlexFOV/FlexFOV.h"
 #include "../Features/Visuals/Visuals.h"
+#include "../Features/Visuals/SentryRange/SentryRange.h"
 #include "../Features/Visuals/Materials/Materials.h"
 #include "../Features/Spectate/Spectate.h"
 #include "../Features/Aimbot/DoubleSticky/DoubleSticky.h"
@@ -28,6 +29,7 @@ MAKE_HOOK(CClientModeShared_DoPostScreenSpaceEffects, U::Memory.GetVirtual(I::Cl
 	if (!F::FlexFOV.m_bReplacingView)
 		F::DoubleSticky.Draw();
 	F::Visuals.DrawStickyRadius();
+	F::SentryRange.Draw();
 	// Cheap (scene-stripped) main pass: the composite paints over everything this
 	// pass produces, so chams / glow / effects here are pure wasted work.
 	if (F::CameraWindow.m_bDrawing || F::FlexFOV.m_bReplacingView)

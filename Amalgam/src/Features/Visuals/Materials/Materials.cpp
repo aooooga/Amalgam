@@ -4,6 +4,7 @@
 #include "../CameraWindow/CameraWindow.h"
 #include "../FlexFOV/FlexFOV.h"
 #include "../RearView/RearView.h"
+#include "../SentryRange/SentryRange.h"
 #include "../../Configs/Configs.h"
 #include "../../Binds/Binds.h"
 #include "../Groups/Groups.h"
@@ -252,6 +253,7 @@ void CMaterials::UnloadMaterials()
 	F::CameraWindow.Unload();
 	F::FlexFOV.Unload();
 	F::RearView.Unload();
+	F::SentryRange.Unload();
 }
 
 void CMaterials::ReloadMaterials()

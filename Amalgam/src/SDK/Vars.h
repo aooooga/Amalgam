@@ -249,6 +249,22 @@ NAMESPACE_BEGIN(Vars)
 		CVar(StickyRadiusIgnoreZ, "Sticky radius ignore Z color", Color_t(255, 255, 255, 255), VISUAL);
 		CVar(StickyRadiusPlayerInside, "Sticky radius player inside color", Color_t(255, 50, 50, 0), VISUAL);
 		CVar(StickyRadiusPlayerInsideIgnoreZ, "Sticky radius player inside ignore Z color", Color_t(255, 50, 50, 255), VISUAL);
+		CVar(SentryRangeEnemy, "Sentry range enemy edge color", Color_t(255, 100, 80, 255), VISUAL);
+		CVar(SentryRangeEnemyIgnoreZ, "Sentry range enemy edge ignore Z color", Color_t(255, 100, 80, 60), VISUAL);
+		CVar(SentryRangeTeam, "Sentry range team edge color", Color_t(80, 160, 255, 255), VISUAL);
+		CVar(SentryRangeTeamIgnoreZ, "Sentry range team edge ignore Z color", Color_t(80, 160, 255, 60), VISUAL);
+		CVar(SentryRangeLocal, "Sentry range local edge color", Color_t(100, 255, 120, 255), VISUAL);
+		CVar(SentryRangeLocalIgnoreZ, "Sentry range local edge ignore Z color", Color_t(100, 255, 120, 60), VISUAL);
+		CVar(SentryRangePlayerInside, "Sentry range player inside edge color", Color_t(255, 50, 50, 255), VISUAL);
+		CVar(SentryRangePlayerInsideIgnoreZ, "Sentry range player inside edge ignore Z color", Color_t(255, 50, 50, 80), VISUAL);
+		CVar(SentryRangeFillEnemy, "Sentry range enemy fill color", Color_t(255, 100, 80, 70), VISUAL);
+		CVar(SentryRangeFillEnemyIgnoreZ, "Sentry range enemy fill ignore Z color", Color_t(255, 100, 80, 25), VISUAL);
+		CVar(SentryRangeFillTeam, "Sentry range team fill color", Color_t(80, 160, 255, 70), VISUAL);
+		CVar(SentryRangeFillTeamIgnoreZ, "Sentry range team fill ignore Z color", Color_t(80, 160, 255, 25), VISUAL);
+		CVar(SentryRangeFillLocal, "Sentry range local fill color", Color_t(100, 255, 120, 70), VISUAL);
+		CVar(SentryRangeFillLocalIgnoreZ, "Sentry range local fill ignore Z color", Color_t(100, 255, 120, 25), VISUAL);
+		CVar(SentryRangeFillPlayerInside, "Sentry range player inside fill color", Color_t(255, 50, 50, 90), VISUAL);
+		CVar(SentryRangeFillPlayerInsideIgnoreZ, "Sentry range player inside fill ignore Z color", Color_t(255, 50, 50, 35), VISUAL);
 		CVar(DoubleStickyPath, "Double sticky path color", Color_t(0, 255, 140, 180), VISUAL);
 		CVar(RealPath, "Real path color", Color_t(255, 255, 255, 0), NOSAVE | DEBUGVAR);
 		CVar(RealPathIgnoreZ, "Real path ignore Z color", Color_t(255, 255, 255, 255), NOSAVE | DEBUGVAR);
@@ -737,6 +753,24 @@ NAMESPACE_BEGIN(Vars)
 			CVar(ProjectileWindow, "Projectile window", WindowBox_t(), VISUAL | NOBIND);
 			CVar(Box, VA_LIST("Box", "Path box"), true, VISUAL);
 		NAMESPACE_END(Simulation)
+
+		NAMESPACE_BEGIN(SentryRange)
+			CVarEnum(Draw, "Sentry range", 0b0, VISUAL | DROPDOWN_MULTI, "Off",
+				VA_LIST("Enemy", "Team", "Local", "##Divider", "Disabled", "Building"),
+				Enemy = 1 << 0, Team = 1 << 1, Local = 1 << 2, Disabled = 1 << 3, Building = 1 << 4,
+				Enabled = Enemy | Team | Local);
+			CVarValues(Style, "Sentry range style", 3, VISUAL, nullptr,
+				"Off", "Fill", "Edges", "Fill + Edges");
+			CVar(GridStep, VA_LIST("Grid step", "Sentry range grid step"), 50.f, VISUAL | SLIDER_MIN | SLIDER_PRECISION, 12.f, 96.f, 2.f);
+			CVar(FillAlpha, VA_LIST("Fill alpha", "Sentry range fill alpha"), 100.f, VISUAL | SLIDER_CLAMP | SLIDER_PRECISION, 0.f, 100.f, 5.f, "%g%%");
+			CVar(GroundOffset, VA_LIST("Ground offset", "Sentry range ground offset"), 4.f, VISUAL | SLIDER_MIN | SLIDER_PRECISION, 0.f, 32.f, 1.f);
+			CVar(MaxDistance, VA_LIST("Max distance", "Sentry range max distance"), 4000.f, VISUAL | SLIDER_MIN | SLIDER_PRECISION, 0.f, 8000.f, 250.f);
+			CVar(RefreshInterval, VA_LIST("Refresh interval", "Sentry range refresh interval"), 1.f, VISUAL | SLIDER_MIN | SLIDER_PRECISION, 0.25f, 5.f, 0.25f, "%gs");
+			CVar(DisabledAlpha, VA_LIST("Disabled alpha", "Sentry range disabled alpha"), 40.f, VISUAL | SLIDER_CLAMP | SLIDER_PRECISION, 0.f, 100.f, 5.f, "%g%%");
+
+			CVar(TraceBudget, "Sentry range trace budget", 300, NOSAVE | DEBUGVAR | SLIDER_MIN, 16, 2048);
+			CVar(TargetHeight, "Sentry range target height", 68.f, NOSAVE | DEBUGVAR | SLIDER_MIN | SLIDER_PRECISION, 0.f, 83.f, 1.f);
+		NAMESPACE_END(SentryRange)
 
 		NAMESPACE_BEGIN(Path)
 			Enum(Style, Off, Line, Separators, Spaced, Arrows, Boxes);

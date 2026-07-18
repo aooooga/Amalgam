@@ -518,6 +518,36 @@ void CMenu::MenuAimbot(int iTab)
 					FToggle(Vars::Visuals::Simulation::ProjectileCamera, FToggleEnum::Left);
 					FToggle(Vars::Visuals::Simulation::Box, FToggleEnum::Right);
 				} EndSection();
+				if (Section("Sentry Range"))
+				{
+					FDropdown(Vars::Visuals::SentryRange::Draw, FDropdownEnum::None, -10);
+					// compact 4x4 color grid: rows enemy / team / local / inside,
+					// picker order per row: fill igZ, fill, edge igZ, edge
+					const auto vPickerSize = ImVec2{ H::Draw.Scale(10), H::Draw.Scale(10) };
+					auto RowPickers = [&](auto& tFillIgnoreZ, auto& tFill, auto& tEdgeIgnoreZ, auto& tEdge, float flYOffset)
+					{
+						FColorPicker(tFillIgnoreZ, FColorPickerEnum::SameLine, { 0, H::Draw.Scale(flYOffset) }, vPickerSize);
+						FColorPicker(tFill, FColorPickerEnum::SameLine, { H::Draw.Scale(-10), H::Draw.Scale(-10) }, vPickerSize);
+						FColorPicker(tEdgeIgnoreZ, FColorPickerEnum::SameLine, { H::Draw.Scale(-10), H::Draw.Scale(-10) }, vPickerSize);
+						FColorPicker(tEdge, FColorPickerEnum::SameLine, { H::Draw.Scale(-10), H::Draw.Scale(-10) }, vPickerSize);
+					};
+					RowPickers(Vars::Colors::SentryRangeFillPlayerInsideIgnoreZ, Vars::Colors::SentryRangeFillPlayerInside,
+						Vars::Colors::SentryRangePlayerInsideIgnoreZ, Vars::Colors::SentryRangePlayerInside, 30.f);
+					RowPickers(Vars::Colors::SentryRangeFillLocalIgnoreZ, Vars::Colors::SentryRangeFillLocal,
+						Vars::Colors::SentryRangeLocalIgnoreZ, Vars::Colors::SentryRangeLocal, 30.f);
+					RowPickers(Vars::Colors::SentryRangeFillTeamIgnoreZ, Vars::Colors::SentryRangeFillTeam,
+						Vars::Colors::SentryRangeTeamIgnoreZ, Vars::Colors::SentryRangeTeam, 30.f);
+					RowPickers(Vars::Colors::SentryRangeFillEnemyIgnoreZ, Vars::Colors::SentryRangeFillEnemy,
+						Vars::Colors::SentryRangeEnemyIgnoreZ, Vars::Colors::SentryRangeEnemy, 30.f);
+					SameLine(); DebugDummy({ 2, H::Draw.Scale(48) });
+					FDropdown(Vars::Visuals::SentryRange::Style, FDropdownEnum::Left);
+					FSlider(Vars::Visuals::SentryRange::GridStep, FSliderEnum::Right);
+					FSlider(Vars::Visuals::SentryRange::FillAlpha, FSliderEnum::Left);
+					FSlider(Vars::Visuals::SentryRange::GroundOffset, FSliderEnum::Right);
+					FSlider(Vars::Visuals::SentryRange::MaxDistance, FSliderEnum::Left, !Vars::Visuals::SentryRange::MaxDistance[DEFAULT_BIND] ? "off" : "%g");
+					FSlider(Vars::Visuals::SentryRange::RefreshInterval, FSliderEnum::Right);
+					FSlider(Vars::Visuals::SentryRange::DisabledAlpha, FSliderEnum::Left);
+				} EndSection();
 				if (Vars::Debug::Options.Value)
 				{
 					if (Section("##Debug"))
@@ -531,6 +561,9 @@ void CMenu::MenuAimbot(int iTab)
 
 							FSlider(Vars::Visuals::Path::SeparatorSpacing, FSliderEnum::Left);
 							FSlider(Vars::Visuals::Path::SeparatorLength, FSliderEnum::Right);
+
+							FSlider(Vars::Visuals::SentryRange::TraceBudget, FSliderEnum::Left);
+							FSlider(Vars::Visuals::SentryRange::TargetHeight, FSliderEnum::Right);
 
 							EndPopup();
 						}

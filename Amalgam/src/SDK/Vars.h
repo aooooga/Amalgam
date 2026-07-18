@@ -249,23 +249,23 @@ NAMESPACE_BEGIN(Vars)
 		CVar(StickyRadiusIgnoreZ, "Sticky radius ignore Z color", Color_t(255, 255, 255, 255), VISUAL);
 		CVar(StickyRadiusPlayerInside, "Sticky radius player inside color", Color_t(255, 50, 50, 0), VISUAL);
 		CVar(StickyRadiusPlayerInsideIgnoreZ, "Sticky radius player inside ignore Z color", Color_t(255, 50, 50, 255), VISUAL);
-		CVar(SentryRangeEnemy, "Sentry range enemy edge color", Color_t(255, 100, 80, 255), VISUAL);
-		CVar(SentryRangeEnemyIgnoreZ, "Sentry range enemy edge ignore Z color", Color_t(255, 100, 80, 60), VISUAL);
-		CVar(SentryRangeTeam, "Sentry range team edge color", Color_t(80, 160, 255, 255), VISUAL);
-		CVar(SentryRangeTeamIgnoreZ, "Sentry range team edge ignore Z color", Color_t(80, 160, 255, 60), VISUAL);
-		CVar(SentryRangeLocal, "Sentry range local edge color", Color_t(100, 255, 120, 255), VISUAL);
-		CVar(SentryRangeLocalIgnoreZ, "Sentry range local edge ignore Z color", Color_t(100, 255, 120, 60), VISUAL);
-		CVar(SentryRangePlayerInside, "Sentry range player inside edge color", Color_t(255, 50, 50, 255), VISUAL);
-		CVar(SentryRangePlayerInsideIgnoreZ, "Sentry range player inside edge ignore Z color", Color_t(255, 50, 50, 80), VISUAL);
-		CVar(SentryRangeFillEnemy, "Sentry range enemy fill color", Color_t(255, 100, 80, 70), VISUAL);
-		CVar(SentryRangeFillEnemyIgnoreZ, "Sentry range enemy fill ignore Z color", Color_t(255, 100, 80, 25), VISUAL);
-		CVar(SentryRangeFillTeam, "Sentry range team fill color", Color_t(80, 160, 255, 70), VISUAL);
-		CVar(SentryRangeFillTeamIgnoreZ, "Sentry range team fill ignore Z color", Color_t(80, 160, 255, 25), VISUAL);
-		CVar(SentryRangeFillLocal, "Sentry range local fill color", Color_t(100, 255, 120, 70), VISUAL);
-		CVar(SentryRangeFillLocalIgnoreZ, "Sentry range local fill ignore Z color", Color_t(100, 255, 120, 25), VISUAL);
-		CVar(SentryRangeFillPlayerInside, "Sentry range player inside fill color", Color_t(255, 50, 50, 90), VISUAL);
-		CVar(SentryRangeFillPlayerInsideIgnoreZ, "Sentry range player inside fill ignore Z color", Color_t(255, 50, 50, 35), VISUAL);
-		CVar(DoubleStickyPath, "Double sticky path color", Color_t(0, 255, 140, 180), VISUAL);
+		CVar(SentryRangeEnemy, "Enemy edge color", Color_t(255, 100, 80, 255), VISUAL);
+		CVar(SentryRangeEnemyIgnoreZ, "Enemy edge ignore Z color", Color_t(255, 100, 80, 60), VISUAL);
+		CVar(SentryRangeTeam, "Team edge color", Color_t(80, 160, 255, 255), VISUAL);
+		CVar(SentryRangeTeamIgnoreZ, "Team edge ignore Z color", Color_t(80, 160, 255, 60), VISUAL);
+		CVar(SentryRangeLocal, "Local edge color", Color_t(100, 255, 120, 255), VISUAL);
+		CVar(SentryRangeLocalIgnoreZ, "Local edge ignore Z color", Color_t(100, 255, 120, 60), VISUAL);
+		CVar(SentryRangePlayerInside, "Player inside edge color", Color_t(255, 50, 50, 255), VISUAL);
+		CVar(SentryRangePlayerInsideIgnoreZ, "Player inside edge ignore Z color", Color_t(255, 50, 50, 80), VISUAL);
+		CVar(SentryRangeFillEnemy, "Enemy fill color", Color_t(255, 100, 80, 70), VISUAL);
+		CVar(SentryRangeFillEnemyIgnoreZ, "Enemy fill ignore Z color", Color_t(255, 100, 80, 25), VISUAL);
+		CVar(SentryRangeFillTeam, "Team fill color", Color_t(80, 160, 255, 70), VISUAL);
+		CVar(SentryRangeFillTeamIgnoreZ, "Team fill ignore Z color", Color_t(80, 160, 255, 25), VISUAL);
+		CVar(SentryRangeFillLocal, "Local fill color", Color_t(100, 255, 120, 70), VISUAL);
+		CVar(SentryRangeFillLocalIgnoreZ, "Local fill ignore Z color", Color_t(100, 255, 120, 25), VISUAL);
+		CVar(SentryRangeFillPlayerInside, "Player inside fill color", Color_t(255, 50, 50, 90), VISUAL);
+		CVar(SentryRangeFillPlayerInsideIgnoreZ, "Player inside fill ignore Z color", Color_t(255, 50, 50, 35), VISUAL);
+		CVar(DoubleStickyPath, "Path color", Color_t(0, 255, 140, 180), VISUAL);
 		CVar(RealPath, "Real path color", Color_t(255, 255, 255, 0), NOSAVE | DEBUGVAR);
 		CVar(RealPathIgnoreZ, "Real path ignore Z color", Color_t(255, 255, 255, 255), NOSAVE | DEBUGVAR);
 	NAMESPACE_END(Colors)
@@ -555,13 +555,13 @@ NAMESPACE_BEGIN(Vars)
 			CVar(FieldOfView, "Field of view## FOV", 0.f, VISUAL | SLIDER_MIN | SLIDER_PRECISION, 0.f, 360.f, 2.5f);
 			CVar(ZoomFieldOfView, "Zoomed field of view## Zoomed FOV", 0.f, VISUAL | SLIDER_MIN | SLIDER_PRECISION, 0.f, 160.f, 5.f);
 			CVar(FlexFOVDebug, "Flex FOV debug## FlexFOVDebug", false, VISUAL);
-			CVar(FlexFOVComposite, "Flex FOV composite## FlexFOVComposite", false, VISUAL);
+			CVar(FlexFOVComposite, "Composite## FlexFOVComposite", false, VISUAL);
 			CVar(FlexFOVStrength, "Flex FOV strength## FlexFOVStrength", 1.f, VISUAL | SLIDER_MIN | SLIDER_PRECISION, 0.f, 2.f, 0.05f);
 			CVar(FlexFOVTransition, "Flex FOV transition## FlexFOVTransition", FloatRange_t(160.f, 300.f), VISUAL | SLIDER_CLAMP, 90.f, 360.f, 5.f, "%g - %g");
-			CVar(FlexFOVStereographic, "Flex FOV stereographic## FlexFOVStereographic", false, VISUAL);
-			CVar(FlexFOVVertStereo, "Flex FOV vertical stereographic## FlexFOVVertStereo", false, VISUAL);
-			CVar(FlexFOVSkipMainView, "Flex FOV skip main view## FlexFOVSkipMainView", true, VISUAL);
-			CVar(FlexFOVQuality, "Flex FOV quality## FlexFOVQuality", 1.f, VISUAL | SLIDER_MIN | SLIDER_PRECISION, 0.35f, 1.f, 0.05f);
+			CVar(FlexFOVStereographic, "Stereographic## FlexFOVStereographic", false, VISUAL);
+			CVar(FlexFOVVertStereo, "Vertical stereographic## FlexFOVVertStereo", false, VISUAL);
+			CVar(FlexFOVSkipMainView, "Skip main view## FlexFOVSkipMainView", true, VISUAL);
+			CVar(FlexFOVQuality, "Quality## FlexFOVQuality", 1.f, VISUAL | SLIDER_MIN | SLIDER_PRECISION, 0.35f, 1.f, 0.05f);
 			// Peripheral faces re-captured round-robin, N per frame (0 = every face
 			// every frame). The front face always refreshes; stale faces are
 			// rotation-compensated by the composite, so only translation/animation
@@ -571,22 +571,22 @@ NAMESPACE_BEGIN(Vars)
 			// the most expensive face; rotation compensation keeps turning smooth,
 			// so the cost is one frame of animation/translation lag at the
 			// crosshair on alternate frames - below typical interp latency.
-			CVar(FlexFOVStaggerFront, "Flex FOV stagger front## FlexFOVStaggerFront", false, VISUAL);
+			CVar(FlexFOVStaggerFront, "Stagger front## FlexFOVStaggerFront", false, VISUAL);
 			// Render the non-front cube faces cheap: skip cosmetics, cull small
 			// entities (projectiles/pickups/ragdolls/weapons) past 1500u, and
 			// drop per-model detail (eyes/flex/jiggle, forced low LOD). The
 			// front face - where the player is actually looking - stays full
 			// quality. No effect on the wide (<=2 face) rig.
-			CVar(FlexFOVCheapPeriphery, "Flex FOV cheap periphery## FlexFOVCheapPeriphery", false, VISUAL);
+			CVar(FlexFOVCheapPeriphery, "Cheap periphery## FlexFOVCheapPeriphery", false, VISUAL);
 			// Also skip the 3D skybox pass on cheap (non-front cube) faces: it's a
 			// whole extra world render per face for distant scenery. The missing
 			// skybox geometry makes a visible seam against faces that still draw
 			// it, so this is off by default - for fps-starved setups at 245+ fov.
-			CVar(FlexFOVCheapSky, "Flex FOV cheap periphery sky## FlexFOVCheapSky", false, VISUAL);
+			CVar(FlexFOVCheapSky, "Cheap periphery sky## FlexFOVCheapSky", false, VISUAL);
 			// Narrow each face capture to just the region the composite samples
 			// (plus margin) so the engine frustum-culls the rest of the scene
 			// pass; the main perf lever after face-count reduction.
-			CVar(FlexFOVTightFaces, "Flex FOV tight faces## FlexFOVTightFaces", true, VISUAL);
+			CVar(FlexFOVTightFaces, "Tight faces## FlexFOVTightFaces", true, VISUAL);
 			CVar(RearView, "Enabled## RearView", false, VISUAL);
 			CVar(RearViewCameras, "Cameras## RearViewCameras", 4, VISUAL, 2, 8);
 			CVar(RearViewFOVOffset, "FOV offset## RearViewFOVOffset", 0.f, VISUAL | SLIDER_CLAMP | SLIDER_PRECISION, -180.f, 180.f, 1.f);
@@ -608,23 +608,23 @@ NAMESPACE_BEGIN(Vars)
 			CVar(Enabled, "Crit bar", false, VISUAL);
 			CVar(Text, "Crit bar text", true, VISUAL);
 			CVar(Display, "Crit bar display", DragBox_t(), VISUAL | NOBIND);
-			CVar(Width, "Crit bar width", 160, VISUAL | SLIDER_CLAMP, 20, 600, 5);
-			CVar(Height, "Crit bar height", 14, VISUAL | SLIDER_CLAMP, 4, 80, 1);
-			CVar(Border, "Crit bar border", 1, VISUAL | SLIDER_CLAMP, 0, 10, 1);
-			CVar(BorderColor, "Crit bar border color", Color_t(0, 0, 0, 255), VISUAL);
-			CVar(BackgroundColor, "Crit bar background color", Color_t(20, 20, 20, 180), VISUAL);
-			CVar(CellColor, "Crit bar cell color", Color_t(0, 255, 100, 255), VISUAL);
-			CVar(ProgressColor, "Crit bar progress color", Color_t(120, 220, 160, 255), VISUAL);
-			CVar(BannedCellColor, "Crit bar banned cell color", Color_t(255, 50, 50, 255), VISUAL);
-			CVar(BannedProgressColor, "Crit bar banned progress color", Color_t(255, 140, 40, 255), VISUAL);
+			CVar(Width, "Width", 160, VISUAL | SLIDER_CLAMP, 20, 600, 5);
+			CVar(Height, "Height", 14, VISUAL | SLIDER_CLAMP, 4, 80, 1);
+			CVar(Border, "Border", 1, VISUAL | SLIDER_CLAMP, 0, 10, 1);
+			CVar(BorderColor, "Border color", Color_t(0, 0, 0, 255), VISUAL);
+			CVar(BackgroundColor, "Background color", Color_t(20, 20, 20, 180), VISUAL);
+			CVar(CellColor, "Cell color", Color_t(0, 255, 100, 255), VISUAL);
+			CVar(ProgressColor, "Progress color", Color_t(120, 220, 160, 255), VISUAL);
+			CVar(BannedCellColor, "Banned cell color", Color_t(255, 50, 50, 255), VISUAL);
+			CVar(BannedProgressColor, "Banned progress color", Color_t(255, 140, 40, 255), VISUAL);
 		NAMESPACE_END(CritBar)
 
 		NAMESPACE_BEGIN(Thirdperson)
 			CVar(Enabled, "Thirdperson", false, VISUAL);
 			CVar(Crosshair, VA_LIST("Crosshair", "Thirdperson crosshair"), false, VISUAL);
-			CVar(Distance, "Thirdperson distance", 150.f, VISUAL | SLIDER_PRECISION, 0.f, 400.f, 10.f);
-			CVar(Right, "Thirdperson right", 0.f, VISUAL | SLIDER_PRECISION, -100.f, 100.f, 5.f);
-			CVar(Up, "Thirdperson up", 0.f, VISUAL | SLIDER_PRECISION, -100.f, 100.f, 5.f);
+			CVar(Distance, "Distance", 150.f, VISUAL | SLIDER_PRECISION, 0.f, 400.f, 10.f);
+			CVar(Right, "Right", 0.f, VISUAL | SLIDER_PRECISION, -100.f, 100.f, 5.f);
+			CVar(Up, "Up", 0.f, VISUAL | SLIDER_PRECISION, -100.f, 100.f, 5.f);
 
 			CVar(Scale, "Thirdperson scales", true, NOSAVE | DEBUGVAR);
 			CVar(Collide, "Thirdperson collides", true, NOSAVE | DEBUGVAR);

@@ -5,7 +5,7 @@ description: Build the Amalgam TF2 cheat DLL via nuget restore + msbuild and rep
 
 Build the Amalgam DLL for this repo (repo root — the folder containing `Amalgam.sln`).
 
-1. Determine the configuration to build. Default to `ReleaseAVX2` unless the user specifies one of: `Release`, `ReleaseFreetype`, `ReleaseFreetypeAVX2`, `Debug`, `DebugAVX2`, `DebugFreetype`, `DebugFreetypeAVX2`. Platform is always `x64`.
+1. Determine the configuration to build. `ReleaseAVX2` shall be the used setting, unless the user specifies one of: `Release`, `ReleaseFreetype`, `ReleaseFreetypeAVX2`, `Debug`, `DebugAVX2`, `DebugFreetype`, `DebugFreetypeAVX2`. Platform is always `x64`.
 
 2. Locate `nuget.exe`. Check if it's on PATH first (`nuget`). If not, check for a previously-downloaded copy in a local tools/temp folder; if none exists, download one:
    ```
@@ -22,8 +22,8 @@ Build the Amalgam DLL for this repo (repo root — the folder containing `Amalga
    msbuild Amalgam.sln /p:Platform=x64 /p:Configuration=<Configuration> /m
    ```
 
-5. On success, report the exact output path: `output/x64/<Configuration>/Amalgam.dll` (and the sibling `.pdb` if present). This is the file to attach when sharing a build in Discord.
+5. On success, report the exact output path: `output/x64/<Configuration>/Amalgam.dll` (and the sibling `.pdb` if present). This is the file to attach when sharing a build.
 
 6. On failure, surface the actual MSBuild error output (don't just say "build failed") — most likely causes are a stale NuGet restore or a missing/renamed source file after a merge.
 
-Do not commit built DLLs into the repo — the `build_v2`...`build_v10` folders are a legacy convention that is no longer used (see root `CLAUDE.md`). Built artifacts stay in `output/` and are shared directly (e.g. as a Discord attachment).
+If the build is attempted but the DLL is already injected, have it wait until it is unloaded to continue building.

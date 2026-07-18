@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Amalgam is a TF2 (Team Fortress 2) DLL cheat written in C++20, targeting `tf_win64.exe` (64-bit). It must be externally injected — this repo only produces the payload DLL.
 
-This is a **fork** (`origin` = `github.com/aooooga/Amalgam`, `upstream` = `github.com/rei-2/Amalgam`). The only meaningful divergence from upstream is the **FlexFOV** feature (see below), which enables wide-angle FOV up to 360°.
+This is a **fork** (`origin` = `github.com/aooooga/Amalgam`, `upstream` = `github.com/rei-2/Amalgam`).
 
 ## Build
 
@@ -37,9 +37,9 @@ C:\temp\nuget-tool\nuget.exe restore Amalgam.sln
 # Build:
 "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\MSBuild\Current\Bin\MSBuild.exe" Amalgam.sln /p:Platform=x64 /p:Configuration=Release /m
 ```
-Note: there's also a newer VS install under `C:\Program Files\Microsoft Visual Studio\18\...` — its MSBuild auto-detects first but lacks the v143 C++ toolset (`VCTargetsPath` for `v180` doesn't exist), so builds with it fail. Always invoke the 2022 BuildTools MSBuild explicitly by full path as above.
+Always use the `build-dll` skill (`/build-dll`) to run this end-to-end and get the resulting DLL path back.
 
-Use the `build-dll` skill (`/build-dll`) to run this end-to-end and get the resulting DLL path back.
+Note: If the build is attempted and the ReleaseAVX2 dll is already injected, have it wait until it is unloaded to continue.
 
 ## Testing
 
@@ -49,8 +49,8 @@ No automated tests. To test: build the DLL, then inject it into a running TF2 in
 
 - **Process check:** On load, the DLL hashes the host process name (FNV1A) and immediately self-unloads if it isn't `tf_win64.exe`.
 - **Load window:** After the process check passes, the DLL polls for `client.dll` readiness for up to 60 seconds. Press `F11` during this window to cancel loading.
-- **Unload hotkey:** Hold `F11` while TF2 is the focused window to cleanly unload the DLL at any time.
-- **Config path:** Config files are stored at a runtime path (likely `%APPDATA%\Amalgam\`); failures are logged to `fail_log.txt` there.
+- **Unload hotkey:** Press `F11` while TF2 is the focused window to cleanly unload the DLL at any time.
+- **Config path:** Config files are stored in `Program Files (x86)/Steam/steamapps/common/Team Fortress 2/Amalgam`; failures are logged to `fail_log.txt` there.
 
 ## Architecture
 
@@ -66,6 +66,8 @@ No automated tests. To test: build the DLL, then inject it into a running TF2 in
 
 ### Adding a feature
 
+**Before building or modifying any feature, invoke the `add-feature` skill** (`.claude/skills/add-feature/SKILL.md`) — it contains the full file checklist, hook call-site table, and verified API signatures (`H::Draw`, `H::Entities`, `SDK::W2S`, traces), so no codebase exploration is needed to start.
+
 Features are declared with the `ADD_FEATURE(ClassName, Name)` macro (`Amalgam/src/Utils/Macros/Macros.h`) at the bottom of the header — this registers `F::Name` as a file-scope inline instance in `namespace F`. See `Aimbot.h` / `Visuals.h` / `FlexFOV.h` for the pattern.
 
 Config variables are declared in `Amalgam/src/SDK/Vars.h` using the `CVar` / `CVarEnum` / `CVarValues` macros inside `NAMESPACE_BEGIN` / `NAMESPACE_END` blocks. The variable is then accessible as `Vars::SectionName::SubSection::VarName`.
@@ -80,21 +82,6 @@ Libraries in `Amalgam/include/` (ImGui, MinHook, FreeType) are vendored — do n
 
 Byte signatures in `Utils/Signatures/` target a specific TF2 build. They will break on TF2 updates and must be manually re-scanned. Use `MAKE_SIGNATURE(Name, "module.dll", "pattern", offset)` to declare a new one.
 
-### FlexFOV (`Features/Visuals/FlexFOV/`)
-
-The fork's headline feature: wide-angle FOV up to 360° via view reprojection. Registered as `F::FlexFOV` (`ADD_FEATURE(CFlexFOV, FlexFOV)`).
-
-TF2's engine renders through one linear perspective projection matrix, which distorts badly and eventually breaks down as FOV approaches/exceeds ~170°. Instead of asking the engine for one giant-FOV frame, FlexFOV captures several narrower-FOV "faces" of the scene each frame and reprojects/stitches them into a single wide composite using non-linear Panini/Mercator inverse projection math (ported from `shaunlebron/flex-fov`).
-
-Pipeline, in order:
-1. **Capture** (`CaptureGlobe()`, called from the `CViewRender_RenderView` hook *before* the original render — the composite is drawn from the HUD paint that runs inside that original render, so capturing after it would build every frame from last frame's faces and add a frame of input latency): re-renders the scene from the player's eye into view-aligned face render targets (`EFace`: FRONT/BACK/LEFT/RIGHT/UP/DOWN, each 130° FOV). `ComputeRig()` picks a **cube rig** (up to 6 faces) for very wide FOV, or a cheaper **wide rig** (2 tall faces, yawed ± around view-up) for FOV ≤ ~245° on widescreen. Only faces actually needed by the current composite mesh are rendered, and each face's capture frustum is additionally narrowed/re-aimed to just the region the mesh samples off it plus a safety margin (`FlexFOVTightFaces`, the wanted rects come from a param-keyed "ideal" assignment pass in `DrawComposite`) — the engine then frustum-culls the rest of the scene work out of the pass. These are the main perf levers.
-2. **Cheap main-view pass** (`BeginCheapMainView()`/`EndCheapMainView()`): the original `CALL_ORIGINAL` main-view render still runs (needed for HUD paint), but scene-draw cvars (world/entities/skybox/viewmodel/particles) are zeroed out first so it costs almost nothing.
-3. **Composite** (`DrawComposite()`, called from the `IEngineVGui_Paint` hook): builds the on-screen warp by sampling captured face textures through the inverse (`ScreenToRay`) reprojection. The tier structure matches the original flex-fov: rectilinear at 90° FOV easing into Panini by the transition-band start, easing into Mercator across the band (player-tunable via `FlexFOVTransition`, default 160–300 like the original), with a `1-(1-t)²` ease at every boundary. The vertical-stereographic mode blends toward a radial ("round") Panini — exactly stereographic at strength 1 — scaled by the same FOV-tier envelope so it fades out as Mercator takes over at high FOV. `DrawDebug()` blits the raw face thumbnails instead, for verification.
-4. **Viewmodel**: `DrawViewmodel()` redraws the first-person viewmodel at native (unwarped) projection on top of the composite, since the capture faces would badly warp its geometry.
-5. **WorldToScreen tie-in**: `CFlexFOV::WorldToScreen()` is the exact inverse of `DrawComposite`'s `ScreenToRay`. `SDK::W2S()` checks `F::FlexFOV.m_bComposite` and routes through it instead of the normal linear matrix when the composite is active — this is what keeps ESP/overlays aligned on the reprojected view. A per-frame snapshot of eye origin/view angles/FOV/aspect/strength is latched once in `CaptureGlobe`/`DrawComposite` so per-call `WorldToScreen` invocations (hundreds/frame for overlays) never redo trig.
-
-Key cvars (`Vars::Visuals::UI`, `Amalgam/src/SDK/Vars.h`): `FlexFOVDebug`, `FlexFOVComposite`, `FlexFOVStrength` (Panini `d`, 0–2, also shapes the radial/stereographic modes), `FlexFOVTransition` (Panini→Mercator band, `FloatRange_t`), `FlexFOVStereographic` / `FlexFOVVertStereo`, `FlexFOVSkipMainView`, `FlexFOVQuality` (face RT resolution scale), `FlexFOVTightFaces` (narrow face captures to the sampled region). See the comments atop `FlexFOV.h`/`FlexFOV.cpp` for the full projection math and rig-selection details.
-
 ## Discord requests
 
 If a request arrives tagged `<channel source="plugin:discord:discord" ...>`, read `.claude/skills/discord.md` in full before responding or acting — it covers the mandatory Discord-reply behavior, build/commit/push conventions, and reaction conventions for this channel.
@@ -103,4 +90,4 @@ If a request arrives tagged `<channel source="plugin:discord:discord" ...>`, rea
 
 - **Never create branches.** All work is committed directly to `master` — no feature branches, no PRs.
 - Both the repo owner (`.aooga`, GitHub `aooooga`) and the contributor (`honaaaa`) are trusted to commit and push directly to `master`, including via Discord requests.
-- The `build_v2` … `build_v10` folders (each holding a single tracked `Amalgamx64Release.dll`) are a **legacy** manual build-versioning convention — do not add new `build_vN` folders. Built DLLs should stay in `output/x64/<Configuration>/` and be shared directly (e.g. attached in Discord) rather than committed.
+- Built DLLs should stay in `output/x64/<Configuration>/` and be shared directly rather than committed.

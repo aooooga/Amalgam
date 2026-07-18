@@ -4,8 +4,17 @@
 #include "../Materials/Materials.h"
 #include "../../../SDK/Definitions/Main/IMesh.h"
 
+#include <deque>
+
 static constexpr float SENTRY_RANGE = 1100.f;
 static constexpr int MAX_LAYERS = 3;
+// The grid samples the full 2*SENTRY_RANGE span, so the cell count is quadratic
+// in 1/step - at tiny steps that is millions of cells, hundreds of MB of grid
+// state and a minutes-long trace backlog. Cap the working dimension so the grid
+// stays bounded no matter how low the slider goes; the effective step is floored
+// to 2*SENTRY_RANGE / MAX_DIM (~4.3u), which is already sub-player resolution and
+// finer than the polygon simplification cares about.
+static constexpr int MAX_DIM = 512;
 
 Vec3 CSentryRange::GetSentryEye(CObjectSentrygun* pSentry)
 {
@@ -88,14 +97,30 @@ int CSentryRange::ComputeCell(SentryCache_t& tCache, int i)
 	return nTraces;
 }
 
-// Bakes the cell grid into CPU geometry. Fill: coplanar flat regions collapse
-// into single rects (greedy 2D merge), everything else becomes per-cell quads
-// whose corners are welded with their neighbors' - a shared vertex per corner
-// keeps displacement terrain watertight instead of a jumble of disjoint tile
-// planes. Output is chunked to stay inside 16-bit mesh indices. Boundary
-// edges: per lit layer, any side whose neighbor cell has no layer continuing
-// the surface is the lit/safe boundary - including around interior shadow
-// pockets. GroundOffset is applied at bake time (rebake on change).
+// Bakes the cell grid into CPU geometry.
+//
+// The lit/safe border is built first: per lit layer, any side whose neighbor
+// cell has no layer continuing the surface is a boundary segment (including
+// around interior shadow pockets). The raw border is a grid-aligned staircase;
+// its segments are welded at grid corners (per surface height), traced into
+// connected contours and Douglas-Peucker simplified - in XY *and* Z, so a
+// straight edge is only drawn where the ground actually stays near it, never
+// floating a chord over an intervening dip or step. Each staircase corner the
+// simplifier drops is recorded snapped onto its chord (`vSnap`). If Smoothing is
+// on, the whole contour is Laplacian corner-rounded in place (no new verts) so
+// both the edges and the fill read the rounded positions.
+//
+// Fill then reuses that: coplanar interior flats collapse into single rects
+// (greedy 2D merge), everything else becomes per-cell quads whose corners are
+// welded with their neighbors' - and any corner sitting on a contour is placed
+// at its snapped position, so the fill's outer edge follows the same polygon as
+// the lines while its interior keeps the heightfield. Two things keep the fill
+// seam-free on uneven ground: every non-boundary corner takes one shared,
+// averaged surface height (so neighbouring quads meet at the exact same vertex
+// instead of each other's slightly-off plane extrapolation), and rects only
+// merge fully-coplanar 3x3 neighbourhoods (an unwelded rect against a tilted
+// cell was the main seam source). Output is chunked to stay inside 16-bit mesh
+// indices. GroundOffset is applied at bake time (rebake on change).
 void CSentryRange::BuildDrawList(SentryCache_t& tCache)
 {
 	tCache.m_vFillChunks.clear();
@@ -119,6 +144,325 @@ void CSentryRange::BuildDrawList(SentryCache_t& tCache)
 			if (fabsf(tOther.m_aLayers[j].m_flZ - flZ) < flJoin)
 				return false;
 		}
+		return true;
+	};
+	// --- boundary contours (built before the fill so the fill can follow them) ---
+	// weld each grid-aligned boundary segment's endpoints to a node at their grid
+	// corner, grouped by surface height (a bridge deck and the ground beneath it
+	// share an XY corner but stay distinct contours).
+	struct BNode_t { float m_flX, m_flY, m_flZSum; int m_nRefs; };
+	std::vector<BNode_t> vNodes;
+	struct BCorner_t { int m_nCount = 0; struct { float m_flZ; int m_iNode; } m_aGroups[4] = {}; };
+	std::vector<BCorner_t> vBCorners(size_t(iDim + 1) * (iDim + 1));
+	auto iBoundNode = [&](int cx, int cy, float flZ)
+	{
+		auto& tC = vBCorners[size_t(cy) * (iDim + 1) + cx];
+		for (int g = 0; g < tC.m_nCount; g++)
+		{
+			if (fabsf(tC.m_aGroups[g].m_flZ - flZ) < flJoin)
+			{
+				auto& tN = vNodes[tC.m_aGroups[g].m_iNode];
+				tN.m_flZSum += flZ; tN.m_nRefs++;
+				return tC.m_aGroups[g].m_iNode;
+			}
+		}
+		int iNode = int(vNodes.size());
+		vNodes.push_back({ tCache.m_flMinX + cx * flStep, tCache.m_flMinY + cy * flStep, flZ, 1 });
+		if (tC.m_nCount < 4)
+			tC.m_aGroups[tC.m_nCount++] = { flZ, iNode };
+		return iNode;
+	};
+	std::vector<std::pair<int, int>> vSegs;
+	for (int y = 0; y < iDim; y++)
+	{
+		for (int x = 0; x < iDim; x++)
+		{
+			auto& tCell = tCache.m_vCells[size_t(y) * iDim + x];
+			for (int iLayer = 0; iLayer < tCell.m_iCount; iLayer++)
+			{
+				auto& tLayer = tCell.m_aLayers[iLayer];
+				if (bOpen(x, y - 1, tLayer.m_flZ))
+					vSegs.emplace_back(iBoundNode(x, y, flPlaneZ(tLayer, -flHalf, -flHalf)), iBoundNode(x + 1, y, flPlaneZ(tLayer, flHalf, -flHalf)));
+				if (bOpen(x, y + 1, tLayer.m_flZ))
+					vSegs.emplace_back(iBoundNode(x, y + 1, flPlaneZ(tLayer, -flHalf, flHalf)), iBoundNode(x + 1, y + 1, flPlaneZ(tLayer, flHalf, flHalf)));
+				if (bOpen(x - 1, y, tLayer.m_flZ))
+					vSegs.emplace_back(iBoundNode(x, y, flPlaneZ(tLayer, -flHalf, -flHalf)), iBoundNode(x, y + 1, flPlaneZ(tLayer, -flHalf, flHalf)));
+				if (bOpen(x + 1, y, tLayer.m_flZ))
+					vSegs.emplace_back(iBoundNode(x + 1, y, flPlaneZ(tLayer, flHalf, -flHalf)), iBoundNode(x + 1, y + 1, flPlaneZ(tLayer, flHalf, flHalf)));
+			}
+		}
+	}
+
+	// resolve nodes to points (welded corners average their contributing heights);
+	// snapped positions start as identity, overwritten for simplified-away corners
+	std::vector<Vec3> vPts(vNodes.size());
+	for (size_t i = 0; i < vNodes.size(); i++)
+		vPts[i] = { vNodes[i].m_flX, vNodes[i].m_flY, vNodes[i].m_flZSum / float(vNodes[i].m_nRefs) };
+	std::vector<Vec3> vSnap = vPts;
+
+	// trace segments into polylines via node->incident-segment adjacency
+	std::vector<std::vector<int>> vAdj(vNodes.size());
+	for (int s = 0; s < int(vSegs.size()); s++)
+	{
+		vAdj[vSegs[s].first].push_back(s);
+		vAdj[vSegs[s].second].push_back(s);
+	}
+	std::vector<bool> vUsed(vSegs.size(), false);
+	auto iOther = [&](int s, int n) { return vSegs[s].first == n ? vSegs[s].second : vSegs[s].first; };
+	auto iWalk = [&](int n) // consume+return an unused segment incident to n (its other end), or -1
+	{
+		for (int s : vAdj[n])
+		{
+			if (!vUsed[s])
+			{
+				vUsed[s] = true;
+				return iOther(s, n);
+			}
+		}
+		return -1;
+	};
+
+	// Douglas-Peucker keep-mask over an open polyline of node ids. A vertex is
+	// kept when it strays from the current chord either sideways (> flEps, the
+	// staircase jaggedness) OR vertically (> flZEps, terrain the straight chord
+	// would otherwise float over); the split goes to whichever violates most.
+	const float flEps = flStep; // ~one cell: enough to swallow full stair steps
+	const float flZEps = 4.f;   // keep the border within a few units of the ground
+	auto Simplify = [&](const std::vector<int>& vIds)
+	{
+		const int n = int(vIds.size());
+		std::vector<char> vKeep(n, 0);
+		if (n == 0)
+			return vKeep;
+		vKeep[0] = vKeep[n - 1] = 1;
+		std::vector<std::pair<int, int>> vStack = { { 0, n - 1 } };
+		while (!vStack.empty())
+		{
+			auto [i0, i1] = vStack.back(); vStack.pop_back();
+			const Vec3& vA = vPts[vIds[i0]];
+			const Vec3& vB = vPts[vIds[i1]];
+			const float flDx = vB.x - vA.x, flDy = vB.y - vA.y;
+			const float flLen2 = flDx * flDx + flDy * flDy, flLen = sqrtf(flLen2);
+			float flWorst = 1.f; int iFar = -1;
+			for (int i = i0 + 1; i < i1; i++)
+			{
+				const Vec3& vP = vPts[vIds[i]];
+				const float flPx = vP.x - vA.x, flPy = vP.y - vA.y;
+				const float flDistXY = flLen > 1e-4f ? fabsf(flPx * flDy - flPy * flDx) / flLen : sqrtf(flPx * flPx + flPy * flPy);
+				const float flT = flLen2 > 1e-4f ? std::clamp((flPx * flDx + flPy * flDy) / flLen2, 0.f, 1.f) : 0.f;
+				const float flZDev = fabsf(vP.z - (vA.z + flT * (vB.z - vA.z)));
+				const float flViolate = std::max(flDistXY / flEps, flZDev / flZEps);
+				if (flViolate > flWorst)
+				{
+					flWorst = flViolate; iFar = i;
+				}
+			}
+			if (iFar >= 0)
+			{
+				vKeep[iFar] = 1;
+				vStack.push_back({ i0, iFar });
+				vStack.push_back({ iFar, i1 });
+			}
+		}
+		return vKeep;
+	};
+	auto ProjectOntoChord = [](const Vec3& vP, const Vec3& vA, const Vec3& vB)
+	{
+		const float flDx = vB.x - vA.x, flDy = vB.y - vA.y;
+		const float flLen2 = flDx * flDx + flDy * flDy;
+		const float flT = flLen2 > 1e-4f ? std::clamp(((vP.x - vA.x) * flDx + (vP.y - vA.y) * flDy) / flLen2, 0.f, 1.f) : 0.f;
+		return Vec3(vA.x + flT * flDx, vA.y + flT * flDy, vA.z + flT * (vB.z - vA.z));
+	};
+	auto SnapChain = [&](const std::vector<int>& vIds) // DP an open chain: snap dropped corners onto their chord; return the keep mask
+	{
+		auto vKeep = Simplify(vIds);
+		int iPrev = -1;
+		for (int i = 0; i < int(vIds.size()); i++)
+		{
+			if (!vKeep[i])
+				continue;
+			if (iPrev >= 0)
+			{
+				const Vec3& vA = vPts[vIds[iPrev]];
+				const Vec3& vB = vPts[vIds[i]];
+				for (int j = iPrev + 1; j < i; j++)
+					vSnap[vIds[j]] = ProjectOntoChord(vPts[vIds[j]], vA, vB);
+			}
+			iPrev = i;
+		}
+		return vKeep;
+	};
+
+	// cheap corner rounding: Laplacian-average each contour corner toward its two
+	// neighbours a few times, in place on vSnap (no new vertices). Straight runs
+	// are collinear so they don't move - only the polygon's corners round off - and
+	// both the edges (emitted from vSnap below) and the fill (reads vSnap) follow.
+	const int iSmooth = int(Vars::Visuals::SentryRange::Smoothing.Value / 100.f * 8.f + 0.5f);
+	auto SmoothLoop = [&](const std::vector<int>& vOrder, bool bClosed)
+	{
+		const int n = int(vOrder.size());
+		if (n < 3)
+			return;
+		std::vector<Vec3> vTmp(n);
+		for (int it = 0; it < iSmooth; it++)
+		{
+			for (int i = 0; i < n; i++)
+			{
+				if (!bClosed && (i == 0 || i == n - 1))
+				{
+					vTmp[i] = vSnap[vOrder[i]];
+					continue;
+				}
+				const Vec3& vP = vSnap[vOrder[(i - 1 + n) % n]];
+				const Vec3& vN = vSnap[vOrder[(i + 1) % n]];
+				vTmp[i] = vSnap[vOrder[i]] * 0.5f + vP * 0.25f + vN * 0.25f;
+			}
+			for (int i = 0; i < n; i++)
+				vSnap[vOrder[i]] = vTmp[i];
+		}
+	};
+
+	for (int s0 = 0; s0 < int(vSegs.size()); s0++)
+	{
+		if (vUsed[s0])
+			continue;
+		vUsed[s0] = true;
+		std::deque<int> dq = { vSegs[s0].first, vSegs[s0].second };
+		for (int nNext = iWalk(dq.back()); nNext >= 0; nNext = iWalk(dq.back()))
+			dq.push_back(nNext);
+		for (int nNext = iWalk(dq.front()); nNext >= 0; nNext = iWalk(dq.front()))
+			dq.push_front(nNext);
+
+		std::vector<int> vOrder(dq.begin(), dq.end());
+		const bool bClosed = vOrder.size() > 2 && vOrder.front() == vOrder.back();
+		std::vector<char> vKeep;
+		if (bClosed)
+		{
+			// closed loop: no endpoints to pin DP, so split at the vertex farthest
+			// from the start (in XY) into two open chains and merge their keep masks
+			vOrder.pop_back();
+			const int n = int(vOrder.size());
+			int iFar = 0; float flBest = -1.f;
+			for (int i = 1; i < n; i++)
+			{
+				const float flDx = vPts[vOrder[i]].x - vPts[vOrder[0]].x, flDy = vPts[vOrder[i]].y - vPts[vOrder[0]].y;
+				const float flD = flDx * flDx + flDy * flDy;
+				if (flD > flBest) { flBest = flD; iFar = i; }
+			}
+			std::vector<int> vHalfA(vOrder.begin(), vOrder.begin() + iFar + 1);
+			std::vector<int> vHalfB(vOrder.begin() + iFar, vOrder.end());
+			vHalfB.push_back(vOrder.front());
+			auto vKeepA = SnapChain(vHalfA);
+			auto vKeepB = SnapChain(vHalfB);
+			vKeep.assign(n, 0);
+			for (int i = 0; i <= iFar; i++)
+				vKeep[i] = vKeepA[i];
+			for (int t = 0; t < int(vHalfB.size()); t++)
+				if (vKeepB[t]) vKeep[(iFar + t) % n] = 1;
+		}
+		else
+			vKeep = SnapChain(vOrder);
+
+		if (iSmooth > 0)
+			SmoothLoop(vOrder, bClosed);
+
+		const int n = int(vOrder.size());
+		if (iSmooth > 0)
+		{
+			// rounded: emit every corner from the smoothed positions
+			const int nEmit = bClosed ? n : n - 1;
+			for (int i = 0; i < nEmit; i++)
+				tCache.m_vEdges.emplace_back(vSnap[vOrder[i]], vSnap[vOrder[(i + 1) % n]]);
+		}
+		else
+		{
+			// crisp: connect the kept polygon vertices only
+			int iPrev = -1, iFirst = -1;
+			for (int i = 0; i < n; i++)
+			{
+				if (!vKeep[i])
+					continue;
+				if (iPrev >= 0)
+					tCache.m_vEdges.emplace_back(vSnap[vOrder[iPrev]], vSnap[vOrder[i]]);
+				if (iFirst < 0)
+					iFirst = i;
+				iPrev = i;
+			}
+			if (bClosed && iFirst >= 0 && iPrev != iFirst)
+				tCache.m_vEdges.emplace_back(vSnap[vOrder[iPrev]], vSnap[vOrder[iFirst]]);
+		}
+	}
+
+	// --- continuous corner heights (kills fill seams on uneven ground) ---
+	// Every grid corner gets one shared height per surface by averaging the plane-
+	// extrapolated height of each adjacent cell that reaches it, so neighbouring
+	// quads meet at the exact same vertex instead of each other's slightly-off
+	// extrapolation. Clustered within flJoin so genuinely separate floors stay
+	// apart. Interior fill corners read this; boundary corners use vSnap instead.
+	struct CHeight_t { int m_nCount = 0; struct { float m_flSum; int m_nCnt; } m_a[6] = {}; };
+	std::vector<CHeight_t> vCH(size_t(iDim + 1) * (iDim + 1));
+	auto AddCornerZ = [&](int cx, int cy, float flZ)
+	{
+		auto& tCH = vCH[size_t(cy) * (iDim + 1) + cx];
+		for (int g = 0; g < tCH.m_nCount; g++)
+		{
+			if (fabsf(tCH.m_a[g].m_flSum / tCH.m_a[g].m_nCnt - flZ) < flJoin)
+			{
+				tCH.m_a[g].m_flSum += flZ; tCH.m_a[g].m_nCnt++;
+				return;
+			}
+		}
+		if (tCH.m_nCount < 6)
+			tCH.m_a[tCH.m_nCount++] = { flZ, 1 };
+	};
+	for (int y = 0; y < iDim; y++)
+	{
+		for (int x = 0; x < iDim; x++)
+		{
+			auto& tCell = tCache.m_vCells[size_t(y) * iDim + x];
+			for (int iLayer = 0; iLayer < tCell.m_iCount; iLayer++)
+			{
+				auto& tLayer = tCell.m_aLayers[iLayer];
+				AddCornerZ(x, y, flPlaneZ(tLayer, -flHalf, -flHalf));
+				AddCornerZ(x + 1, y, flPlaneZ(tLayer, flHalf, -flHalf));
+				AddCornerZ(x + 1, y + 1, flPlaneZ(tLayer, flHalf, flHalf));
+				AddCornerZ(x, y + 1, flPlaneZ(tLayer, -flHalf, flHalf));
+			}
+		}
+	}
+	auto flCornerZ = [&](int cx, int cy, float flZ) // shared averaged height of the surface nearest flZ
+	{
+		auto& tCH = vCH[size_t(cy) * (iDim + 1) + cx];
+		for (int g = 0; g < tCH.m_nCount; g++)
+		{
+			float flAvg = tCH.m_a[g].m_flSum / tCH.m_a[g].m_nCnt;
+			if (fabsf(flAvg - flZ) < flJoin)
+				return flAvg;
+		}
+		return flZ;
+	};
+
+	// greedy rects only merge cells whose whole 3x3 neighbourhood is coplanar-flat
+	// at the same height: an unwelded rect abutting even a slightly-tilted cell
+	// leaves a T-junction crack, and with normal.z > 0.999 being so strict those
+	// flat/near-flat borders are exactly where the common seams came from. Confined
+	// this way, every flat<->uneven transition is welded per-cell quads instead.
+	auto bFlatLit = [&](int x, int y, float flZ0)
+	{
+		if (x < 0 || x >= iDim || y < 0 || y >= iDim)
+			return false;
+		auto& tCell = tCache.m_vCells[size_t(y) * iDim + x];
+		for (int j = 0; j < tCell.m_iCount; j++)
+			if (tCell.m_aLayers[j].m_vNormal.z > 0.999f && fabsf(tCell.m_aLayers[j].m_flZ - flZ0) <= 1.f)
+				return true;
+		return false;
+	};
+	auto bRectSafe = [&](int x, int y, float flZ0)
+	{
+		for (int dy = -1; dy <= 1; dy++)
+			for (int dx = -1; dx <= 1; dx++)
+				if (!bFlatLit(x + dx, y + dy, flZ0))
+					return false;
 		return true;
 	};
 
@@ -159,9 +503,26 @@ void CSentryRange::BuildDrawList(SentryCache_t& tCache)
 			if (fabsf(tCorner.m_aGroups[g].m_flZ - flZ) < flJoin)
 				return (unsigned short)tCorner.m_aGroups[g].m_iVert;
 		}
+		// a corner on a contour rides its snapped (polygon-conforming) position;
+		// interior corners take the shared averaged surface height so neighbouring
+		// quads meet exactly and never crack into a seam
+		Vec3 vPos = { tCache.m_flMinX + cx * flStep, tCache.m_flMinY + cy * flStep, flZ };
+		bool bBoundary = false;
+		auto& tBC = vBCorners[size_t(cy) * (iDim + 1) + cx];
+		for (int g = 0; g < tBC.m_nCount; g++)
+		{
+			if (fabsf(tBC.m_aGroups[g].m_flZ - flZ) < flJoin)
+			{
+				vPos = vSnap[tBC.m_aGroups[g].m_iNode];
+				bBoundary = true;
+				break;
+			}
+		}
+		if (!bBoundary)
+			vPos.z = flCornerZ(cx, cy, flZ);
 		auto& tChunk = vChunks.back();
 		int iVert = int(tChunk.m_vVerts.size());
-		tChunk.m_vVerts.emplace_back(tCache.m_flMinX + cx * flStep, tCache.m_flMinY + cy * flStep, flZ);
+		tChunk.m_vVerts.push_back(vPos);
 		if (tCorner.m_nCount < 4)
 			tCorner.m_aGroups[tCorner.m_nCount++] = { flZ, iVert };
 		return (unsigned short)iVert;
@@ -178,7 +539,7 @@ void CSentryRange::BuildDrawList(SentryCache_t& tCache)
 			if (vMerged[size_t(y) * iDim + x] & (1 << j))
 				continue;
 			if (tCell.m_aLayers[j].m_vNormal.z > 0.999f && fabsf(tCell.m_aLayers[j].m_flZ - flZ0) <= 1.f)
-				return j;
+				return bRectSafe(x, y, tCell.m_aLayers[j].m_flZ) ? j : -1; // only merge fully-coplanar cells
 		}
 		return -1;
 	};
@@ -195,6 +556,8 @@ void CSentryRange::BuildDrawList(SentryCache_t& tCache)
 				if (tLayer.m_vNormal.z <= 0.999f)
 					continue;
 				const float flZ0 = tLayer.m_flZ;
+				if (!bRectSafe(x, y, flZ0))
+					continue; // borders a non-coplanar cell (or the boundary): pass 2 welds it per-cell
 
 				int x1 = x;
 				while (x1 + 1 < iDim && iFlatAt(x1 + 1, y, flZ0) != -1)
@@ -228,8 +591,8 @@ void CSentryRange::BuildDrawList(SentryCache_t& tCache)
 		}
 	}
 
-	// pass 2: welded per-cell quads for everything the rects didn't swallow,
-	// plus boundary edges for every lit layer
+	// pass 2: welded per-cell quads for everything the rects didn't swallow;
+	// corners on a contour land at their snapped position (see iCornerVert)
 	for (int y = 0; y < iDim; y++)
 	{
 		for (int x = 0; x < iDim; x++)
@@ -238,18 +601,6 @@ void CSentryRange::BuildDrawList(SentryCache_t& tCache)
 			for (int iLayer = 0; iLayer < tCell.m_iCount; iLayer++)
 			{
 				auto& tLayer = tCell.m_aLayers[iLayer];
-				const float flX = tCache.m_flMinX + (x + 0.5f) * flStep;
-				const float flY = tCache.m_flMinY + (y + 0.5f) * flStep;
-
-				if (bOpen(x, y - 1, tLayer.m_flZ))
-					tCache.m_vEdges.emplace_back(Vec3(flX - flHalf, flY - flHalf, flPlaneZ(tLayer, -flHalf, -flHalf)), Vec3(flX + flHalf, flY - flHalf, flPlaneZ(tLayer, flHalf, -flHalf)));
-				if (bOpen(x, y + 1, tLayer.m_flZ))
-					tCache.m_vEdges.emplace_back(Vec3(flX - flHalf, flY + flHalf, flPlaneZ(tLayer, -flHalf, flHalf)), Vec3(flX + flHalf, flY + flHalf, flPlaneZ(tLayer, flHalf, flHalf)));
-				if (bOpen(x - 1, y, tLayer.m_flZ))
-					tCache.m_vEdges.emplace_back(Vec3(flX - flHalf, flY - flHalf, flPlaneZ(tLayer, -flHalf, -flHalf)), Vec3(flX - flHalf, flY + flHalf, flPlaneZ(tLayer, -flHalf, flHalf)));
-				if (bOpen(x + 1, y, tLayer.m_flZ))
-					tCache.m_vEdges.emplace_back(Vec3(flX + flHalf, flY - flHalf, flPlaneZ(tLayer, flHalf, -flHalf)), Vec3(flX + flHalf, flY + flHalf, flPlaneZ(tLayer, flHalf, flHalf)));
-
 				if (vMerged[size_t(y) * iDim + x] & (1 << iLayer))
 					continue;
 				FlushIfFull(); // before welding: corner verts must land in the live chunk
@@ -282,11 +633,11 @@ void CSentryRange::GetColors(const SentryCache_t& tCache, Color_t& tFill, Color_
 		: tCache.m_bEnemy ? Vars::Colors::SentryRangeFillEnemyIgnoreZ.Value
 		: tCache.m_bLocal ? Vars::Colors::SentryRangeFillLocalIgnoreZ.Value : Vars::Colors::SentryRangeFillTeamIgnoreZ.Value;
 
-	// FillAlpha is a master fill opacity on top of the fill colors' own alphas
+	// fill opacity comes from the fill colors' own alphas; disabled sentries fade
+	// everything by DisabledAlpha
 	float flScale = tCache.m_bDisabled ? Vars::Visuals::SentryRange::DisabledAlpha.Value / 100.f : 1.f;
-	float flFill = Vars::Visuals::SentryRange::FillAlpha.Value / 100.f * flScale;
-	tFill.a = byte(tFill.a * flFill);
-	tFillIgnoreZ.a = byte(tFillIgnoreZ.a * flFill);
+	tFill.a = byte(tFill.a * flScale);
+	tFillIgnoreZ.a = byte(tFillIgnoreZ.a * flScale);
 	tEdge.a = byte(tEdge.a * flScale);
 	tEdgeIgnoreZ.a = byte(tEdgeIgnoreZ.a * flScale);
 
@@ -513,12 +864,25 @@ void CSentryRange::ClearCaches()
 
 void CSentryRange::Update(CTFPlayer* pLocal)
 {
-	float flStep = Vars::Visuals::SentryRange::GridStep.Value;
+	// floor the step so the grid can never exceed MAX_DIM cells per side (see the
+	// MAX_DIM note); clamping here keeps the dims, extents and the cache-
+	// invalidation compare all consistent, and stops a slider drag through the
+	// sub-floor range from rebuilding an identical grid each notch
+	float flStep = std::max(Vars::Visuals::SentryRange::GridStep.Value, 2.f * SENTRY_RANGE / MAX_DIM);
 	float flHeight = Vars::Visuals::SentryRange::TargetHeight.Value;
 	if (m_flLastStep != flStep || m_flLastHeight != flHeight)
 	{
 		ClearCaches();
 		m_flLastStep = flStep; m_flLastHeight = flHeight;
+	}
+	// smoothing only reshapes the baked draw list, not the traced cells - rebuild
+	// the geometry in place rather than dropping the whole grid
+	float flSmoothing = Vars::Visuals::SentryRange::Smoothing.Value;
+	if (m_flLastSmoothing != flSmoothing)
+	{
+		m_flLastSmoothing = flSmoothing;
+		for (auto& [pEntity, tCache] : m_mCache)
+			tCache.m_bListDirty = true;
 	}
 
 	// rebuild the map, migrating grids whose sentry didn't move or change eye height
@@ -601,6 +965,15 @@ void CSentryRange::Update(CTFPlayer* pLocal)
 	if (!vWork.empty())
 	{
 		int nBudget = Vars::Visuals::SentryRange::TraceBudget.Value;
+		// scale the budget up with the initial-build backlog so a grid finishes in
+		// a bounded number of frames (~2s) no matter how fine it is, instead of
+		// dribbling out at the base rate for minutes; refreshes coast on the base
+		// budget. Capped so a huge backlog can't spike a single frame.
+		size_t nPending = 0;
+		for (size_t i = 0; i < iIncomplete; i++)
+			nPending += vWork[i]->m_vCells.size() - vWork[i]->m_iBuilt;
+		if (nPending)
+			nBudget = std::max(nBudget, std::min(6000, int(nPending / 120)));
 		size_t iEntry = iIncomplete ? m_iSentryCursor % iIncomplete : m_iSentryCursor % vWork.size();
 		for (int nSwitch = 0; nBudget > 0 && !vWork.empty(); )
 		{

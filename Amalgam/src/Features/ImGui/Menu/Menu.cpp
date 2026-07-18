@@ -521,32 +521,34 @@ void CMenu::MenuAimbot(int iTab)
 				if (Section("Sentry Range"))
 				{
 					FDropdown(Vars::Visuals::SentryRange::Draw, FDropdownEnum::None, -10);
-					// compact 4x4 color grid: rows enemy / team / local / inside,
-					// picker order per row: fill igZ, fill, edge igZ, edge
-					const auto vPickerSize = ImVec2{ H::Draw.Scale(10), H::Draw.Scale(10) };
-					auto RowPickers = [&](auto& tFillIgnoreZ, auto& tFill, auto& tEdgeIgnoreZ, auto& tEdge, float flYOffset)
+					FDropdown(Vars::Visuals::SentryRange::Style, FDropdownEnum::None, -10);
+
+					// one labeled row per category; per row: fill, fill through-wall,
+					// edge, edge through-wall (hover a swatch for its exact name)
+					const auto vSwatch = ImVec2{ H::Draw.Scale(13), H::Draw.Scale(13) };
+					auto ColorRow = [&](const char* sLabel, auto& tFill, auto& tFillIgnoreZ, auto& tEdge, auto& tEdgeIgnoreZ)
 					{
-						FColorPicker(tFillIgnoreZ, FColorPickerEnum::SameLine, { 0, H::Draw.Scale(flYOffset) }, vPickerSize);
-						FColorPicker(tFill, FColorPickerEnum::SameLine, { H::Draw.Scale(-10), H::Draw.Scale(-10) }, vPickerSize);
-						FColorPicker(tEdgeIgnoreZ, FColorPickerEnum::SameLine, { H::Draw.Scale(-10), H::Draw.Scale(-10) }, vPickerSize);
-						FColorPicker(tEdge, FColorPickerEnum::SameLine, { H::Draw.Scale(-10), H::Draw.Scale(-10) }, vPickerSize);
+						FText(sLabel, { 5, 4 });
+						FColorPicker(tFill, FColorPickerEnum::SameLine, { H::Draw.Scale(4), H::Draw.Scale(-2) }, vSwatch);
+						FColorPicker(tFillIgnoreZ, FColorPickerEnum::SameLine, {}, vSwatch);
+						FColorPicker(tEdge, FColorPickerEnum::SameLine, {}, vSwatch);
+						FColorPicker(tEdgeIgnoreZ, FColorPickerEnum::SameLine, {}, vSwatch);
 					};
-					RowPickers(Vars::Colors::SentryRangeFillPlayerInsideIgnoreZ, Vars::Colors::SentryRangeFillPlayerInside,
-						Vars::Colors::SentryRangePlayerInsideIgnoreZ, Vars::Colors::SentryRangePlayerInside, 30.f);
-					RowPickers(Vars::Colors::SentryRangeFillLocalIgnoreZ, Vars::Colors::SentryRangeFillLocal,
-						Vars::Colors::SentryRangeLocalIgnoreZ, Vars::Colors::SentryRangeLocal, 30.f);
-					RowPickers(Vars::Colors::SentryRangeFillTeamIgnoreZ, Vars::Colors::SentryRangeFillTeam,
-						Vars::Colors::SentryRangeTeamIgnoreZ, Vars::Colors::SentryRangeTeam, 30.f);
-					RowPickers(Vars::Colors::SentryRangeFillEnemyIgnoreZ, Vars::Colors::SentryRangeFillEnemy,
-						Vars::Colors::SentryRangeEnemyIgnoreZ, Vars::Colors::SentryRangeEnemy, 30.f);
-					SameLine(); DebugDummy({ 2, H::Draw.Scale(48) });
-					FDropdown(Vars::Visuals::SentryRange::Style, FDropdownEnum::Left);
-					FSlider(Vars::Visuals::SentryRange::GridStep, FSliderEnum::Right);
-					FSlider(Vars::Visuals::SentryRange::FillAlpha, FSliderEnum::Left);
-					FSlider(Vars::Visuals::SentryRange::GroundOffset, FSliderEnum::Right);
-					FSlider(Vars::Visuals::SentryRange::MaxDistance, FSliderEnum::Left, !Vars::Visuals::SentryRange::MaxDistance[DEFAULT_BIND] ? "off" : "%g");
-					FSlider(Vars::Visuals::SentryRange::RefreshInterval, FSliderEnum::Right);
-					FSlider(Vars::Visuals::SentryRange::DisabledAlpha, FSliderEnum::Left);
+					ColorRow("Enemy", Vars::Colors::SentryRangeFillEnemy, Vars::Colors::SentryRangeFillEnemyIgnoreZ,
+						Vars::Colors::SentryRangeEnemy, Vars::Colors::SentryRangeEnemyIgnoreZ);
+					ColorRow("Team", Vars::Colors::SentryRangeFillTeam, Vars::Colors::SentryRangeFillTeamIgnoreZ,
+						Vars::Colors::SentryRangeTeam, Vars::Colors::SentryRangeTeamIgnoreZ);
+					ColorRow("Local", Vars::Colors::SentryRangeFillLocal, Vars::Colors::SentryRangeFillLocalIgnoreZ,
+						Vars::Colors::SentryRangeLocal, Vars::Colors::SentryRangeLocalIgnoreZ);
+					ColorRow("Inside", Vars::Colors::SentryRangeFillPlayerInside, Vars::Colors::SentryRangeFillPlayerInsideIgnoreZ,
+						Vars::Colors::SentryRangePlayerInside, Vars::Colors::SentryRangePlayerInsideIgnoreZ);
+
+					FSlider(Vars::Visuals::SentryRange::GridStep, FSliderEnum::Left);
+					FSlider(Vars::Visuals::SentryRange::Smoothing, FSliderEnum::Right, !Vars::Visuals::SentryRange::Smoothing[DEFAULT_BIND] ? "off" : "%g%%");
+					FSlider(Vars::Visuals::SentryRange::GroundOffset, FSliderEnum::Left);
+					FSlider(Vars::Visuals::SentryRange::MaxDistance, FSliderEnum::Right, !Vars::Visuals::SentryRange::MaxDistance[DEFAULT_BIND] ? "off" : "%g");
+					FSlider(Vars::Visuals::SentryRange::RefreshInterval, FSliderEnum::Left);
+					FSlider(Vars::Visuals::SentryRange::DisabledAlpha, FSliderEnum::Right);
 				} EndSection();
 				if (Vars::Debug::Options.Value)
 				{

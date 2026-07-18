@@ -761,8 +761,8 @@ NAMESPACE_BEGIN(Vars)
 				Enabled = Enemy | Team | Local);
 			CVarValues(Style, "Sentry range style", 3, VISUAL, nullptr,
 				"Off", "Fill", "Edges", "Fill + Edges");
-			CVar(GridStep, VA_LIST("Grid step", "Sentry range grid step"), 50.f, VISUAL | SLIDER_MIN | SLIDER_PRECISION, 12.f, 96.f, 2.f);
-			CVar(FillAlpha, VA_LIST("Fill alpha", "Sentry range fill alpha"), 100.f, VISUAL | SLIDER_CLAMP | SLIDER_PRECISION, 0.f, 100.f, 5.f, "%g%%");
+			CVar(GridStep, VA_LIST("Grid step", "Sentry range grid step"), 50.f, VISUAL | SLIDER_MIN | SLIDER_PRECISION, 1.f, 96.f, 2.f);
+			CVar(Smoothing, VA_LIST("Smoothing", "Sentry range corner smoothing (fill + edges)"), 0.f, VISUAL | SLIDER_CLAMP | SLIDER_PRECISION, 0.f, 100.f, 5.f, "%g%%");
 			CVar(GroundOffset, VA_LIST("Ground offset", "Sentry range ground offset"), 4.f, VISUAL | SLIDER_MIN | SLIDER_PRECISION, 0.f, 32.f, 1.f);
 			CVar(MaxDistance, VA_LIST("Max distance", "Sentry range max distance"), 4000.f, VISUAL | SLIDER_MIN | SLIDER_PRECISION, 0.f, 8000.f, 250.f);
 			CVar(RefreshInterval, VA_LIST("Refresh interval", "Sentry range refresh interval"), 1.f, VISUAL | SLIDER_MIN | SLIDER_PRECISION, 0.25f, 5.f, 0.25f, "%gs");

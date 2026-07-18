@@ -95,7 +95,7 @@ class CSentryRange
 	std::unordered_map<CBaseEntity*, SentryCache_t> m_mCache = {};
 	size_t m_iSentryCursor = 0;
 	int m_iLastFrame = -1;
-	float m_flLastStep = 0.f, m_flLastHeight = 0.f;
+	float m_flLastStep = 0.f, m_flLastHeight = 0.f, m_flLastSmoothing = 0.f;
 
 	std::vector<RetiredMesh_t> m_vRetired = {};
 	IMaterial* m_pFillMaterial = nullptr;

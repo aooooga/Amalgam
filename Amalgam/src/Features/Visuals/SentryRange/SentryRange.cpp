@@ -33,7 +33,7 @@ Vec3 CSentryRange::GetSentryEye(CObjectSentrygun* pSentry)
 // sentry eye with a clear line of sight, the same check FindTarget makes
 // against origin + view offset? Layers that pass are stored for drawing; a
 // cell with none renders as a hole. Returns the number of traces used.
-int CSentryRange::ComputeCell(SentryCache_t& tCache, int i)
+int CSentryRange::TraceCell(SentryCache_t& tCache, int i)
 {
 	auto& tCell = tCache.m_vCells[i];
 	const Cell_t tOld = tCell;
@@ -95,6 +95,131 @@ int CSentryRange::ComputeCell(SentryCache_t& tCache, int i)
 	if (bChanged())
 		tCache.m_bListDirty = true;
 	return nTraces;
+}
+
+// Fills a fine (non-lattice) cell from its enclosing coarse block instead of
+// tracing it, wherever the block is uniform enough that the interior is known
+// from its four corners:
+//   - all four corners agree on layer count (a boundary/merge would disagree), and
+//   - every layer is one planar surface across the block: its four corner normals
+//     near-parallel and its corner heights untwisted (coplanar; |z00+z11-z10-z01|
+//     ~0, exactly 0 for a plane no matter how steep)
+// then each layer is bilinearly interpolated for free. This covers flat ground,
+// planar ramps AND stacked planar floors (a bridge over ground). Anything else -
+// a lit/unlit boundary, a curved or stepped surface, layers merging - falls
+// through to a full trace, so non-uniform regions stay sampled at full
+// resolution. This is what turns a fine grid's cost from O(area) into ~O(boundary):
+// the large all-lit and all-unlit interiors cost nothing.
+int CSentryRange::RefineCell(SentryCache_t& tCache, int gx, int gy)
+{
+	const int iDim = tCache.m_iDim, K = tCache.m_iK;
+	auto& tCell = tCache.m_vCells[size_t(gy) * iDim + gx];
+	const Cell_t tOld = tCell;
+
+	// enclosing coarse block corners (all lattice cells, already traced this pass)
+	const int bx0 = gx / K * K, by0 = gy / K * K;
+	const int bx1 = std::min(bx0 + K, iDim - 1), by1 = std::min(by0 + K, iDim - 1);
+	const Cell_t& c00 = tCache.m_vCells[size_t(by0) * iDim + bx0];
+	const Cell_t& c10 = tCache.m_vCells[size_t(by0) * iDim + bx1];
+	const Cell_t& c01 = tCache.m_vCells[size_t(by1) * iDim + bx0];
+	const Cell_t& c11 = tCache.m_vCells[size_t(by1) * iDim + bx1];
+
+	auto Commit = [&](const Cell_t& tNew)
+	{
+		bool bChanged = tNew.m_iCount != tOld.m_iCount;
+		for (int j = 0; !bChanged && j < tNew.m_iCount; j++)
+			bChanged = fabsf(tNew.m_aLayers[j].m_flZ - tOld.m_aLayers[j].m_flZ) > 0.5f;
+		tCell = tNew;
+		if (bChanged)
+			tCache.m_bListDirty = true;
+		return 0;
+	};
+
+	// a differing layer count means a boundary or a merge runs through the block
+	const int nc = c00.m_iCount;
+	if (c10.m_iCount != nc || c01.m_iCount != nc || c11.m_iCount != nc)
+		return TraceCell(tCache, size_t(gy) * iDim + gx);
+	if (nc == 0)
+		return Commit(Cell_t{}); // uniformly unlit interior
+
+	const float flFX = bx1 > bx0 ? float(gx - bx0) / (bx1 - bx0) : 0.f;
+	const float flFY = by1 > by0 ? float(gy - by0) / (by1 - by0) : 0.f;
+	auto Bilerp = [&](float a, float b, float c, float d)
+	{
+		return (a * (1.f - flFX) + b * flFX) * (1.f - flFY) + (c * (1.f - flFX) + d * flFX) * flFY;
+	};
+	auto Parallel = [](const Vec3& a, const Vec3& b) // unit normals: dot > cos(~8 deg)
+	{
+		return a.x * b.x + a.y * b.y + a.z * b.z > 0.99f;
+	};
+
+	constexpr float flTwist = 4.f;
+	Cell_t tNew;
+	tNew.m_iCount = nc;
+	for (int L = 0; L < nc; L++)
+	{
+		const Layer_t& l00 = c00.m_aLayers[L]; const Layer_t& l10 = c10.m_aLayers[L];
+		const Layer_t& l01 = c01.m_aLayers[L]; const Layer_t& l11 = c11.m_aLayers[L];
+		if (fabsf(l00.m_flZ + l11.m_flZ - l10.m_flZ - l01.m_flZ) > flTwist
+			|| !Parallel(l00.m_vNormal, l10.m_vNormal)
+			|| !Parallel(l00.m_vNormal, l01.m_vNormal)
+			|| !Parallel(l00.m_vNormal, l11.m_vNormal))
+			return TraceCell(tCache, size_t(gy) * iDim + gx);
+		Vec3 vN = l00.m_vNormal + l10.m_vNormal + l01.m_vNormal + l11.m_vNormal;
+		const float flLen = sqrtf(vN.x * vN.x + vN.y * vN.y + vN.z * vN.z);
+		tNew.m_aLayers[L] = { Bilerp(l00.m_flZ, l10.m_flZ, l01.m_flZ, l11.m_flZ),
+			flLen > 1e-4f ? Vec3(vN.x / flLen, vN.y / flLen, vN.z / flLen) : Vec3(0, 0, 1) };
+	}
+	return Commit(tNew);
+}
+
+// Advances the per-cache build one cell and returns the traces it spent. Phase 0
+// fully traces the coarse K-lattice; once that wraps, phase 1 sweeps the whole
+// grid, refining every non-lattice cell (lattice cells are already done) from its
+// coarse block. bWrapped is set on the call that finishes a full two-phase pass.
+int CSentryRange::StepCell(SentryCache_t& tCache, bool& bWrapped)
+{
+	bWrapped = false;
+	const int iDim = tCache.m_iDim, K = tCache.m_iK;
+
+	if (tCache.m_iPhase == 0)
+	{
+		const int nCX = tCache.m_iNCX;
+		const int cx = tCache.m_iCursor % nCX, cy = tCache.m_iCursor / nCX;
+		const int gx = std::min(cx * K, iDim - 1), gy = std::min(cy * K, iDim - 1);
+		const int nTraces = TraceCell(tCache, size_t(gy) * iDim + gx);
+		if (++tCache.m_iCursor >= nCX * tCache.m_iNCY)
+		{
+			tCache.m_iCursor = 0;
+			if (K <= 1)
+				bWrapped = true; // no interior to refine: the lattice is the whole grid
+			else
+				tCache.m_iPhase = 1;
+		}
+		return nTraces;
+	}
+
+	// phase 1: refine, skipping the lattice cells traced in phase 0
+	const int gx = tCache.m_iCursor % iDim, gy = tCache.m_iCursor / iDim;
+	const bool bCoarse = (gx % K == 0 || gx == iDim - 1) && (gy % K == 0 || gy == iDim - 1);
+	const int nTraces = bCoarse ? 0 : RefineCell(tCache, gx, gy);
+	if (++tCache.m_iCursor >= iDim * iDim)
+	{
+		tCache.m_iCursor = 0;
+		tCache.m_iPhase = 0;
+		bWrapped = true;
+	}
+	return nTraces;
+}
+
+// Remaining cells before this cache finishes its current pass; used only to size
+// the per-frame budget, so an overcount (free cells included) just finishes sooner.
+size_t CSentryRange::RemainingWork(const SentryCache_t& tCache) const
+{
+	const size_t iGrid = tCache.m_vCells.size();
+	if (tCache.m_iPhase == 0)
+		return size_t(tCache.m_iNCX) * tCache.m_iNCY - tCache.m_iCursor + iGrid;
+	return iGrid - tCache.m_iCursor;
 }
 
 // Bakes the cell grid into CPU geometry.
@@ -926,6 +1051,16 @@ void CSentryRange::Update(CTFPlayer* pLocal)
 			tCache.m_flMinX = vEye.x - tCache.m_iDim * flStep * 0.5f;
 			tCache.m_flMinY = vEye.y - tCache.m_iDim * flStep * 0.5f;
 			tCache.m_vCells.assign(size_t(tCache.m_iDim) * tCache.m_iDim, {});
+			// adaptive refinement factor: aim the coarse lattice at ~20u (safely
+			// finer than a player) so it only engages once the step is fine, and
+			// the coarse grid still resolves everything a moderate step would.
+			// K == 1 => lattice is the whole grid, i.e. the plain uniform sample.
+			constexpr float flCoarseTarget = 20.f;
+			tCache.m_iK = std::clamp(int(flCoarseTarget / flStep + 0.5f), 1, 8);
+			tCache.m_iNCX = (tCache.m_iDim - 1 + tCache.m_iK - 1) / tCache.m_iK + 1;
+			tCache.m_iNCY = tCache.m_iNCX;
+			tCache.m_iPhase = 0;
+			tCache.m_iCursor = 0;
 		}
 
 		tCache.m_bEnemy = bEnemy;
@@ -971,19 +1106,22 @@ void CSentryRange::Update(CTFPlayer* pLocal)
 		// budget. Capped so a huge backlog can't spike a single frame.
 		size_t nPending = 0;
 		for (size_t i = 0; i < iIncomplete; i++)
-			nPending += vWork[i]->m_vCells.size() - vWork[i]->m_iBuilt;
+			nPending += RemainingWork(*vWork[i]);
 		if (nPending)
 			nBudget = std::max(nBudget, std::min(6000, int(nPending / 120)));
+		// refined interior cells cost no traces, so budget alone would let a mostly-
+		// free grid spin its whole area in one frame; cap the cells scanned per frame
+		// too so that stays a brief few-frame settle instead of a hitch.
+		int nScan = 40000;
 		size_t iEntry = iIncomplete ? m_iSentryCursor % iIncomplete : m_iSentryCursor % vWork.size();
-		for (int nSwitch = 0; nBudget > 0 && !vWork.empty(); )
+		for (int nSwitch = 0; nBudget > 0 && nScan > 0 && !vWork.empty(); )
 		{
 			iEntry %= vWork.size();
 			auto& tCache = *vWork[iEntry];
-			const int iCells = int(tCache.m_vCells.size());
-			nBudget -= ComputeCell(tCache, tCache.m_iCursor);
-			tCache.m_iCursor = (tCache.m_iCursor + 1) % iCells;
-			tCache.m_iBuilt = std::min(tCache.m_iBuilt + 1, iCells);
-			if (!tCache.m_iCursor && tCache.m_iBuilt == iCells) // full pass wrapped
+			bool bWrapped = false;
+			nBudget -= StepCell(tCache, bWrapped);
+			nScan--;
+			if (bWrapped) // full two-phase pass finished
 			{
 				tCache.m_bComplete = true;
 				tCache.m_flCompleteTime = I::GlobalVars->curtime;

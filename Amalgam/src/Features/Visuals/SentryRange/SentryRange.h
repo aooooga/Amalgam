@@ -58,9 +58,16 @@ class CSentryRange
 		// grid, updated in place cell by cell; only lit layers are stored, so
 		// an empty cell is a safe spot (or a void)
 		std::vector<Cell_t> m_vCells = {};
-		int m_iCursor = 0; // next cell index to trace
-		int m_iBuilt = 0;
-		bool m_bComplete = false; // first full pass done -> drawable
+		// adaptive coarse-to-fine sampling: a K-strided lattice is fully traced
+		// (phase 0), then interior fine cells are filled from their enclosing
+		// coarse block for free where it is uniform, and only boundary/uneven
+		// blocks are traced at full resolution (phase 1). K == 1 disables it and
+		// traces every cell, matching the plain uniform grid.
+		int m_iK = 1;
+		int m_iNCX = 0, m_iNCY = 0; // coarse lattice dimensions
+		int m_iPhase = 0;           // 0 = coarse lattice, 1 = refine interior
+		int m_iCursor = 0;          // next work index within the current phase
+		bool m_bComplete = false;   // first full two-phase pass done -> drawable
 		float m_flCompleteTime = 0.f;
 
 		// baked CPU geometry, rebuilt only when cells change
@@ -104,7 +111,10 @@ class CSentryRange
 	IMaterial* m_pEdgeMaterialIgnoreZ = nullptr;
 
 	Vec3 GetSentryEye(CObjectSentrygun* pSentry);
-	int ComputeCell(SentryCache_t& tCache, int i); // returns traces used
+	int TraceCell(SentryCache_t& tCache, int i);         // full trace of one cell; returns traces used
+	int RefineCell(SentryCache_t& tCache, int gx, int gy); // fill from coarse block, tracing only if uneven
+	int StepCell(SentryCache_t& tCache, bool& bWrapped); // advance the phase machine one cell; returns traces used
+	size_t RemainingWork(const SentryCache_t& tCache) const;
 	void BuildDrawList(SentryCache_t& tCache); // cell grid -> merged fill chunks + boundary edges
 	void GetColors(const SentryCache_t& tCache, Color_t& tFill, Color_t& tFillIgnoreZ, Color_t& tEdge, Color_t& tEdgeIgnoreZ);
 	void BakeMeshes(SentryCache_t& tCache); // CPU chunks -> retained static meshes

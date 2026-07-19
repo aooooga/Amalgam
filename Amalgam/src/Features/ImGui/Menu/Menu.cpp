@@ -13,6 +13,7 @@
 #include "../../Output/Output.h"
 #include "../../World/World.h"
 #include "../../Simulation/ProjectileSimulation/ProjectileSimulation.h"
+#include "../../Debug/AutoVprof/AutoVprof.h"
 
 // Gradient editor for the glow health-color stops: the shared stop editor
 // (ImGui::FGradientStops) spanning 0-100% HP.
@@ -3484,6 +3485,19 @@ void CMenu::MenuSettings(int iTab)
 			FToggle(Vars::Debug::VisualizeTraces, FToggleEnum::Left);
 			FToggle(Vars::Debug::VisualizeTraceHits, FToggleEnum::Right);
 #endif
+
+			FToggle(Vars::Debug::AutoVprof);
+			if (Vars::Debug::AutoVprof.Value)
+			{
+				FText(std::format("Build {} ({} build{} excluded)", F::AutoVprof.GetBuildID(),
+					F::AutoVprof.ExclusionCount(), F::AutoVprof.ExclusionCount() == 1 ? "" : "s").c_str());
+				if (FButton("Exclude current build", FButtonEnum::Left))
+					F::AutoVprof.ExcludeBuild(F::AutoVprof.GetBuildID());
+				if (FButton("Include current build", FButtonEnum::Right | FButtonEnum::SameLine))
+					F::AutoVprof.IncludeBuild(F::AutoVprof.GetBuildID());
+				if (FButton("Clear build exclusions", FButtonEnum::Left))
+					F::AutoVprof.ClearExclusions();
+			}
 		} EndSection();
 		if (Vars::Debug::Options.Value && I::EngineClient->IsConnected())
 		{

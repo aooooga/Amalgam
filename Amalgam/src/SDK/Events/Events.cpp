@@ -10,10 +10,11 @@
 #include "../../Features/Output/Output.h"
 #include "../../Features/Resolver/Resolver.h"
 #include "../../Features/Visuals/Visuals.h"
+#include "../../Features/Debug/AutoVprof/AutoVprof.h"
 
 bool CEventListener::Initialize()
 {
-	std::vector<const char*> vEvents = { 
+	std::vector<const char*> vEvents = {
 		"client_beginconnect", "client_connected", "client_disconnect", "game_newmap", "teamplay_round_start", "scorestats_accumulated_update", "mvm_reset_stats", "player_connect_client", "player_spawn", "player_changeclass", "player_hurt", "vote_cast", "item_pickup", "revive_player_notify"
 	};
 
@@ -27,6 +28,11 @@ bool CEventListener::Initialize()
 			m_bFailed = true;
 		}
 	}
+
+	// Optional listeners (Auto vprof round/match boundaries) — a failure here must never
+	// abort loading, so these are registered leniently and don't touch m_bFailed.
+	for (auto szEvent : { "teamplay_round_win", "teamplay_game_over", "tf_game_over" })
+		I::GameEventManager->AddListener(this, szEvent, false);
 
 	return !m_bFailed;
 }
@@ -52,6 +58,7 @@ void CEventListener::FireGameEvent(IGameEvent* pEvent)
 	F::AutoHeal.Event(pEvent, uHash);
 	F::Misc.Event(pEvent, uHash);
 	F::Visuals.Event(pEvent, uHash);
+	F::AutoVprof.Event(uHash);
 	switch (uHash)
 	{
 	case FNV1A::Hash32Const("player_hurt"):

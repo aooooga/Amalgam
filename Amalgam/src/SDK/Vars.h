@@ -1009,5 +1009,6 @@ NAMESPACE_BEGIN(Vars)
 #endif
 
 		CVar(DrawHitboxes, "Show hitboxes", false, NOSAVE);
+		CVar(AutoVprof, "Auto vprof", false, NOBIND);
 	NAMESPACE_END(Debug)
 NAMESPACE_END(Vars)

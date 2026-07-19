@@ -17,6 +17,7 @@
 #include "../Features/PacketManip/AntiAim/AntiAim.h"
 #include "../Features/Aimbot/AutoHeal/AutoHeal.h"
 #include "../Features/Debug/Debug.h"
+#include "../Features/Debug/AutoVprof/AutoVprof.h"
 
 MAKE_HOOK(IEngineVGui_Paint, U::Memory.GetVirtual(I::EngineVGui, 14), void,
 	void* rcx, int iMode)
@@ -32,6 +33,8 @@ MAKE_HOOK(IEngineVGui_Paint, U::Memory.GetVirtual(I::EngineVGui, 14), void,
 	}
 	else if (iMode & PAINT_INGAMEPANELS && !SDK::CleanScreenshot())
 	{
+		F::AutoVprof.Run();
+
 		H::Draw.UpdateScreenSize();
 		H::Draw.UpdateW2SMatrix();
 

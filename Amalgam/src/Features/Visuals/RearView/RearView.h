@@ -32,16 +32,26 @@ private:
 	IMaterialVar* m_pGlowBloom = nullptr;
 	IMaterial* m_pGlowHalo = nullptr;  // translucent (writes alpha, so it composites)
 
-	std::vector<CTFPlayer*> m_vVisible = {}; // enemies with LOS, gathered once per frame
+	// Enemies with LOS, gathered once per frame. m_uCamMask has bit i set when
+	// the enemy's direction falls inside flank camera i's yaw coverage: each
+	// camera only spans ~(360 - front) / cams degrees, so without the mask every
+	// camera paid full model draws (material + 2 glow passes) for every visible
+	// enemy - including frontal ones no rear camera can ever show.
+	struct RearViewEnemy_t
+	{
+		CTFPlayer* m_pPlayer = nullptr;
+		uint32_t m_uCamMask = 0;
+	};
+	std::vector<RearViewEnemy_t> m_vVisible = {};
 
 	int m_iLastW = 0, m_iLastH = 0, m_iLastCams = 0;
 
 	bool SetupTargets(int iScrW, int iScrH, int iCams);
 	void FreeTargets();
-	void GatherVisibleEnemies(CTFPlayer* pLocal);
-	void RenderSideCamera(const CViewSetup& tView, float flYawOffset, float flSideFOV, ITexture* pTexture, int iCamW, int iScrH);
-	void DrawEnemies();
-	void RenderGlow(int iCamW, int iScrH); // outline glow into the currently-bound flank RT
+	void GatherVisibleEnemies(CTFPlayer* pLocal, float flViewYaw, float flFrontFOV, float flPerCam, int iCams);
+	void RenderSideCamera(const CViewSetup& tView, float flYawOffset, float flSideFOV, ITexture* pTexture, int iCamW, int iScrH, uint32_t uCamBit);
+	void DrawEnemies(uint32_t uCamBit);
+	void RenderGlow(int iCamW, int iScrH, uint32_t uCamBit); // outline glow into the currently-bound flank RT
 
 public:
 	// True while the flank cameras re-render the scene, so other hooks (e.g.

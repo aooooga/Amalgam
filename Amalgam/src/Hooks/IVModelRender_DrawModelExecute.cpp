@@ -53,6 +53,47 @@ MAKE_HOOK(IVModelRender_DrawModelExecute, U::Memory.GetVirtual(I::ModelRender, 1
 		}
 	}
 
+	// The cheap-face rule at a much more conservative distance, on EVERY pass:
+	// past CosmeticCullDistance a wearable is a few pixels but still a full
+	// model draw with bone merging - and crowded long-sightline moments put
+	// dozens in view at once, replicated per face/flank pass. Distance test
+	// first (plain vector math on pInfo.origin) so near models never pay the
+	// entity lookup. Sits above the m_bRendering branches so chams/glow
+	// re-draws of the same far wearable are culled consistently with the
+	// suppressed original.
+	if (const int iCullDist = Vars::Misc::Game::CosmeticCullDistance.Value)
+	{
+		// Eye for the active pass: face captures carry their own origin; other
+		// passes (main scene, rearview flanks) sit at the local eye, cached per
+		// frame. No valid eye -> no culling.
+		static int s_iEyeFrame = -1;
+		static Vec3 s_vEye = {};
+		static bool s_bEyeValid = false;
+		const Vec3* pEye = nullptr;
+		if (F::FlexFOV.m_bDrawing)
+			pEye = &F::FlexFOV.m_vEyeOrigin;
+		else
+		{
+			if (s_iEyeFrame != I::GlobalVars->framecount)
+			{
+				s_iEyeFrame = I::GlobalVars->framecount;
+				auto pLocal = H::Entities.GetLocal();
+				s_bEyeValid = pLocal;
+				if (pLocal)
+					s_vEye = pLocal->GetEyePosition();
+			}
+			if (s_bEyeValid)
+				pEye = &s_vEye;
+		}
+
+		if (pEye && pInfo.origin.DistToSqr(*pEye) > float(iCullDist) * float(iCullDist))
+		{
+			auto pEntity = I::ClientEntityList->GetClientEntity(pInfo.entity_index)->As<CBaseEntity>();
+			if (pEntity && pEntity->IsWearable() && !pEntity->IsWearableVM())
+				return;
+		}
+	}
+
 	if (F::Chams.m_bRendering)
 		return F::Chams.RenderHandler(pState, pInfo, pBoneToWorld);
 	if (F::Glow.m_bRendering)

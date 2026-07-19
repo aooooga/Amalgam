@@ -101,10 +101,41 @@ static inline void HandleMovement(CTFPlayer* pPlayer, MoveData* pLastRecord, Mov
 	}
 }
 
+// Building other players' move history is real per-packet work - a TraceHull
+// per moving player plus deque churn - and only the aim paths' strafe/delta
+// prediction ever reads it. Mirror CBacktrack::WantRecords: aim state is known
+// statically from its var (never a warmup gap), everything else (the ESP lag
+// debug readout, future callers) is demand-driven - any Initialize or
+// GetPredictedDelta on a non-local target keeps storing alive 3s, and a
+// consumer that just woke up only waits a moment while history refills. The
+// local player is unaffected either way: EnginePrediction feeds their records
+// per tick through StorePlayer.
+bool CMovementSimulation::WantStore()
+{
+	return Vars::Aimbot::General::AimType.Value
+		|| Vars::Debug::Info.Value
+		|| I::GlobalVars->realtime - m_flRecordsWanted < 3.f;
+}
+
 void CMovementSimulation::Store()
 {
 	if (I::EngineClient->IsPlayingDemo())
 		return;
+
+	if (!WantStore())
+	{
+		if (m_bStoreActive)
+		{	// one-time cleanup on the falling edge, so a later wake starts from
+			// fresh history instead of a stale mix; keep the local player's
+			// records - StorePlayer owns those and keeps them current.
+			m_bStoreActive = false;
+			const int iLocal = I::EngineClient->GetLocalPlayer();
+			std::erase_if(m_mRecords, [iLocal](const auto& tEntry) { return tEntry.first != iLocal; });
+			m_mSimTimes.clear();
+		}
+		return;
+	}
+	m_bStoreActive = true;
 
 	for (auto pEntity : H::Entities.GetGroup(EntityEnum::PlayerAll))
 	{
@@ -189,6 +220,11 @@ void CMovementSimulation::StorePlayer(CTFPlayer* pPlayer, CMoveData& tMoveData, 
 
 bool CMovementSimulation::Initialize(CBaseEntity* pEntity, MoveStorage& tMoveStorage, bool bHitchance, bool bStrafe, bool bPredict)
 {
+	// Demand stamp for WantStore - set before any validation so a consumer that
+	// starts asking turns storing on and gets history within a few packets.
+	if (pEntity && pEntity->entindex() != I::EngineClient->GetLocalPlayer())
+		m_flRecordsWanted = I::GlobalVars->realtime;
+
 	if (!pEntity || !pEntity->IsPlayer() || !pEntity->As<CTFPlayer>()->IsAlive())
 	{
 		tMoveStorage.m_bInitFailed = tMoveStorage.m_bFailed = true;
@@ -749,6 +785,10 @@ void CMovementSimulation::Restore(MoveStorage& tMoveStorage)
 
 float CMovementSimulation::GetPredictedDelta(CBaseEntity* pEntity)
 {
+	// Demand stamp for WantStore (sim-time deltas come from the same Store pass).
+	if (pEntity->entindex() != I::EngineClient->GetLocalPlayer())
+		m_flRecordsWanted = I::GlobalVars->realtime;
+
 	auto& vSimTimes = m_mSimTimes[pEntity->entindex()];
 	if (!vSimTimes.empty())
 	{

@@ -60,6 +60,13 @@ private:
 	std::unordered_map<int, std::deque<MoveData>> m_mRecords = {};
 	std::unordered_map<int, std::deque<float>> m_mSimTimes = {};
 
+	// Last realtime any consumer asked for other-player move data
+	// (Initialize / GetPredictedDelta on a non-local target). See WantStore.
+	float m_flRecordsWanted = -10.f;
+	bool m_bStoreActive = false;
+
+	bool WantStore();
+
 public:
 	void Store();
 	void StorePlayer(CTFPlayer* pPlayer, CMoveData& tMoveData, float flTime);

@@ -297,6 +297,11 @@ void CBacktrack::MakeRecords()
 
 void CBacktrack::CleanRecords()
 {
+	// Nothing recorded (WantRecords off since map load): skip the per-player
+	// walk, whose operator[] would also seed an empty deque per player.
+	if (m_mRecords.empty())
+		return;
+
 	for (auto& pEntity : H::Entities.GetGroup(EntityEnum::PlayerAll))
 	{
 		auto pPlayer = pEntity->As<CTFPlayer>();

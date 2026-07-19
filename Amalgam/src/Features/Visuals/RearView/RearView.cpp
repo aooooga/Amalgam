@@ -147,7 +147,7 @@ void CRearView::FreeTargets()
 	m_vAlphaVars.clear();
 }
 
-void CRearView::GatherVisibleEnemies(CTFPlayer* pLocal)
+void CRearView::GatherVisibleEnemies(CTFPlayer* pLocal, float flViewYaw, float flFrontFOV, float flPerCam, int iCams)
 {
 	m_vVisible.clear();
 
@@ -158,17 +158,50 @@ void CRearView::GatherVisibleEnemies(CTFPlayer* pLocal)
 		if (!pPlayer || !pPlayer->IsAlive() || pPlayer->IsDormant())
 			continue;
 
+		// Which flank cameras can actually contain this enemy. Yaw-only test
+		// (the tall tiles have a huge vertical FOV): camera i is centred
+		// flFrontFOV/2 + (i + 0.5) * flPerCam left of view forward. Very close
+		// enemies span large angles across seams - keep them in every camera.
+		uint32_t uCamMask = 0;
+		const Vec3 vDelta = pPlayer->GetShootPos() - vMyEye;
+		if (vDelta.Length2DSqr() < 400.f * 400.f)
+			uCamMask = (1u << iCams) - 1;
+		else
+		{
+			const float flEnemyYaw = Math::NormalizeAngle(Math::Rad2Deg(atan2f(vDelta.y, vDelta.x)) - flViewYaw);
+			for (int i = 0; i < iCams; i++)
+			{
+				const float flCamYaw = flFrontFOV * 0.5f + (i + 0.5f) * flPerCam;
+				if (fabsf(Math::NormalizeAngle(flEnemyYaw - flCamYaw)) <= flPerCam * 0.5f + 15.f)
+					uCamMask |= 1u << i;
+			}
+		}
+		// No camera covers them (frontal enemies, mostly) - skip the LOS trace too.
+		if (!uCamMask)
+			continue;
+
 		// Only enemies with a clear line of sight, matching the Lua's IsLineClear.
 		if (!SDK::VisPos(pLocal, pPlayer, vMyEye, pPlayer->GetShootPos()))
 			continue;
 
-		m_vVisible.push_back(pPlayer);
+		m_vVisible.push_back({ pPlayer, uCamMask });
 	}
 }
 
-void CRearView::DrawEnemies()
+void CRearView::DrawEnemies(uint32_t uCamBit)
 {
-	if (m_vVisible.empty())
+	// Only the enemies this camera's yaw slice can contain; the rest would be
+	// full-cost model draws the frustum then discards.
+	bool bAny = false;
+	for (auto& tEnemy : m_vVisible)
+	{
+		if (tEnemy.m_uCamMask & uCamBit)
+		{
+			bAny = true;
+			break;
+		}
+	}
+	if (!bAny)
 		return;
 
 	auto pRenderContext = I::MaterialSystem->GetRenderContext();
@@ -185,8 +218,12 @@ void CRearView::DrawEnemies()
 		if (pMaterial && pMaterial->m_bInvertCull)
 			pRenderContext->CullMode(MATERIAL_CULLMODE_CW);
 
-		for (auto pPlayer : m_vVisible)
+		for (auto& tEnemy : m_vVisible)
 		{
+			if (!(tEnemy.m_uCamMask & uCamBit))
+				continue;
+			auto pPlayer = tEnemy.m_pPlayer;
+
 			// Per player so distance-based colors track each enemy's range.
 			F::Materials.SetColor(pMaterial, tColor.GetColor(pLocal ? pLocal->GetAbsOrigin().DistTo(pPlayer->GetAbsOrigin()) : -1.f));
 
@@ -207,7 +244,7 @@ void CRearView::DrawEnemies()
 // interior, render a colored silhouette into a scratch buffer, blur it, then blit
 // the halo back offset+masked to the stencil so only the outline lands. Uses a
 // translucent (alpha-writing) halo so the baked outline survives the tile blend.
-void CRearView::RenderGlow(int iCamW, int iScrH)
+void CRearView::RenderGlow(int iCamW, int iScrH, uint32_t uCamBit)
 {
 	if (m_vVisible.empty() || !m_pGlowColor || !m_pGlowSil || !m_pGlowBlur || !m_pGlowBlurX || !m_pGlowBlurY || !m_pGlowHalo)
 		return;
@@ -216,6 +253,21 @@ void CRearView::RenderGlow(int iCamW, int iScrH)
 	const float flBlur = Vars::Visuals::UI::RearViewGlowBlur.Value;
 	if (!iStencil && !flBlur)
 		return;
+
+	// Empty camera: skip the whole pipeline (2 model draws per enemy plus the
+	// full-tile blur and halo blits), not just the draws.
+	bool bAny = false;
+	for (auto& tEnemy : m_vVisible)
+	{
+		if (tEnemy.m_uCamMask & uCamBit)
+		{
+			bAny = true;
+			break;
+		}
+	}
+	if (!bAny)
+		return;
+
 	const Color_t cGlow = Vars::Visuals::UI::RearViewGlowColor.Value;
 
 	auto pRenderContext = I::MaterialSystem->GetRenderContext();
@@ -251,8 +303,11 @@ void CRearView::RenderGlow(int iCamW, int iScrH)
 	pRenderContext->SetStencilReferenceValue(1);
 	pRenderContext->SetStencilWriteMask(0xFF);
 	pRenderContext->SetStencilTestMask(0x0);
-	for (auto p : m_vVisible)
-		Draw(p);
+	for (auto& tEnemy : m_vVisible)
+	{
+		if (tEnemy.m_uCamMask & uCamBit)
+			Draw(tEnemy.m_pPlayer);
+	}
 	pRenderContext->SetStencilEnable(false);
 
 	// 2) Colored silhouette into the scratch buffer.
@@ -261,11 +316,13 @@ void CRearView::RenderGlow(int iCamW, int iScrH)
 	pRenderContext->Viewport(0, 0, iCamW, iScrH);
 	pRenderContext->ClearColor4ub(0, 0, 0, 0);
 	pRenderContext->ClearBuffers(true, true, false);
-	for (auto p : m_vVisible)
+	for (auto& tEnemy : m_vVisible)
 	{
+		if (!(tEnemy.m_uCamMask & uCamBit))
+			continue;
 		I::RenderView->SetColorModulation(cGlow);
 		I::RenderView->SetBlend(cGlow.a / 255.f);
-		Draw(p);
+		Draw(tEnemy.m_pPlayer);
 	}
 	pRenderContext->PopRenderTargetAndViewport(); // back to the flank RT
 
@@ -312,7 +369,7 @@ void CRearView::RenderGlow(int iCamW, int iScrH)
 	pRenderContext->Release();
 }
 
-void CRearView::RenderSideCamera(const CViewSetup& tView, float flYawOffset, float flSideFOV, ITexture* pTexture, int iCamW, int iScrH)
+void CRearView::RenderSideCamera(const CViewSetup& tView, float flYawOffset, float flSideFOV, ITexture* pTexture, int iCamW, int iScrH, uint32_t uCamBit)
 {
 	if (!pTexture)
 		return;
@@ -337,8 +394,8 @@ void CRearView::RenderSideCamera(const CViewSetup& tView, float flYawOffset, flo
 	pRenderContext->ClearBuffers(true, true, false);
 	pRenderContext->Release();
 
-	DrawEnemies();
-	RenderGlow(iCamW, iScrH); // self-gates: only draws when stencil or blur >= 1
+	DrawEnemies(uCamBit);
+	RenderGlow(iCamW, iScrH, uCamBit); // self-gates: only draws when stencil or blur >= 1
 
 	I::RenderView->PopView(frustum);
 }
@@ -387,7 +444,7 @@ void CRearView::Capture(void* rcx, const CViewSetup& tView)
 	const float flPerCam = flRemaining / iCams;
 	const float flSideFOV = SanitizeFOV(flPerCam - 1.25f, 125.f); // small seam overlap (OVERLAP_DEG)
 
-	GatherVisibleEnemies(pLocal);
+	GatherVisibleEnemies(pLocal, tView.angles.y, flFrontFOV, flPerCam, iCams);
 
 	m_bCapturing = true;
 	for (int i = 0; i < iCams; i++)
@@ -395,7 +452,7 @@ void CRearView::Capture(void* rcx, const CViewSetup& tView)
 		// Sweep from the edge of the front cone around the back: each camera centred
 		// one coverage step further round than the last.
 		const float flYaw = flFrontFOV * 0.5f + (i + 0.5f) * flPerCam;
-		RenderSideCamera(tView, flYaw, flSideFOV, m_vTextures[i], iCamW, iScrH);
+		RenderSideCamera(tView, flYaw, flSideFOV, m_vTextures[i], iCamW, iScrH, 1u << i);
 	}
 	m_bCapturing = false;
 }

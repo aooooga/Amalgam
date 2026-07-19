@@ -1537,6 +1537,7 @@ void CMenu::MenuMisc(int iTab)
 					FToggle(Vars::Misc::Game::SetupBonesOptimization, FToggleEnum::Right);
 					FToggle(Vars::Misc::Game::AttributeCacheOptimization, FToggleEnum::Left);
 					FToggle(Vars::Misc::Game::AntiCheatCompatibility, FToggleEnum::Right);
+					FSlider(Vars::Misc::Game::CosmeticCullDistance, FSliderEnum::Left, !Vars::Misc::Game::CosmeticCullDistance[DEFAULT_BIND] ? "off" : "%d");
 				} EndSection();
 				if (Vars::Debug::Options.Value)
 				{

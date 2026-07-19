@@ -871,6 +871,11 @@ NAMESPACE_BEGIN(Vars)
 			// re-walks the attribute lists hundreds of times per frame (~2-3% of
 			// frame time on a full server per vprof).
 			CVar(AttributeCacheOptimization, "Attribute cache optimization", true);
+			// Skip drawing wearables (cosmetics) past this distance, 0 = off. A hat
+			// at 2500u is a few pixels, but still a full model draw with bone
+			// merging per render pass - and every extra pass (FlexFOV faces,
+			// rearview flanks) multiplies it. Players and weapons are untouched.
+			CVar(CosmeticCullDistance, "Cosmetic cull distance", 2500, SLIDER_CLAMP, 0, 10000);
 			CVar(AntiCheatCompatibility, "Anti-cheat compatibility", false);
 
 			CVar(AntiCheatCritHack, "Anti-cheat crit hack", false, NOSAVE | DEBUGVAR);

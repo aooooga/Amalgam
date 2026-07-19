@@ -31,11 +31,14 @@ static constexpr double INTERVAL = 1.0;        // seconds of accumulation per re
 static constexpr double DUMP_TIMEOUT = 0.75;   // max wait for a report to appear in the log
 static constexpr double SPIKE_FACTOR = 2.0;    // frame > factor * EMA => spike
 static constexpr double SPIKE_FLOOR_MS = 8.0;  // ...and above this absolute floor
-static constexpr int    MAX_SNAPSHOTS = 5;     // retained spike snapshots per match
-static constexpr int    TOP_N = 40;            // nodes kept in per-match report
-static constexpr int    SNAPSHOT_TOP = 12;     // nodes kept per spike snapshot
+static constexpr int    MAX_SNAPSHOTS = 3;     // retained spike snapshots per match
+static constexpr int    TOP_N = 30;            // nodes kept in per-match report
+static constexpr int    SNAPSHOT_TOP = 8;      // nodes kept per spike snapshot
 static constexpr double PRUNE_PCT = 0.1;       // drop nodes below this % of frame time
 static constexpr int    ROLLUP_N = 5;          // matches averaged in the per-map rollup
+static constexpr int    INTERVAL_TOP = 48;     // nodes retained per interval for 5%-low re-agg
+static constexpr int    HEAVY_TOP = 15;        // nodes in the per-match #heavy (5% low) section
+static constexpr double HEAVY_FRAC = 0.05;     // fraction of frames the heavy section covers
 
 // vprof_generate_report node line = <name (may contain spaces)> then 10 numeric columns:
 //   0 Calls  1 Calls/Frame  2 Time+Child  3 Pct(incl)  4 Time  5 Pct(self)
@@ -384,6 +387,7 @@ void CAutoVprof::ResetMatch()
 	m_mAgg.clear();
 	m_vFrameMs.clear();
 	m_vSpikes.clear();
+	m_vIntervals.clear();
 	m_sMap.clear();
 	m_sMode.clear();
 	m_iSlots = 0;
@@ -470,6 +474,20 @@ void CAutoVprof::ApplyInterval(const std::vector<VprofNode_t>& vNodes, long long
 		a.m_iFrames += w;
 	}
 
+	// Retain the interval (trimmed to the heaviest nodes) so the match's worst ~5% of
+	// frames can be re-aggregated into their own node ranking at match end.
+	{
+		VprofInterval_t tI;
+		tI.m_iFrames = w;
+		tI.m_flAvgMs = flAvgMs;
+		tI.m_vNodes = vNodes;
+		std::sort(tI.m_vNodes.begin(), tI.m_vNodes.end(),
+			[](const VprofNode_t& a, const VprofNode_t& b) { return a.SelfMs() > b.SelfMs(); });
+		if (static_cast<int>(tI.m_vNodes.size()) > INTERVAL_TOP)
+			tI.m_vNodes.resize(INTERVAL_TOP);
+		m_vIntervals.push_back(std::move(tI));
+	}
+
 	if (bSpike && static_cast<int>(m_vSpikes.size()) < MAX_SNAPSHOTS)
 	{
 		VprofSpike_t tS;
@@ -541,6 +559,50 @@ void CAutoVprof::WriteMatch()
 	if (static_cast<int>(vRows.size()) > TOP_N)
 		vRows.resize(TOP_N);
 
+	// 5%-low re-aggregation: take the heaviest intervals (by avg frame time) until they
+	// cover ~HEAVY_FRAC of the match's frames, and rank nodes within just those moments.
+	struct HRow { std::string name; double selfMs; };
+	std::vector<HRow> vHeavy;
+	long long iHeavyFrames = 0;
+	double flHeavyAvgMs = 0.0;
+	int iHeavyIntervals = 0;
+	{
+		long long iTotalFrames = 0;
+		for (const auto& tI : m_vIntervals)
+			iTotalFrames += tI.m_iFrames;
+
+		std::vector<const VprofInterval_t*> vSorted;
+		for (const auto& tI : m_vIntervals)
+			vSorted.push_back(&tI);
+		std::sort(vSorted.begin(), vSorted.end(),
+			[](const VprofInterval_t* a, const VprofInterval_t* b) { return a->m_flAvgMs > b->m_flAvgMs; });
+
+		long long iWant = std::max<long long>(1, static_cast<long long>(iTotalFrames * HEAVY_FRAC));
+		std::unordered_map<std::string, std::pair<double, double>> mH; // name -> (sum selfms*w, sum w)
+		double flMsSum = 0.0;
+		for (const auto* pI : vSorted)
+		{
+			if (iHeavyFrames >= iWant)
+				break;
+			iHeavyIntervals++;
+			iHeavyFrames += pI->m_iFrames;
+			flMsSum += pI->m_flAvgMs * pI->m_iFrames;
+			for (const auto& n : pI->m_vNodes)
+			{
+				auto& a = mH[n.m_sName];
+				a.first += n.SelfMs() * pI->m_iFrames;
+				a.second += pI->m_iFrames;
+			}
+		}
+		flHeavyAvgMs = iHeavyFrames ? flMsSum / iHeavyFrames : 0.0;
+		for (const auto& [name, a] : mH)
+			if (a.second > 0.0)
+				vHeavy.push_back({ name, a.first / static_cast<double>(iHeavyFrames) });
+		std::sort(vHeavy.begin(), vHeavy.end(), [](const HRow& a, const HRow& b) { return a.selfMs > b.selfMs; });
+		if (static_cast<int>(vHeavy.size()) > HEAVY_TOP)
+			vHeavy.resize(HEAVY_TOP);
+	}
+
 	std::string sStamp = NowStamp();
 	std::string sFile = m_sMatchesDir + m_sMap + "_" + sStamp + ".txt";
 
@@ -560,9 +622,16 @@ void CAutoVprof::WriteMatch()
 		f << "time=" << sStamp << "\n";
 		f << "# ranked by self ms/frame; self%=CPU self, inclms=ms/frame incl children\n";
 		f << "#nodes self% selfms inclms calls/f name\n";
-		f << std::setprecision(3);
+		f << std::setprecision(2);
 		for (const auto& r : vRows)
 			f << r.selfPct << " " << r.selfMs << " " << r.inclMs << " " << r.calls << " " << r.name << "\n";
+
+		// same ranking but restricted to the heaviest ~5% of frames — what the lag is made of
+		f.precision(1);
+		f << "#heavy 5%low intervals=" << iHeavyIntervals << " frames=" << iHeavyFrames << " avgms=" << flHeavyAvgMs << "\n";
+		f << std::setprecision(2);
+		for (const auto& r : vHeavy)
+			f << r.selfMs << " " << r.name << "\n";
 
 		f.precision(1);
 		f << "#spikes count=" << m_vSpikes.size() << "\n";
@@ -572,7 +641,7 @@ void CAutoVprof::WriteMatch()
 			for (size_t i = 0; i < s.m_vTopNodes.size(); i++)
 			{
 				if (i) f << ",";
-				f << s.m_vTopNodes[i].m_sName << ":" << std::setprecision(3) << s.m_vTopNodes[i].SelfMs() << std::setprecision(1);
+				f << s.m_vTopNodes[i].m_sName << ":" << std::setprecision(2) << s.m_vTopNodes[i].SelfMs() << std::setprecision(1);
 			}
 			f << "\n";
 		}
@@ -584,7 +653,8 @@ void CAutoVprof::WriteMatch()
 void CAutoVprof::UpdateRollup()
 {
 	struct Node { double selfPct; double selfMs; std::string name; };
-	struct Rec { std::string build; double fps1 = 0, fps5 = 0, fpsAvg = 0; std::vector<Node> nodes; std::vector<std::string> spikeNodes; std::string fname; };
+	struct HNode { double selfMs; std::string name; };
+	struct Rec { std::string build; double fps1 = 0, fps5 = 0, fpsAvg = 0; std::vector<Node> nodes; std::vector<HNode> heavyNodes; std::vector<std::string> spikeNodes; std::string fname; };
 
 	std::vector<Rec> vAll;
 	std::string sPrefix = m_sMap + "_";
@@ -603,13 +673,14 @@ void CAutoVprof::UpdateRollup()
 			r.fname = fn;
 			std::ifstream f(e.path());
 			std::string sLine;
-			int iSect = 0; // 0 header, 1 nodes, 2 spikes
+			int iSect = 0; // 0 header, 1 nodes, 2 spikes, 3 heavy (5% low)
 			while (std::getline(f, sLine))
 			{
 				while (!sLine.empty() && sLine.back() == '\r')
 					sLine.pop_back();
 				if (sLine.rfind("#nodes", 0) == 0) { iSect = 1; continue; }
 				if (sLine.rfind("#spikes", 0) == 0) { iSect = 2; continue; }
+				if (sLine.rfind("#heavy", 0) == 0) { iSect = 3; continue; }
 
 				if (iSect == 0)
 				{
@@ -639,6 +710,18 @@ void CAutoVprof::UpdateRollup()
 						for (size_t i = 4; i < v.size(); i++)
 							n.name += (i > 4 ? " " : "") + v[i];
 						r.nodes.push_back(std::move(n));
+					}
+				}
+				else if (iSect == 3)
+				{
+					auto v = Tokenize(sLine);
+					if (v.size() >= 2)
+					{
+						HNode n;
+						n.selfMs = std::strtod(v[0].c_str(), nullptr);
+						for (size_t i = 1; i < v.size(); i++)
+							n.name += (i > 1 ? " " : "") + v[i];
+						r.heavyNodes.push_back(std::move(n));
 					}
 				}
 				else if (iSect == 2)
@@ -684,6 +767,8 @@ void CAutoVprof::UpdateRollup()
 		return;
 
 	std::unordered_map<std::string, std::pair<double, double>> mAgg; // name -> (sum self%, sum selfms)
+	std::unordered_map<std::string, double> mHeavy;                  // name -> sum heavy selfms
+	int iHeavyMatches = 0;                                           // matches with a #heavy section
 	std::unordered_map<std::string, int> mSpike;
 	for (auto* r : vUsed)
 	{
@@ -693,6 +778,10 @@ void CAutoVprof::UpdateRollup()
 			a.first += n.selfPct;
 			a.second += n.selfMs;
 		}
+		if (!r->heavyNodes.empty())
+			iHeavyMatches++;
+		for (const auto& n : r->heavyNodes)
+			mHeavy[n.name] += n.selfMs;
 		std::unordered_set<std::string> seen;
 		for (const auto& s : r->spikeNodes)
 			if (seen.insert(s).second)
@@ -725,9 +814,22 @@ void CAutoVprof::UpdateRollup()
 		for (auto it = vUsed.rbegin(); it != vUsed.rend(); ++it)
 			f << " " << (*it)->fpsAvg;
 		f << "\n#nodes self% selfms name (avg of last " << iUsed << ")\n";
-		f << std::setprecision(3);
+		f << std::setprecision(2);
 		for (const auto& r : vRows)
 			f << r.selfPct << " " << r.selfMs << " " << r.name << "\n";
+		if (iHeavyMatches > 0)
+		{
+			struct HR { double selfMs; std::string name; };
+			std::vector<HR> vH;
+			for (const auto& [name, ms] : mHeavy)
+				vH.push_back({ ms / iHeavyMatches, name });
+			std::sort(vH.begin(), vH.end(), [](const HR& a, const HR& b) { return a.selfMs > b.selfMs; });
+			if (static_cast<int>(vH.size()) > HEAVY_TOP)
+				vH.resize(HEAVY_TOP);
+			f << "#heavy selfms name (5%low frames, avg of " << iHeavyMatches << ")\n";
+			for (const auto& r : vH)
+				f << r.selfMs << " " << r.name << "\n";
+		}
 		f.precision(1);
 		f << "#recurring_spikes\n";
 		for (const auto& [name, cnt] : vSpk)

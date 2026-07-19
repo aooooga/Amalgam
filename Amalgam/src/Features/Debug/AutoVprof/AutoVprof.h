@@ -37,6 +37,15 @@ struct VprofAgg_t
 	long long m_iFrames = 0; // total frames the node was observed over
 };
 
+// A retained capture interval (~1s of accumulation). Kept for the whole match so the
+// heaviest intervals (the "5% low" moments) can be re-aggregated separately at match end.
+struct VprofInterval_t
+{
+	long long m_iFrames = 0;              // frames in the interval
+	double m_flAvgMs = 0.0;               // average frame time across the interval
+	std::vector<VprofNode_t> m_vNodes;    // parsed nodes, trimmed to the heaviest by self ms
+};
+
 // A retained snapshot of an interval that contained a frametime spike.
 struct VprofSpike_t
 {
@@ -133,6 +142,7 @@ private:
 	std::unordered_map<std::string, VprofAgg_t> m_mAgg;
 	std::vector<float> m_vFrameMs; // live frame times across the whole match
 	std::vector<VprofSpike_t> m_vSpikes;
+	std::vector<VprofInterval_t> m_vIntervals; // all intervals, for 5%-low re-aggregation
 };
 
 ADD_FEATURE(CAutoVprof, AutoVprof);

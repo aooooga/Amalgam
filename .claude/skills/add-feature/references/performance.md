@@ -13,11 +13,15 @@ around (vprof_* are deferred, one-per-frame).
 
 ## Output files — `Team Fortress 2/Amalgam/vprof/`
 - `matches/<map>_<YYYYMMDD-HHMMSS>.txt` — one per match. Header (map, mode, slots, duration,
-  frames, fps avg/1%low/5%low, `build=`), then top-40 nodes ranked by **self ms/frame**
-  (pruned < 0.1% self): `self%  selfms  inclms  calls/f  name`, then up to 5 spike snapshots
+  frames, fps avg/1%low/5%low, `build=`), then top-30 nodes ranked by **self ms/frame**
+  (pruned < 0.1% self): `self%  selfms  inclms  calls/f  name`; then a `#heavy` section —
+  the same self-ms ranking but computed **only over the heaviest ~5% of frames** (the match's
+  laggy moments; `selfms name`, top 15) — compare a node's heavy selfms vs its overall selfms
+  to see what disproportionately drives the lows; then up to 3 spike snapshots
   (`worst=/avg= ms`, top self-ms nodes).
 - `<map>.txt` — rolling rollup over the **last 5 non-excluded matches** on that map: fps
-  trend + nodes averaged (`self%  selfms  name`) + recurring spike contributors.
+  trend + nodes averaged (`self%  selfms  name`) + `#heavy` averaged 5%-low nodes +
+  recurring spike contributors.
 - `builds.txt` — **auto-generated build inventory** (do not hand-edit): every build id that
   has recorded matches, with match count, maps, date range, and excluded status.
 - `excluded_builds.txt` — **curated by Claude** (see below).

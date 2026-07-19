@@ -12,6 +12,7 @@ This skill replaces codebase exploration. Read the reference file(s) matching yo
 | Where anything lives; hooks index; feature inventory; Vars.h/menu layout | `references/codebase-map.md` |
 | API signatures: `SDK::`, `H::Draw`, `H::Entities`, `I::`, macros, netvars, types, ConfigVar/bind semantics | `references/sdk-api.md` |
 | End-to-end recipes, FlexFOV coexistence rules, perf/crash landmines | `references/patterns.md` |
+| **Performance**: Auto vprof capture tool, its report/rollup formats, and the Claude-curated build-exclusion workflow | `references/performance.md` |
 
 ## Core checklist (every new feature)
 

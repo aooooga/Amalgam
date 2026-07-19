@@ -51,14 +51,9 @@ public:
 	void Run();                  // per rendered frame (IEngineVGui_Paint)
 	void Event(uint32_t uHash);  // round/match lifecycle events
 
-	// Build-exclusion management (menu buttons). A "build" is identified by the DLL's
-	// link timestamp, so every relink is a distinct id; excluded ids drop out of rollups.
+	// A "build" is identified by the DLL's link timestamp (YYYYMMDD-HHMM), so every relink
+	// is a distinct, chronologically-sortable id. Exposed read-only for the menu display.
 	const std::string& GetBuildID();
-	bool IsBuildExcluded(const std::string& sID);
-	void ExcludeBuild(const std::string& sID);
-	void IncludeBuild(const std::string& sID);
-	void ClearExclusions();
-	size_t ExclusionCount();
 
 private:
 	enum class EPhase { Idle, Live, WaitDump };
@@ -81,8 +76,9 @@ private:
 	void ApplyInterval(const std::vector<VprofNode_t>& vNodes, long long iFrames, bool bSpike, double flWorstMs, double flAvgMs);
 	void WriteMatch();
 	void UpdateRollup();
-	void LoadExclusions();
-	void SaveExclusions();
+	void UpdateManifest();                       // regenerate builds.txt (build inventory for Claude)
+	void LoadExclusions();                        // (re)read excluded_builds.txt, curated by Claude
+	bool IsBuildExcluded(const std::string& sID); // uses the loaded exclusion set + 'before' rules
 
 	static std::string SanitizeMap(const char* sLevelName);
 	static std::string GameModeOf(const std::string& sMap);
@@ -93,6 +89,7 @@ private:
 	std::string m_sMatchesDir = ""; // <game>/Amalgam/vprof/matches/
 	std::string m_sCaptureLog = ""; // absolute path we point con_logfile at
 	std::string m_sExclusionsFile = "";
+	std::string m_sManifestFile = "";
 
 	// ---- vprof command handling ----
 	bool m_bVprofUnlocked = false;
@@ -100,11 +97,10 @@ private:
 	std::string m_sEnableCmd = "vprof\n";
 	std::string m_sDisableCmd = "vprof\n";
 
-	// ---- build id / exclusions ----
+	// ---- build id / exclusions (exclusions are curated by Claude via excluded_builds.txt) ----
 	std::string m_sBuildID = "";
-	std::unordered_set<uint32_t> m_sExcluded; // hashes of excluded build ids
-	std::vector<std::string> m_vExcludedRaw;  // raw ids (for file round-trip)
-	bool m_bExclusionsLoaded = false;
+	std::unordered_set<uint32_t> m_sExcluded;    // hashes of explicitly-excluded build ids
+	std::vector<std::string> m_vExcludeBefore;   // 'before <id>' thresholds; exclude ids < these
 
 	// ---- intent flags set by Event() ----
 	bool m_bLiveRequested = false;

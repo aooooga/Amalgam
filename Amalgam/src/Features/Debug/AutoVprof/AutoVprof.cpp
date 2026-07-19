@@ -12,6 +12,8 @@
 #include <fstream>
 #include <sstream>
 #include <iomanip>
+#include <set>
+#include <map>
 #include <filesystem>
 #include <chrono>
 #include <ctime>
@@ -101,12 +103,27 @@ void CAutoVprof::EnsurePaths()
 		m_sDir = sRoot + "\\Amalgam\\vprof\\";
 		m_sMatchesDir = m_sDir + "matches\\";
 		m_sExclusionsFile = m_sDir + "excluded_builds.txt";
+		m_sManifestFile = m_sDir + "builds.txt";
 		// con_logfile is resolved by the engine relative to the mod dir (tf/), so the
 		// capture file must live there — a bare filename lands in tf/ directly.
 		m_sCaptureLog = sRoot + "\\tf\\" + CAPTURE_NAME;
 
 		std::filesystem::create_directories(m_sDir);
 		std::filesystem::create_directories(m_sMatchesDir);
+
+		// Seed excluded_builds.txt (Claude-curated) with a commented template so the format
+		// is self-documenting. Never overwrite an existing one.
+		if (!std::filesystem::exists(m_sExclusionsFile))
+		{
+			std::ofstream f(m_sExclusionsFile);
+			f << "# Amalgam vprof build exclusions - curated by Claude, not the user.\n"
+			     "# Matches recorded on excluded builds are dropped from the per-map rollups (<map>.txt).\n"
+			     "# See builds.txt for the inventory of builds that have recorded matches.\n"
+			     "# One build id per line; '#' starts a comment/reason. Two forms:\n"
+			     "#   20260717-1440         # exclude just this build\n"
+			     "#   before 20260718-2000  # exclude every build older than this id\n";
+		}
+
 		m_bPathsReady = true;
 	}
 	catch (...) {}
@@ -138,85 +155,40 @@ const std::string& CAutoVprof::GetBuildID()
 	return m_sBuildID;
 }
 
-// ---- exclusions ---------------------------------------------------------------
+// ---- exclusions (curated by Claude via excluded_builds.txt; the tool only reads it) ----
 void CAutoVprof::LoadExclusions()
 {
-	m_bExclusionsLoaded = true;
 	m_sExcluded.clear();
-	m_vExcludedRaw.clear();
+	m_vExcludeBefore.clear();
 	try
 	{
 		std::ifstream f(m_sExclusionsFile);
 		std::string sLine;
 		while (std::getline(f, sLine))
 		{
-			while (!sLine.empty() && (sLine.back() == '\r' || sLine.back() == ' '))
-				sLine.pop_back();
-			if (sLine.empty())
+			if (auto p = sLine.find('#'); p != std::string::npos) // strip inline comments/reasons
+				sLine = sLine.substr(0, p);
+			auto v = Tokenize(sLine);
+			if (v.empty())
 				continue;
-			m_sExcluded.insert(FNV1A::Hash32(sLine.c_str()));
-			m_vExcludedRaw.push_back(sLine);
+			if (v[0] == "before" && v.size() >= 2)
+				m_vExcludeBefore.push_back(v[1]); // exclude all builds older than this id
+			else
+				m_sExcluded.insert(FNV1A::Hash32(v[0].c_str()));
 		}
-	}
-	catch (...) {}
-}
-
-void CAutoVprof::SaveExclusions()
-{
-	try
-	{
-		std::ofstream f(m_sExclusionsFile, std::ios::trunc);
-		for (const auto& s : m_vExcludedRaw)
-			f << s << "\n";
 	}
 	catch (...) {}
 }
 
 bool CAutoVprof::IsBuildExcluded(const std::string& sID)
 {
-	if (!m_bExclusionsLoaded)
-		LoadExclusions();
-	return m_sExcluded.contains(FNV1A::Hash32(sID.c_str()));
-}
-
-void CAutoVprof::ExcludeBuild(const std::string& sID)
-{
-	EnsurePaths();
-	if (!m_bExclusionsLoaded)
-		LoadExclusions();
-	if (sID.empty() || m_sExcluded.contains(FNV1A::Hash32(sID.c_str())))
-		return;
-	m_sExcluded.insert(FNV1A::Hash32(sID.c_str()));
-	m_vExcludedRaw.push_back(sID);
-	SaveExclusions();
-}
-
-void CAutoVprof::IncludeBuild(const std::string& sID)
-{
-	if (!m_bExclusionsLoaded)
-		LoadExclusions();
-	uint32_t u = FNV1A::Hash32(sID.c_str());
-	if (!m_sExcluded.contains(u))
-		return;
-	m_sExcluded.erase(u);
-	std::erase(m_vExcludedRaw, sID);
-	SaveExclusions();
-}
-
-void CAutoVprof::ClearExclusions()
-{
-	if (!m_bExclusionsLoaded)
-		LoadExclusions();
-	m_sExcluded.clear();
-	m_vExcludedRaw.clear();
-	SaveExclusions();
-}
-
-size_t CAutoVprof::ExclusionCount()
-{
-	if (!m_bExclusionsLoaded)
-		LoadExclusions();
-	return m_vExcludedRaw.size();
+	if (m_sExcluded.contains(FNV1A::Hash32(sID.c_str())))
+		return true;
+	// build ids are sortable timestamps (YYYYMMDD-HHMM), so a lexical compare is chronological
+	for (const auto& sBefore : m_vExcludeBefore)
+		if (sID < sBefore)
+			return true;
+	return false;
 }
 
 // ---- map helpers --------------------------------------------------------------
@@ -427,7 +399,9 @@ void CAutoVprof::FinishMatch()
 	if (m_bMatchActive && !m_vFrameMs.empty() && !m_mAgg.empty())
 	{
 		WriteMatch();
+		LoadExclusions(); // re-read fresh so Claude's edits apply without re-injecting
 		UpdateRollup();
+		UpdateManifest();
 	}
 
 	ResetMatch();
@@ -763,6 +737,67 @@ void CAutoVprof::UpdateRollup()
 	catch (...) {}
 }
 
+// ---- build inventory (builds.txt) — the surface Claude curates exclusions against ----
+void CAutoVprof::UpdateManifest()
+{
+	struct Info { int matches = 0; std::set<std::string> maps; std::string first, last; };
+	std::map<std::string, Info> mBuilds; // build id -> aggregate, ordered
+
+	try
+	{
+		for (const auto& e : std::filesystem::directory_iterator(m_sMatchesDir))
+		{
+			if (!e.is_regular_file() || e.path().extension() != ".txt")
+				continue;
+
+			std::string sBuild, sMap, sTime;
+			std::ifstream f(e.path());
+			std::string sLine;
+			while (std::getline(f, sLine) && sLine.rfind("#nodes", 0) != 0)
+			{
+				while (!sLine.empty() && sLine.back() == '\r')
+					sLine.pop_back();
+				if (sLine.rfind("build=", 0) == 0) sBuild = sLine.substr(6);
+				else if (sLine.rfind("map=", 0) == 0) sMap = sLine.substr(4);
+				else if (sLine.rfind("time=", 0) == 0) sTime = sLine.substr(5);
+			}
+			if (sBuild.empty())
+				continue;
+
+			auto& info = mBuilds[sBuild];
+			info.matches++;
+			if (!sMap.empty()) info.maps.insert(sMap);
+			if (!sTime.empty())
+			{
+				if (info.first.empty() || sTime < info.first) info.first = sTime;
+				if (info.last.empty() || sTime > info.last) info.last = sTime;
+			}
+		}
+	}
+	catch (...) {}
+
+	try
+	{
+		std::ofstream f(m_sManifestFile, std::ios::trunc);
+		f << "# Amalgam build inventory (auto-generated; do not hand-edit).\n"
+		     "# Each build id is the DLL link timestamp. To drop a stale build's matches from the\n"
+		     "# per-map rollups, add its id to excluded_builds.txt (or a 'before <id>' line there).\n"
+		     "# build            matches  maps  first-match       last-match        excluded\n";
+		for (auto it = mBuilds.rbegin(); it != mBuilds.rend(); ++it) // newest first
+		{
+			const auto& [sBuild, info] = *it;
+			std::string sMaps;
+			for (const auto& m : info.maps)
+				sMaps += (sMaps.empty() ? "" : ",") + m;
+			f << sBuild << "  matches=" << info.matches << "  maps=" << (sMaps.empty() ? "-" : sMaps)
+			  << "  first=" << (info.first.empty() ? "-" : info.first)
+			  << "  last=" << (info.last.empty() ? "-" : info.last)
+			  << "  excluded=" << (IsBuildExcluded(sBuild) ? "yes" : "no") << "\n";
+		}
+	}
+	catch (...) {}
+}
+
 // ---- events -------------------------------------------------------------------
 void CAutoVprof::Event(uint32_t uHash)
 {
@@ -807,8 +842,6 @@ void CAutoVprof::Run()
 	}
 
 	EnsurePaths();
-	if (!m_bExclusionsLoaded)
-		LoadExclusions();
 
 	double flNow = SDK::PlatFloatTime();
 	double flDtMs = m_flLastFrame > 0.0 ? (flNow - m_flLastFrame) * 1000.0 : 0.0;

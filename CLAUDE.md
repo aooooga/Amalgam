@@ -45,6 +45,10 @@ Note: If the build is attempted and the ReleaseAVX2 dll is already injected, hav
 
 No automated tests. To test: build the DLL, then inject it into a running TF2 instance with an external injector and observe behavior in-game.
 
+## Performance analysis
+
+Amalgam has a built-in **Auto vprof** tool (`F::AutoVprof`, Debug → Auto vprof) that captures TF2's `vprof` profiler across live rounds and writes cleaned, LLM-facing reports to `Team Fortress 2/Amalgam/vprof/` (`matches/<map>_<ts>.txt`, per-map `<map>.txt` rollups, `builds.txt` inventory). When asked to analyze or optimize runtime performance, read `.claude/skills/add-feature/references/performance.md` — it covers the report formats, how to read the numbers, and the **Claude-curated build-exclusion workflow** (the user has no in-game control over exclusions; Claude edits `excluded_builds.txt` to drop stale builds from rollups).
+
 ## Runtime behavior
 
 - **Process check:** On load, the DLL hashes the host process name (FNV1A) and immediately self-unloads if it isn't `tf_win64.exe`.

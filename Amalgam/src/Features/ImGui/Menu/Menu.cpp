@@ -1,5 +1,6 @@
 #include "Menu.h"
 
+#include <mutex>
 #include "Components.h"
 #include "../Notifications/Notifications.h"
 #include "../../Configs/Configs.h"
@@ -14,6 +15,70 @@
 #include "../../World/World.h"
 #include "../../Simulation/ProjectileSimulation/ProjectileSimulation.h"
 #include "../../Debug/AutoVprof/AutoVprof.h"
+
+// Phase 4 help system: curated descriptions for the genuinely cryptic options.
+// Keyed by ConfigVar address (compile-checked) so no Vars.h line needs touching.
+// WRAPPER auto-shows these as an FTooltip after a short hover dwell.
+static void InitDescriptions()
+{
+	auto& m = ImGui::g_Descriptions;
+	auto Add = [&](const void* p, const char* s) { m[p] = s; };
+
+	// Flex FOV cluster
+	Add(&Vars::Visuals::UI::FlexFOVStrength, "How strongly the wide-angle Flex FOV lens warps the view. 0 = off, 1 = default, higher exaggerates the fisheye.");
+	Add(&Vars::Visuals::UI::FlexFOVTransition, "The FOV range over which the flat center blends into the warped edges. Lower = a smaller flat sweet-spot.");
+	Add(&Vars::Visuals::UI::FlexFOVStereographic, "Use stereographic (conformal) projection instead of the default. Keeps shapes locally round at the cost of more edge stretch.");
+	Add(&Vars::Visuals::UI::FlexFOVVertStereo, "Apply the stereographic curve on the vertical axis too, not just horizontally.");
+	Add(&Vars::Visuals::UI::FlexFOVComposite, "Composite the warped edge passes back over the main view instead of replacing it.");
+	Add(&Vars::Visuals::UI::FlexFOVSkipMainView, "Skip re-rendering the flat center view when Flex FOV owns the whole frame. Cheaper; disable if the center looks wrong.");
+	Add(&Vars::Visuals::UI::FlexFOVQuality, "Internal render scale for the Flex FOV edge passes. Below 1 trades edge sharpness for frame time.");
+	Add(&Vars::Visuals::UI::FlexFOVStagger, "Spread the extra Flex FOV face passes across multiple frames to cut per-frame cost. Higher = cheaper but more edge lag.");
+	Add(&Vars::Visuals::UI::FlexFOVStaggerFront, "Include the forward-facing pass in the stagger rotation instead of always drawing it every frame.");
+
+	// Exploits
+	Add(&Vars::Misc::Exploits::PureBypass, "Defeat sv_pure so custom/replacement game files load on pure servers.");
+	Add(&Vars::Misc::Exploits::CheatsBypass, "Enable sv_cheats-gated commands locally without the server having cheats on.");
+	Add(&Vars::Misc::Exploits::UnlockCVars, "Remove the hidden/cheat flags on console variables so they can be changed.");
+	Add(&Vars::Misc::Exploits::EquipRegionUnlock, "Bypass equip-region conflicts so normally-incompatible cosmetics can be worn together.");
+	Add(&Vars::Misc::Exploits::PingReducer, "Lowers your reported command rate to reduce ping. May feel less responsive.");
+
+	// Game optimizations
+	Add(&Vars::Misc::Game::NetworkFix, "Smooths choppy networking on unstable connections.");
+	Add(&Vars::Misc::Game::SetupBonesOptimization, "Cache and reuse skeleton bone setups within a frame instead of recomputing per system.");
+	Add(&Vars::Misc::Game::AttributeCacheOptimization, "Memoize item-attribute lookups for the rest of each frame. Attributes are static per item, so this is a pure win (~2-3% frame time on full servers).");
+	Add(&Vars::Misc::Game::CosmeticCullDistance, "Stop drawing other players' cosmetics past this distance (0 = never). Players and weapons are unaffected; saves a full model draw per pass.");
+	Add(&Vars::Misc::Game::OriginalChamsOptimization, "For groups whose only visible chams are the plain 'Original' layer, keep the engine's own draw instead of a suppress-and-redraw round trip.");
+	Add(&Vars::Misc::Game::GlowResolution, "Resolution of the glow silhouette/blur buffers as a fraction of the screen. Below 1 is cheaper (the halo is blurred anyway); at exactly 1 a single-batch glow skips an entire model pass.");
+	Add(&Vars::Misc::Game::AntiCheatCompatibility, "Reduce detectable behaviour for stricter anti-cheat environments.");
+
+	// Doubletap / fakelag HVH cluster
+	Add(&Vars::Doubletap::Doubletap, "Fire two usable commands in one server tick by charging then releasing shifted ticks. The core 'double tap' exploit.");
+	Add(&Vars::Doubletap::Warp, "Bank ticks while held, then release them in a burst to teleport a short distance instantly.");
+	Add(&Vars::Doubletap::AntiWarp, "Keep your recharge/tick bank stable so warp and doubletap stay usable without desync.");
+	Add(&Vars::Doubletap::RechargeTicks, "Actively rebuild the shifted-tick bank between shots.");
+	Add(&Vars::Doubletap::WarpRate, "How many ticks are spent per warp burst. Higher = a longer teleport, drained faster.");
+
+	// Clearer on-screen display labels (config/bind keys are untouched).
+	auto& L = ImGui::g_DisplayLabels;
+	auto Label = [&](const void* p, const char* s) { L[p] = s; };
+	Label(&Vars::Misc::Exploits::PureBypass, "Bypass sv_pure");
+	Label(&Vars::Misc::Exploits::CheatsBypass, "Bypass sv_cheats");
+	Label(&Vars::Misc::Exploits::UnlockCVars, "Unlock console variables");
+	Label(&Vars::Misc::Exploits::EquipRegionUnlock, "Unlock equip regions");
+	Label(&Vars::Misc::Game::NetworkFix, "Network smoothing");
+	Label(&Vars::Misc::Game::SetupBonesOptimization, "Bone-setup cache");
+	Label(&Vars::Misc::Game::AttributeCacheOptimization, "Attribute cache");
+	Label(&Vars::Misc::Game::OriginalChamsOptimization, "Original-chams fast path");
+	Label(&Vars::Misc::Game::CosmeticCullDistance, "Cull cosmetics past");
+	Label(&Vars::Misc::Game::GlowResolution, "Glow buffer resolution");
+	Label(&Vars::Visuals::UI::FlexFOVStagger, "Stagger passes");
+	Label(&Vars::Visuals::UI::FlexFOVStaggerFront, "Stagger front pass");
+	Label(&Vars::Visuals::UI::FlexFOVTightFaces, "Tight face culling");
+	Label(&Vars::Visuals::UI::FlexFOVCheapPeriphery, "Cheap periphery");
+	Label(&Vars::Visuals::UI::FlexFOVCheapSky, "Cheap sky");
+	Label(&Vars::Visuals::UI::FlexFOVQuality, "Edge render scale");
+	Label(&Vars::Doubletap::Warp, "Warp (teleport)");
+}
 
 // Gradient editor for the glow health-color stops: the shared stop editor
 // (ImGui::FGradientStops) spanning 0-100% HP.
@@ -84,18 +149,18 @@ void CMenu::DrawMenu()
 		RenderTwoToneBackground(flSize, {}, F::Render.Background1, F::Render.Background2, 0.f, false);
 		pDrawList->PopClipRect();
 
-		static int iTab = 0, iAimbotTab = 0, iVisualsTab = 0, iLogsTab = 0, iSettingsTab = 0;
+		static int iTab = 0, iAimbotTab = 0, iVisualsTab = 0, iMiscTab = 0, iLogsTab = 0, iSettingsTab = 0;
 		PushFont(F::Render.FontBold);
 		FTabs(
 			{
 				{ "AIMBOT", "GENERAL", "DRAW" },
 				{ "HVH" },
-				{ "VISUALS", "ESP", "MISC##", "MENU" },
-				{ "MISC" },
+				{ "VISUALS", "ESP", "VIEW", "WORLD", "MENU" },
+				{ "MISC", "PLAYER", "GAME", "MISC##" },
 				{ "LOGS", "PLAYERLIST", "SETTINGS##", "OUTPUT" },
 				{ "SETTINGS", "CONFIG", "BINDS", "MATERIALS", "MISC##" }
 			},
-			{ &iTab, &iAimbotTab, nullptr, &iVisualsTab, nullptr, &iLogsTab, &iSettingsTab },
+			{ &iTab, &iAimbotTab, nullptr, &iVisualsTab, &iMiscTab, &iLogsTab, &iSettingsTab },
 			{ flSize - H::Draw.Scale(16), H::Draw.Scale(36) },
 			{ H::Draw.Scale(8), H::Draw.Scale(8) + flOffset },
 			FTabsEnum::Vertical | FTabsEnum::HorizontalIcons | FTabsEnum::AlignLeft | FTabsEnum::BarLeft,
@@ -129,7 +194,7 @@ void CMenu::DrawMenu()
 				case 0: MenuAimbot(iAimbotTab); break;
 				case 1: MenuHVH(); break;
 				case 2: MenuVisuals(iVisualsTab); break;
-				case 3: MenuMisc(); break;
+				case 3: MenuMisc(iMiscTab); break;
 				case 4: MenuLogs(iLogsTab); break;
 				case 5: MenuSettings(iSettingsTab); break;
 				}
@@ -232,6 +297,8 @@ void CMenu::MenuAimbot(int iTab)
 				{
 					FDropdown(Vars::Aimbot::Healing::HealPriority, FDropdownEnum::Left);
 					FDropdown(Vars::Aimbot::Healing::DangerIgnore, FDropdownEnum::Right);
+
+					SubGroup("Auto-use");
 					FToggle(Vars::Aimbot::Healing::AutoHeal, FToggleEnum::Left);
 					FToggle(Vars::Aimbot::Healing::AutoArrow, FToggleEnum::Right);
 					FToggle(Vars::Aimbot::Healing::AutoRepair, FToggleEnum::Left);
@@ -295,6 +362,8 @@ void CMenu::MenuAimbot(int iTab)
 					FDropdown(Vars::Aimbot::Projectile::AutoAirblast, FDropdownEnum::Right);
 					FDropdown(Vars::Aimbot::Projectile::Hitboxes, FDropdownEnum::Left);
 					FDropdown(Vars::Aimbot::Projectile::Modifiers, FDropdownEnum::Right);
+
+					SubGroup("Tuning");
 					FSlider(Vars::Aimbot::Projectile::MaxSimulationTime, FSliderEnum::Left);
 					PushTransparent(!Vars::Aimbot::Projectile::StrafePrediction.Value);
 					{
@@ -308,6 +377,8 @@ void CMenu::MenuAimbot(int iTab)
 						FSlider(Vars::Aimbot::Projectile::AutoRelease);
 					}
 					PopTransparent();
+
+					SubGroup("Stickies");
 					FToggle(Vars::Aimbot::Projectile::DoubleSticky, FToggleEnum::Left);
 					FColorPicker(Vars::Colors::DoubleStickyPath, FColorPickerEnum::SameLine);
 					FKeybind(Vars::Aimbot::Projectile::DoubleStickyKey, FButtonEnum::Right | FButtonEnum::SameLine, { Vars::Menu::PrimaryKey[DEFAULT_BIND], Vars::Menu::SecondaryKey[DEFAULT_BIND] });
@@ -519,38 +590,6 @@ void CMenu::MenuAimbot(int iTab)
 					FToggle(Vars::Visuals::Simulation::ProjectileCamera, FToggleEnum::Left);
 					FToggle(Vars::Visuals::Simulation::Box, FToggleEnum::Right);
 				} EndSection();
-				if (Section("Sentry Range"))
-				{
-					FDropdown(Vars::Visuals::SentryRange::Draw, FDropdownEnum::None, -10);
-					FDropdown(Vars::Visuals::SentryRange::Style, FDropdownEnum::None, -10);
-
-					// one labeled row per category; per row: fill, fill through-wall,
-					// edge, edge through-wall (hover a swatch for its exact name)
-					const auto vSwatch = ImVec2{ H::Draw.Scale(13), H::Draw.Scale(13) };
-					auto ColorRow = [&](const char* sLabel, auto& tFill, auto& tFillIgnoreZ, auto& tEdge, auto& tEdgeIgnoreZ)
-					{
-						FText(sLabel, { 5, 4 });
-						FColorPicker(tFill, FColorPickerEnum::SameLine, { H::Draw.Scale(4), H::Draw.Scale(-2) }, vSwatch);
-						FColorPicker(tFillIgnoreZ, FColorPickerEnum::SameLine, {}, vSwatch);
-						FColorPicker(tEdge, FColorPickerEnum::SameLine, {}, vSwatch);
-						FColorPicker(tEdgeIgnoreZ, FColorPickerEnum::SameLine, {}, vSwatch);
-					};
-					ColorRow("Enemy", Vars::Colors::SentryRangeFillEnemy, Vars::Colors::SentryRangeFillEnemyIgnoreZ,
-						Vars::Colors::SentryRangeEnemy, Vars::Colors::SentryRangeEnemyIgnoreZ);
-					ColorRow("Team", Vars::Colors::SentryRangeFillTeam, Vars::Colors::SentryRangeFillTeamIgnoreZ,
-						Vars::Colors::SentryRangeTeam, Vars::Colors::SentryRangeTeamIgnoreZ);
-					ColorRow("Local", Vars::Colors::SentryRangeFillLocal, Vars::Colors::SentryRangeFillLocalIgnoreZ,
-						Vars::Colors::SentryRangeLocal, Vars::Colors::SentryRangeLocalIgnoreZ);
-					ColorRow("Inside", Vars::Colors::SentryRangeFillPlayerInside, Vars::Colors::SentryRangeFillPlayerInsideIgnoreZ,
-						Vars::Colors::SentryRangePlayerInside, Vars::Colors::SentryRangePlayerInsideIgnoreZ);
-
-					FSlider(Vars::Visuals::SentryRange::GridStep, FSliderEnum::Left);
-					FSlider(Vars::Visuals::SentryRange::Smoothing, FSliderEnum::Right, !Vars::Visuals::SentryRange::Smoothing[DEFAULT_BIND] ? "off" : "%g%%");
-					FSlider(Vars::Visuals::SentryRange::GroundOffset, FSliderEnum::Left);
-					FSlider(Vars::Visuals::SentryRange::MaxDistance, FSliderEnum::Right, !Vars::Visuals::SentryRange::MaxDistance[DEFAULT_BIND] ? "off" : "%g");
-					FSlider(Vars::Visuals::SentryRange::RefreshInterval, FSliderEnum::Left);
-					FSlider(Vars::Visuals::SentryRange::DisabledAlpha, FSliderEnum::Right);
-				} EndSection();
 				if (Vars::Debug::Options.Value)
 				{
 					if (Section("##Debug"))
@@ -564,9 +603,6 @@ void CMenu::MenuAimbot(int iTab)
 
 							FSlider(Vars::Visuals::Path::SeparatorSpacing, FSliderEnum::Left);
 							FSlider(Vars::Visuals::Path::SeparatorLength, FSliderEnum::Right);
-
-							FSlider(Vars::Visuals::SentryRange::TraceBudget, FSliderEnum::Left);
-							FSlider(Vars::Visuals::SentryRange::TargetHeight, FSliderEnum::Right);
 
 							EndPopup();
 						}
@@ -686,10 +722,13 @@ void CMenu::MenuHVH(int iTab)
 			{
 				if (Section("Antiaim", 8))
 				{
-					FToggle(Vars::AntiAim::Enabled, FToggleEnum::Left);
-					FToggle(Vars::AntiAim::HidePitchOnShot, FToggleEnum::Right);
+					bool bAAOn = SectionToggle(Vars::AntiAim::Enabled);
+					PushTransparent(!bAAOn, true);
+					FToggle(Vars::AntiAim::HidePitchOnShot);
+					SubGroup("Pitch");
 					FDropdown(Vars::AntiAim::PitchReal, FDropdownEnum::Left);
 					FDropdown(Vars::AntiAim::PitchFake, FDropdownEnum::Right);
+					SubGroup("Yaw");
 					FDropdown(Vars::AntiAim::YawReal, FDropdownEnum::Left);
 					FDropdown(Vars::AntiAim::YawFake, FDropdownEnum::Right);
 					FDropdown(Vars::AntiAim::RealYawBase, FDropdownEnum::Left);
@@ -713,6 +752,7 @@ void CMenu::MenuHVH(int iTab)
 					PopTransparent();
 					SetCursorPos({ GetWindowWidth() / 2 + GetStyle().WindowPadding.x / 2, GetRowPos() + H::Draw.Scale(8) });
 					FToggle(Vars::AntiAim::MinWalk, FToggleEnum::Left);
+					PopTransparent(1, 1);
 				} EndSection();
 				if (Vars::Debug::Options.Value)
 				{
@@ -729,12 +769,13 @@ void CMenu::MenuHVH(int iTab)
 				}
 				if (Section("Resolver", 8))
 				{
-					FToggle(Vars::Resolver::Enabled, FToggleEnum::Left);
-					PushTransparent(!Vars::Resolver::Enabled.Value);
+					bool bResolverOn = SectionToggle(Vars::Resolver::Enabled);
+					PushTransparent(!bResolverOn, true);
 					{
-						FToggle(Vars::Resolver::AutoResolve, FToggleEnum::Right);
+						FToggle(Vars::Resolver::AutoResolve);
 						PushTransparent(Transparent || !Vars::Resolver::AutoResolve.Value);
 						{
+							SubGroup("Auto-resolve");
 							FToggle(Vars::Resolver::AutoResolveCheatersOnly, FToggleEnum::Left);
 							FToggle(Vars::Resolver::AutoResolveHeadshotOnly, FToggleEnum::Right);
 							PushTransparent(Transparent || !Vars::Resolver::AutoResolveYawAmount.Value);
@@ -749,12 +790,14 @@ void CMenu::MenuHVH(int iTab)
 							PopTransparent();
 						}
 						PopTransparent();
+
+						SubGroup("Cycle");
 						FSlider(Vars::Resolver::CycleYaw, FSliderEnum::Left);
 						FSlider(Vars::Resolver::CyclePitch, FSliderEnum::Right);
 						FToggle(Vars::Resolver::CycleView, FToggleEnum::Left);
 						FToggle(Vars::Resolver::CycleMinwalk, FToggleEnum::Right);
 					}
-					PopTransparent();
+					PopTransparent(1, 1);
 				} EndSection();
 			}
 			/* Column 2 */
@@ -766,6 +809,8 @@ void CMenu::MenuHVH(int iTab)
 					FToggle(Vars::Doubletap::Warp, FToggleEnum::Right);
 					FToggle(Vars::Doubletap::RechargeTicks, FToggleEnum::Left);
 					FToggle(Vars::Doubletap::AntiWarp, FToggleEnum::Right);
+
+					SubGroup("Tuning");
 					FSlider(Vars::Doubletap::TickLimit, FSliderEnum::Left);
 					FSlider(Vars::Doubletap::WarpRate, FSliderEnum::Right);
 					FSlider(Vars::Doubletap::RechargeLimit, FSliderEnum::Left);
@@ -899,21 +944,19 @@ void CMenu::MenuVisuals(int iTab)
 					? ImVec2(GetStyle().WindowPadding.x, GetCursorPosY() + H::Draw.Scale(8))
 					: ImVec2(GetWindowWidth() / 2 + GetStyle().WindowPadding.x / 2, GetCursorPosY() - H::Draw.Scale(28));
 
-				// background
+				// background (Phase 3: neutral card + left color bar for legibility)
 				float flWidth = GetWindowWidth() / 2 - GetStyle().WindowPadding.x * 1.5f;
 				float flHeight = H::Draw.Scale(28);
-				ImColor tColor = ColorByteToFloat(tGroup.m_tColor.Lerp(Vars::Menu::Theme::Background.Value, 0.5f, LerpEnum::NoAlpha));
+				float flBar = H::Draw.Scale(4);
+				ImColor tBar = ColorByteToFloat(tGroup.m_tColor);
+				ImColor tFill = iCurrentGroup != iGroup ? F::Render.Background1p5 : F::Render.Background1p5L;
 				ImVec2 vDrawPos = GetDrawPos() + vOriginalPos;
-				if (iCurrentGroup != iGroup)
-					GetWindowDrawList()->AddRectFilled(vDrawPos, vDrawPos + ImVec2(flWidth, flHeight), tColor, H::Draw.Scale(4));
-				else
+				GetWindowDrawList()->AddRectFilled(vDrawPos, vDrawPos + ImVec2(flWidth, flHeight), tFill, H::Draw.Scale(4));
+				GetWindowDrawList()->AddRectFilled(vDrawPos, vDrawPos + ImVec2(flBar, flHeight), tBar, H::Draw.Scale(4), ImDrawFlags_RoundCornersLeft);
+				if (iCurrentGroup == iGroup)
 				{
-					ImColor tColor2 = { tColor.Value.x * 1.1f, tColor.Value.y * 1.1f, tColor.Value.z * 1.1f, tColor.Value.w };
-					GetWindowDrawList()->AddRectFilled(vDrawPos, vDrawPos + ImVec2(flWidth, flHeight), tColor2, H::Draw.Scale(4));
-
-					tColor2 = ColorByteToFloat(tGroup.m_tColor.Lerp(Vars::Menu::Theme::Background.Value, 0.25f, LerpEnum::NoAlpha));
 					float flInset = H::Draw.Scale(0.5f) - 0.5f;
-					GetWindowDrawList()->AddRect(vDrawPos + ImVec2(flInset, flInset), vDrawPos + ImVec2(flWidth - flInset, flHeight - flInset), tColor2, H::Draw.Scale(4), ImDrawFlags_None, H::Draw.Scale());
+					GetWindowDrawList()->AddRect(vDrawPos + ImVec2(flInset, flInset), vDrawPos + ImVec2(flWidth - flInset, flHeight - flInset), tBar, H::Draw.Scale(4), ImDrawFlags_None, H::Draw.Scale());
 				}
 
 				// text + icons
@@ -1170,19 +1213,22 @@ void CMenu::MenuVisuals(int iTab)
 		}
 		break;
 	}
-	// Misc
+	// View
 	case 1:
 	{
-		if (BeginTable("VisualsMiscTable", 2))
+		if (BeginTable("VisualsViewTable", 2))
 		{
 			/* Column 1 */
 			TableNextColumn();
 			{
-				if (Section("UI"))
+				if (Section("Interface"))
 				{
 					FDropdown(Vars::Visuals::UI::StreamerMode, FDropdownEnum::Left);
 					FDropdown(Vars::Visuals::UI::ChatTags, FDropdownEnum::Right, -10);
 					FColorPicker(Vars::Colors::Local, FColorPickerEnum::SameLine, {}, { H::Draw.Scale(10), H::Draw.Scale(40) });
+				} EndSection();
+				if (Section("Field of view", 8))
+				{
 					PushTransparent(!Vars::Visuals::UI::FieldOfView.Value);
 					{
 						FSlider(Vars::Visuals::UI::FieldOfView);
@@ -1198,44 +1244,45 @@ void CMenu::MenuVisuals(int iTab)
 						FSlider(Vars::Visuals::UI::ViewmodelFOV);
 					}
 					PopTransparent();
-					FToggle(Vars::Visuals::UI::FlexFOVComposite);
-					PushTransparent(!Vars::Visuals::UI::FlexFOVComposite.Value);
+				} EndSection();
+				if (Section("Flex FOV", 8))
+				{
+					// FlexFOVComposite gates the whole cluster, so it becomes the header master toggle.
+					bool bFlex = SectionToggle(Vars::Visuals::UI::FlexFOVComposite);
+					PushTransparent(!bFlex, true);
 					{
 						FSlider(Vars::Visuals::UI::FlexFOVStrength);
 						FSlider(Vars::Visuals::UI::FlexFOVTransition);
 						FSlider(Vars::Visuals::UI::FlexFOVQuality);
+
+						SubGroup("Performance");
 						FSlider(Vars::Visuals::UI::FlexFOVStagger);
-						FToggle(Vars::Visuals::UI::FlexFOVStaggerFront);
-						FToggle(Vars::Visuals::UI::FlexFOVCheapPeriphery);
+						FToggle(Vars::Visuals::UI::FlexFOVStaggerFront, FToggleEnum::Left);
+						FToggle(Vars::Visuals::UI::FlexFOVCheapPeriphery, FToggleEnum::Right);
 						PushTransparent(!Vars::Visuals::UI::FlexFOVCheapPeriphery.Value);
 						{
 							FToggle(Vars::Visuals::UI::FlexFOVCheapSky);
 						}
 						PopTransparent();
-						FToggle(Vars::Visuals::UI::FlexFOVTightFaces);
-						FToggle(Vars::Visuals::UI::FlexFOVStereographic);
+
+						SubGroup("Projection");
+						FToggle(Vars::Visuals::UI::FlexFOVTightFaces, FToggleEnum::Left);
+						FToggle(Vars::Visuals::UI::FlexFOVStereographic, FToggleEnum::Right);
 						FToggle(Vars::Visuals::UI::FlexFOVVertStereo);
 					}
-					PopTransparent();
-					/*
-					PushTransparent(!Vars::Visuals::UI::AspectRatio.Value);
-					{
-						FSlider(Vars::Visuals::UI::AspectRatio);
-					}
-					PopTransparent();
-					*/
-					FToggle(Vars::Visuals::UI::RevealScoreboard, FToggleEnum::Left);
-					FToggle(Vars::Visuals::UI::ScoreboardUtility, FToggleEnum::Right);
-					FToggle(Vars::Visuals::UI::ScoreboardColors, FToggleEnum::Left);
-					FToggle(Vars::Visuals::UI::CleanScreenshots, FToggleEnum::Right);
+					PopTransparent(1, 1);
 				} EndSection();
 				if (Section("Thirdperson", 8))
 				{
-					FToggle(Vars::Visuals::Thirdperson::Enabled, FToggleEnum::Left);
-					FToggle(Vars::Visuals::Thirdperson::Crosshair, FToggleEnum::Right);
-					FSlider(Vars::Visuals::Thirdperson::Distance);
-					FSlider(Vars::Visuals::Thirdperson::Right);
-					FSlider(Vars::Visuals::Thirdperson::Up);
+					bool bOn = SectionToggle(Vars::Visuals::Thirdperson::Enabled);
+					PushTransparent(!bOn, true);
+					{
+						FToggle(Vars::Visuals::Thirdperson::Crosshair);
+						FSlider(Vars::Visuals::Thirdperson::Distance);
+						FSlider(Vars::Visuals::Thirdperson::Right);
+						FSlider(Vars::Visuals::Thirdperson::Up);
+					}
+					PopTransparent(1, 1);
 				} EndSection();
 				if (Vars::Debug::Options.Value)
 				{
@@ -1251,25 +1298,10 @@ void CMenu::MenuVisuals(int iTab)
 						}
 					} EndSection();
 				}
-				if (Section("Effects"))
-				{
-					// https://developer.valvesoftware.com/wiki/Team_Fortress_2/Particles
-					// https://forums.alliedmods.net/showthread.php?t=127111
-					FSDropdown(Vars::Visuals::Effects::BulletTracer, FDropdownEnum::Left);
-					FSDropdown(Vars::Visuals::Effects::CritTracer, FDropdownEnum::Right);
-					FSDropdown(Vars::Visuals::Effects::MedigunBeam, FDropdownEnum::Left);
-					FSDropdown(Vars::Visuals::Effects::MedigunCharge, FDropdownEnum::Right);
-					FSDropdown(Vars::Visuals::Effects::ProjectileTrail, FDropdownEnum::Left);
-					FDropdown(Vars::Visuals::Effects::SpellFootsteps, FDropdownEnum::Right, -10);
-					FColorPicker(Vars::Colors::SpellFootstep, FColorPickerEnum::SameLine | FColorPickerEnum::NoTooltip, {}, { H::Draw.Scale(10), H::Draw.Scale(40) });
-					FDropdown(Vars::Visuals::Effects::RagdollEffects);
-					FToggle(Vars::Visuals::Effects::DrawIconsThroughWalls);
-					FToggle(Vars::Visuals::Effects::DrawDamageNumbersThroughWalls);
-				} EndSection();
 				if (Section("Rear view"))
 				{
-					FToggle(Vars::Visuals::UI::RearView);
-					PushTransparent(!Vars::Visuals::UI::RearView.Value);
+					bool bRearViewOn = SectionToggle(Vars::Visuals::UI::RearView);
+					PushTransparent(!bRearViewOn, true);
 					{
 						FSlider(Vars::Visuals::UI::RearViewCameras, FSliderEnum::Left);
 						FSlider(Vars::Visuals::UI::RearViewFOVOffset, FSliderEnum::Right);
@@ -1277,6 +1309,8 @@ void CMenu::MenuVisuals(int iTab)
 						FSlider(Vars::Visuals::UI::RearViewAlpha, FSliderEnum::Right);
 						FToggle(Vars::Visuals::UI::RearViewHalfRate, FToggleEnum::Left);
 						FMDropdown(Vars::Visuals::UI::RearViewMaterial);
+
+						SubGroup("Glow");
 						FSlider(Vars::Visuals::UI::RearViewGlowStencil, FSliderEnum::Left | FSliderEnum::Min);
 						FSlider(Vars::Visuals::UI::RearViewGlowBlur, FSliderEnum::Right | FSliderEnum::Min | FSliderEnum::Precision);
 						PushTransparent(!(Vars::Visuals::UI::RearViewGlowStencil.Value || Vars::Visuals::UI::RearViewGlowBlur.Value));
@@ -1285,31 +1319,18 @@ void CMenu::MenuVisuals(int iTab)
 						}
 						PopTransparent();
 					}
-					PopTransparent();
+					PopTransparent(1, 1);
 				} EndSection();
 			}
 			/* Column 2 */
 			TableNextColumn();
 			{
-				if (Section("Removals", 8))
+				if (Section("Scoreboard"))
 				{
-					FToggle(Vars::Visuals::Removals::Interpolation, FToggleEnum::Left);
-					PushTransparent(Vars::Visuals::Removals::Interpolation.Value);
-					{
-						FToggle(Vars::Visuals::Removals::Lerp, FToggleEnum::Right);
-					}
-					PopTransparent();
-					FToggle(Vars::Visuals::Removals::Disguises, FToggleEnum::Left);
-					FToggle(Vars::Visuals::Removals::Taunts, FToggleEnum::Right);
-					FToggle(Vars::Visuals::Removals::Scope, FToggleEnum::Left);
-					FToggle(Vars::Visuals::Removals::PostProcessing, FToggleEnum::Right);
-					FToggle(Vars::Visuals::Removals::ScreenOverlays, FToggleEnum::Left);
-					FToggle(Vars::Visuals::Removals::ScreenEffects, FToggleEnum::Right);
-					FToggle(Vars::Visuals::Removals::ViewPunch, FToggleEnum::Left);
-					FToggle(Vars::Visuals::Removals::AngleForcing, FToggleEnum::Right);
-					FToggle(Vars::Visuals::Removals::Ragdolls, FToggleEnum::Left);
-					FToggle(Vars::Visuals::Removals::Gibs, FToggleEnum::Right);
-					FToggle(Vars::Visuals::Removals::MOTD, FToggleEnum::Left);
+					FToggle(Vars::Visuals::UI::RevealScoreboard, FToggleEnum::Left);
+					FToggle(Vars::Visuals::UI::ScoreboardUtility, FToggleEnum::Right);
+					FToggle(Vars::Visuals::UI::ScoreboardColors, FToggleEnum::Left);
+					FToggle(Vars::Visuals::UI::CleanScreenshots, FToggleEnum::Right);
 				} EndSection();
 				if (Section("Viewmodel", 8))
 				{
@@ -1321,6 +1342,8 @@ void CMenu::MenuVisuals(int iTab)
 					FSlider(Vars::Visuals::Viewmodel::Yaw, FSliderEnum::Right);
 					FSlider(Vars::Visuals::Viewmodel::OffsetZ, FSliderEnum::Left);
 					FSlider(Vars::Visuals::Viewmodel::Roll, FSliderEnum::Right);
+
+					SubGroup("Sway");
 					PushTransparent(!Vars::Visuals::Viewmodel::SwayScale.Value || !Vars::Visuals::Viewmodel::SwayInterp.Value);
 					{
 						FSlider(Vars::Visuals::Viewmodel::SwayScale, FSliderEnum::Left);
@@ -1328,6 +1351,19 @@ void CMenu::MenuVisuals(int iTab)
 					}
 					PopTransparent();
 				} EndSection();
+			}
+			EndTable();
+		}
+		break;
+	}
+	// World
+	case 2:
+	{
+		if (BeginTable("VisualsWorldTable", 2))
+		{
+			/* Column 1 */
+			TableNextColumn();
+			{
 				if (Section("World"))
 				{
 					FDropdown(Vars::Visuals::World::Modulations);
@@ -1358,16 +1394,89 @@ void CMenu::MenuVisuals(int iTab)
 						FColorPicker(Vars::Colors::FogModulation, FColorPickerEnum::Left);
 					}
 					PopTransparent();
+
+					SubGroup("Prop fade");
 					FToggle(Vars::Visuals::World::NearPropFade, FToggleEnum::Left);
 					FToggle(Vars::Visuals::World::NoPropFade, FToggleEnum::Right);
 				} EndSection();
+				if (Section("Effects"))
+				{
+					// https://developer.valvesoftware.com/wiki/Team_Fortress_2/Particles
+					// https://forums.alliedmods.net/showthread.php?t=127111
+					FSDropdown(Vars::Visuals::Effects::BulletTracer, FDropdownEnum::Left);
+					FSDropdown(Vars::Visuals::Effects::CritTracer, FDropdownEnum::Right);
+					FSDropdown(Vars::Visuals::Effects::MedigunBeam, FDropdownEnum::Left);
+					FSDropdown(Vars::Visuals::Effects::MedigunCharge, FDropdownEnum::Right);
+					FSDropdown(Vars::Visuals::Effects::ProjectileTrail, FDropdownEnum::Left);
+					FDropdown(Vars::Visuals::Effects::SpellFootsteps, FDropdownEnum::Right, -10);
+					FColorPicker(Vars::Colors::SpellFootstep, FColorPickerEnum::SameLine | FColorPickerEnum::NoTooltip, {}, { H::Draw.Scale(10), H::Draw.Scale(40) });
+					FDropdown(Vars::Visuals::Effects::RagdollEffects);
+
+					SubGroup("Through walls");
+					FToggle(Vars::Visuals::Effects::DrawIconsThroughWalls, FToggleEnum::Left);
+					FToggle(Vars::Visuals::Effects::DrawDamageNumbersThroughWalls, FToggleEnum::Right);
+				} EndSection();
+			}
+			/* Column 2 */
+			TableNextColumn();
+			{
+				if (Section("Sentry Range"))
+				{
+					// header row: what to draw + how (style dropdown doubles as the
+					// "which controls matter" gate via the transparency block below)
+					FDropdown(Vars::Visuals::SentryRange::Draw, FDropdownEnum::Left, -10);
+					FDropdown(Vars::Visuals::SentryRange::Style, FDropdownEnum::Right, -10);
+
+					SubGroup("Colors", true);
+					// one labeled row per category; per row: fill, fill through-wall,
+					// edge, edge through-wall (hover a swatch for its exact name)
+					const auto vSwatch = ImVec2{ H::Draw.Scale(13), H::Draw.Scale(13) };
+					auto ColorRow = [&](const char* sLabel, auto& tFill, auto& tFillIgnoreZ, auto& tEdge, auto& tEdgeIgnoreZ)
+					{
+						FText(sLabel, { 5, 4 });
+						FColorPicker(tFill, FColorPickerEnum::SameLine, { H::Draw.Scale(4), H::Draw.Scale(-2) }, vSwatch);
+						FColorPicker(tFillIgnoreZ, FColorPickerEnum::SameLine, {}, vSwatch);
+						FColorPicker(tEdge, FColorPickerEnum::SameLine, {}, vSwatch);
+						FColorPicker(tEdgeIgnoreZ, FColorPickerEnum::SameLine, {}, vSwatch);
+					};
+					ColorRow("Enemy", Vars::Colors::SentryRangeFillEnemy, Vars::Colors::SentryRangeFillEnemyIgnoreZ,
+						Vars::Colors::SentryRangeEnemy, Vars::Colors::SentryRangeEnemyIgnoreZ);
+					ColorRow("Team", Vars::Colors::SentryRangeFillTeam, Vars::Colors::SentryRangeFillTeamIgnoreZ,
+						Vars::Colors::SentryRangeTeam, Vars::Colors::SentryRangeTeamIgnoreZ);
+					ColorRow("Local", Vars::Colors::SentryRangeFillLocal, Vars::Colors::SentryRangeFillLocalIgnoreZ,
+						Vars::Colors::SentryRangeLocal, Vars::Colors::SentryRangeLocalIgnoreZ);
+					ColorRow("Inside", Vars::Colors::SentryRangeFillPlayerInside, Vars::Colors::SentryRangeFillPlayerInsideIgnoreZ,
+						Vars::Colors::SentryRangePlayerInside, Vars::Colors::SentryRangePlayerInsideIgnoreZ);
+
+					SubGroup("Sampling");
+					FSlider(Vars::Visuals::SentryRange::GridStep, FSliderEnum::Left);
+					FSlider(Vars::Visuals::SentryRange::Smoothing, FSliderEnum::Right, !Vars::Visuals::SentryRange::Smoothing[DEFAULT_BIND] ? "off" : "%g%%");
+					FSlider(Vars::Visuals::SentryRange::GroundOffset, FSliderEnum::Left);
+					FSlider(Vars::Visuals::SentryRange::MaxDistance, FSliderEnum::Right, !Vars::Visuals::SentryRange::MaxDistance[DEFAULT_BIND] ? "off" : "%g");
+					FSlider(Vars::Visuals::SentryRange::RefreshInterval, FSliderEnum::Left);
+					FSlider(Vars::Visuals::SentryRange::DisabledAlpha, FSliderEnum::Right);
+				} EndSection();
+				if (Vars::Debug::Options.Value)
+				{
+					if (Section("##Debug SentryRange"))
+					{
+						FText("Extra", { 5, 5 });
+						if (FPopupButton("Extra", { 0, -5 }, -8))
+						{
+							FSlider(Vars::Visuals::SentryRange::TraceBudget, FSliderEnum::Left);
+							FSlider(Vars::Visuals::SentryRange::TargetHeight, FSliderEnum::Right);
+
+							EndPopup();
+						}
+					} EndSection();
+				}
 			}
 			EndTable();
 		}
 		break;
 	}
 	// Menu
-	case 2:
+	case 3:
 	{
 		if (BeginTable("MenuTable", 2))
 		{
@@ -1400,17 +1509,21 @@ void CMenu::MenuVisuals(int iTab)
 				} EndSection();
 				if (Section("Crit Bar"))
 				{
-					FToggle(Vars::Visuals::CritBar::Enabled, FToggleEnum::Left);
-					FToggle(Vars::Visuals::CritBar::Text, FToggleEnum::Right);
+					bool bCritBarOn = SectionToggle(Vars::Visuals::CritBar::Enabled);
+					PushTransparent(!bCritBarOn, true);
+					FToggle(Vars::Visuals::CritBar::Text);
 					FSlider(Vars::Visuals::CritBar::Width, FSliderEnum::Left);
 					FSlider(Vars::Visuals::CritBar::Height, FSliderEnum::Right);
 					FSlider(Vars::Visuals::CritBar::Border, FSliderEnum::Left);
+
+					SubGroup("Colors");
 					FColorPicker(Vars::Visuals::CritBar::CellColor, FColorPickerEnum::Left);
 					FColorPicker(Vars::Visuals::CritBar::ProgressColor, FColorPickerEnum::Right);
 					FColorPicker(Vars::Visuals::CritBar::BannedCellColor, FColorPickerEnum::Left);
 					FColorPicker(Vars::Visuals::CritBar::BannedProgressColor, FColorPickerEnum::Right);
 					FColorPicker(Vars::Visuals::CritBar::BorderColor, FColorPickerEnum::Left);
 					FColorPicker(Vars::Visuals::CritBar::BackgroundColor, FColorPickerEnum::Right);
+					PopTransparent(1, 1);
 				} EndSection();
 				if (Vars::Debug::Options.Value)
 				{
@@ -1447,16 +1560,17 @@ void CMenu::MenuMisc(int iTab)
 
 	switch (iTab)
 	{
-	// Main
+	// Player
 	case 0:
 	{
-		if (BeginTable("MiscTable", 2))
+		if (BeginTable("MiscPlayerTable", 2))
 		{
 			/* Column 1 */
 			TableNextColumn();
 			{
 				if (Section("Movement"))
 				{
+					SubGroup("Strafing", true);
 					FDropdown(Vars::Misc::Movement::AutoStrafe);
 					PushTransparent(Vars::Misc::Movement::AutoStrafe.Value != Vars::Misc::Movement::AutoStrafeEnum::Directional);
 					{
@@ -1464,21 +1578,27 @@ void CMenu::MenuMisc(int iTab)
 						FSlider(Vars::Misc::Movement::AutoStrafeMaxDelta, FSliderEnum::Right);
 					}
 					PopTransparent();
+
+					SubGroup("Jumps");
 					FToggle(Vars::Misc::Movement::Bunnyhop, FToggleEnum::Left);
 					FToggle(Vars::Misc::Movement::EdgeJump, FToggleEnum::Right);
 					FToggle(Vars::Misc::Movement::AutoJumpbug, FToggleEnum::Left); // this is unreliable without setups, do not depend on it!
 					FToggle(Vars::Misc::Movement::BreakJump, FToggleEnum::Right);
 					FToggle(Vars::Misc::Movement::AutoRocketJump, FToggleEnum::Left);
+					FToggle(Vars::Misc::Movement::AutoFaNJump, FToggleEnum::Right);
+					FToggle(Vars::Misc::Movement::AutoRevJump, FToggleEnum::Left);
 					FToggle(Vars::Misc::Movement::AutoCTap, FToggleEnum::Right);
-					FToggle(Vars::Misc::Movement::AutoFaNJump, FToggleEnum::Left);
-					FToggle(Vars::Misc::Movement::AutoRevJump, FToggleEnum::Right);
+
+					SubGroup("Speed");
 					FToggle(Vars::Misc::Movement::FastStop, FToggleEnum::Left);
 					FToggle(Vars::Misc::Movement::FastAccelerate, FToggleEnum::Right);
 					FToggle(Vars::Misc::Movement::DuckSpeed, FToggleEnum::Left);
-					FToggle(Vars::Misc::Movement::ShieldTurnRate, FToggleEnum::Right);
-					FToggle(Vars::Misc::Movement::NoPush, FToggleEnum::Left);
-					FToggle(Vars::Misc::Movement::MovementLock, FToggleEnum::Right);
-					FToggle(Vars::Misc::Movement::AirCrouch, FToggleEnum::Left);
+					FToggle(Vars::Misc::Movement::AirCrouch, FToggleEnum::Right);
+
+					SubGroup("Misc");
+					FToggle(Vars::Misc::Movement::ShieldTurnRate, FToggleEnum::Left);
+					FToggle(Vars::Misc::Movement::NoPush, FToggleEnum::Right);
+					FToggle(Vars::Misc::Movement::MovementLock, FToggleEnum::Left);
 				} EndSection();
 				if (Vars::Debug::Options.Value)
 				{
@@ -1498,13 +1618,20 @@ void CMenu::MenuMisc(int iTab)
 						}
 					} EndSection();
 				}
+			}
+			/* Column 2 */
+			TableNextColumn();
+			{
 				if (Section("Automation"))
 				{
+					SubGroup("Protection", true);
 					FDropdown(Vars::Misc::Automation::AntiBackstab); // pitch/fake _might_ slip up some auto backstabs
-					FToggle(Vars::Misc::Automation::TauntControl, FToggleEnum::Left);
-					FToggle(Vars::Misc::Automation::KartControl, FToggleEnum::Right);
 					FToggle(Vars::Misc::Automation::AntiAutobalance, FToggleEnum::Left);
 					FToggle(Vars::Misc::Automation::AntiAFK, FToggleEnum::Right);
+
+					SubGroup("Auto actions");
+					FToggle(Vars::Misc::Automation::TauntControl, FToggleEnum::Left);
+					FToggle(Vars::Misc::Automation::KartControl, FToggleEnum::Right);
 					FToggle(Vars::Misc::Automation::AutoF2Ignored, FToggleEnum::Left);
 					FToggle(Vars::Misc::Automation::AutoF1Priority, FToggleEnum::Right);
 					FToggle(Vars::Misc::Automation::AcceptItemDrops);
@@ -1515,6 +1642,45 @@ void CMenu::MenuMisc(int iTab)
 					FToggle(Vars::Misc::MannVsMachine::InstantRevive, FToggleEnum::Right);
 					FToggle(Vars::Misc::MannVsMachine::AllowInspect);
 				} EndSection();
+			}
+			EndTable();
+		}
+		break;
+	}
+	// Game
+	case 1:
+	{
+		if (BeginTable("MiscGameTable", 2))
+		{
+			/* Column 1 */
+			TableNextColumn();
+			{
+				if (Section("Performance"))
+				{
+					FToggle(Vars::Misc::Game::SetupBonesOptimization, FToggleEnum::Left);
+					FToggle(Vars::Misc::Game::AttributeCacheOptimization, FToggleEnum::Right);
+					FToggle(Vars::Misc::Game::OriginalChamsOptimization, FToggleEnum::Left);
+					FSlider(Vars::Misc::Game::CosmeticCullDistance, FSliderEnum::Right, !Vars::Misc::Game::CosmeticCullDistance[DEFAULT_BIND] ? "off" : "%d");
+					FSlider(Vars::Misc::Game::GlowResolution);
+				} EndSection();
+				if (Section("Network", 8))
+				{
+					FToggle(Vars::Misc::Game::NetworkFix, FToggleEnum::Left);
+					FToggle(Vars::Misc::Game::AntiCheatCompatibility, FToggleEnum::Right);
+				} EndSection();
+				if (Vars::Debug::Options.Value)
+				{
+					if (Section("##Debug AntiCheat"))
+					{
+						FText("Debug", { 5, 5 });
+						if (FPopupButton("Debug", { 0, -5 }))
+						{
+							FToggle(Vars::Misc::Game::AntiCheatCritHack);
+
+							EndPopup();
+						}
+					} EndSection();
+				}
 			}
 			/* Column 2 */
 			TableNextColumn();
@@ -1534,35 +1700,29 @@ void CMenu::MenuMisc(int iTab)
 					}
 					PopTransparent();
 				} EndSection();
-				if (Section("Game", 8))
-				{
-					FToggle(Vars::Misc::Game::NetworkFix, FToggleEnum::Left);
-					FToggle(Vars::Misc::Game::SetupBonesOptimization, FToggleEnum::Right);
-					FToggle(Vars::Misc::Game::AttributeCacheOptimization, FToggleEnum::Left);
-					FToggle(Vars::Misc::Game::AntiCheatCompatibility, FToggleEnum::Right);
-					FToggle(Vars::Misc::Game::OriginalChamsOptimization, FToggleEnum::Left);
-					FSlider(Vars::Misc::Game::CosmeticCullDistance, FSliderEnum::Left, !Vars::Misc::Game::CosmeticCullDistance[DEFAULT_BIND] ? "off" : "%d");
-					FSlider(Vars::Misc::Game::GlowResolution, FSliderEnum::Right);
-				} EndSection();
-				if (Vars::Debug::Options.Value)
-				{
-					if (Section("##Debug AntiCheat"))
-					{
-						FText("Debug", { 5, 5 });
-						if (FPopupButton("Debug", { 0, -5 }))
-						{
-							FToggle(Vars::Misc::Game::AntiCheatCritHack);
-
-							EndPopup();
-						}
-					} EndSection();
-				}
+			}
+			EndTable();
+		}
+		break;
+	}
+	// Misc
+	case 2:
+	{
+		if (BeginTable("MiscMiscTable", 2))
+		{
+			/* Column 1 */
+			TableNextColumn();
+			{
 				if (Section("Queueing"))
 				{
 					FDropdown(Vars::Misc::Queueing::ForceRegions);
 					FToggle(Vars::Misc::Queueing::ExtendQueue, FToggleEnum::Left);
 					FToggle(Vars::Misc::Queueing::AutoCasualQueue, FToggleEnum::Right);
 				} EndSection();
+			}
+			/* Column 2 */
+			TableNextColumn();
+			{
 				if (Section("Sound"))
 				{
 					FDropdown(Vars::Misc::Sound::Block);
@@ -4297,6 +4457,7 @@ void CMenu::Render()
 	PushFont(F::Render.FontRegular);
 	if (m_bIsOpen)
 	{
+		static std::once_flag tDescFlag; std::call_once(tDescFlag, [] { InitDescriptions(); });
 		ManageVars();
 		DrawMenu();
 

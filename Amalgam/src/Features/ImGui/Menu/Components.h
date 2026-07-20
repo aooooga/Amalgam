@@ -8,6 +8,8 @@
 #include <ImGui/imgui_internal.h>
 #include <ImGui/imgui_stdlib.h>
 #include <numeric>
+#include <algorithm>
+#include <cctype>
 
 Enum(FTabs, None = 0, Horizontal = 0, Vertical = 1 << 0, HorizontalIcons = 0, VerticalIcons = 1 << 1, AlignCenter = 0, AlignLeft = 1 << 2, AlignRight = 1 << 3, AlignTop = 1 << 4, AlignBottom = 1 << 5, AlignForward = 0, AlignReverse = 1 << 6, BarLeft = 1 << 7, BarRight = 1 << 8, BarTop = 1 << 9, BarBottom = 1 << 10, Fit = 1 << 11);
 Enum(FText, None = 0, Middle = 1 << 0, Right = 1 << 1, SameLine = 1 << 2);
@@ -29,6 +31,17 @@ struct WidgetWindow_t
 	int m_iWindowFlags;
 	int m_iChildFlags;
 };
+
+// Phase 1: centralized layout tokens (unscaled; ALWAYS wrap in H::Draw.Scale()
+// at the call site). Tunes section gutters, inner rhythm and subgroup spacing.
+namespace Tokens
+{
+	constexpr float SectionGutter   = 16.f; // vertical gap between section cards
+	constexpr float SubGroupTop     = 16.f; // extra gap above a subgroup label
+	constexpr float SubGroupBottom  = 8.f;  // gap below a subgroup label/rule
+	constexpr float SubGroupInset   = 2.f;  // horizontal inset of subgroup label
+	constexpr float SubGroupRuleGap = 8.f;  // gap between label and hairline rule
+}
 
 //#define ALTERNATE_FULL_SLIDER
 
@@ -719,51 +732,114 @@ namespace ImGui
 
 	static std::unordered_map<uint32_t, float> mLastHeights = {};
 	static std::vector<uint32_t> vStoredLabels = {};
+	static std::unordered_map<uint32_t, bool> mCollapsed = {}; // session-persistent collapse state
+	static std::vector<bool> vStoredCollapsed = {};
 	inline bool Section(const char* sLabel, float flPaddingMod = 0.f, float flMinHeight = 28.f, bool bForceHeight = false)
 	{
 		uint32_t uHash = FNV1A::Hash32(sLabel);
 		vStoredLabels.push_back(uHash);
 
+		bool bHeader = sLabel[0] != '#';
+		bool bCollapsed = bHeader && !bForceHeight && mCollapsed.contains(uHash) && mCollapsed[uHash];
+		vStoredCollapsed.push_back(bCollapsed);
+
 		if (!bForceHeight && mLastHeights.contains(uHash) && mLastHeights[uHash] > flMinHeight)
 			flMinHeight = mLastHeights[uHash];
 		PushStyleVar(ImGuiStyleVar_CellPadding, { 0, 0 });
 
-		bool bReturn = BeginChild(sLabel, { GetColumnWidth(), flMinHeight }, ImGuiChildFlags_AlwaysUseWindowPadding, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+		// Panels auto-fit their content height (no first-frame pop). Fixed-height
+		// sections (bForceHeight, e.g. the Output/Editor fill panels) keep manual
+		// sizing. Collapsed panels render as just their header band.
+		ImGuiChildFlags iChildFlags = ImGuiChildFlags_AlwaysUseWindowPadding;
+		if (!bForceHeight && !bCollapsed)
+			iChildFlags |= ImGuiChildFlags_AutoResizeY;
+		if (bCollapsed)
+			flMinHeight = H::Draw.Scale(28);
+		bool bReturn = BeginChild(sLabel, { GetColumnWidth(), flMinHeight }, iChildFlags, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
 		if (bReturn)
 		{
-			if (sLabel[0] != '#')
+			if (bCollapsed)
+				RenderBackground(F::Render.Background0, F::Render.Background2);
+			else if (bHeader)
 				RenderTwoToneBackground(H::Draw.Scale(28), F::Render.Background0, F::Render.Background0p5, F::Render.Background2);
 			else
 				RenderBackground(F::Render.Background0p5, F::Render.Background2);
 		}
 
 		PushStyleVar(ImGuiStyleVar_ItemSpacing, { H::Draw.Scale(8), 0 });
-		if (sLabel[0] != '#')
+		if (bHeader)
 		{
 			ImVec2 vOriginalPos = GetCursorPos();
+			ImVec2 vDrawPos = GetDrawPos();
+			ImDrawList* pDrawList = GetWindowDrawList();
 
-			PushFont(F::Render.FontBold);
+			// accent tick anchoring the section header
+			pDrawList->AddRectFilled(vDrawPos + ImVec2(0, H::Draw.Scale(8)), vDrawPos + ImVec2(H::Draw.Scale(3), H::Draw.Scale(20)), F::Render.Accent, H::Draw.Scale(2), ImDrawFlags_RoundCornersRight);
+
+			PushFont(F::Render.FontTitle); // larger bold section titles
+			SetCursorPosY(vOriginalPos.y - H::Draw.Scale(1));
 			TextColored(F::Render.Accent, StripDoubleHash(sLabel).c_str());
 			PopFont();
 
-			SetCursorPos(vOriginalPos); DebugDummy({ 0, H::Draw.Scale(19 + flPaddingMod) });
+			// collapse chevron + header click-to-collapse (session persistent).
+			// The right ~34px of the header is reserved for the master toggle.
+			pDrawList->AddText(F::Render.IconFont, F::Render.IconFont->LegacySize, vDrawPos + ImVec2(GetWindowSize().x - H::Draw.Scale(22), H::Draw.Scale(6)), F::Render.Inactive, bCollapsed ? ICON_MD_KEYBOARD_ARROW_RIGHT : ICON_MD_KEYBOARD_ARROW_DOWN);
+			if (!bForceHeight && IsWindowHovered()
+				&& IsMouseWithin(vDrawPos.x, vDrawPos.y, GetWindowSize().x - H::Draw.Scale(56), H::Draw.Scale(28))
+				&& IsMouseClicked(ImGuiMouseButton_Left))
+				mCollapsed[uHash] = !bCollapsed;
+
+			SetCursorPos(vOriginalPos); DebugDummy({ 0, H::Draw.Scale(20 + flPaddingMod) });
 		}
 		else if (flPaddingMod)
 			SetCursorPosY(GetCursorPosY() + H::Draw.Scale(flPaddingMod));
 
-		return bReturn;
+		return bReturn && !bCollapsed;
 	}
 	inline void EndSection()
 	{
 		uint32_t uHash = vStoredLabels.back();
 		vStoredLabels.pop_back();
-		float flHeight = GetItemRectMax().y - GetWindowPos().y;
-		if (flHeight > 0.f)
-			mLastHeights[uHash] = flHeight + GetStyle().WindowPadding.y;
+		bool bCollapsed = vStoredCollapsed.back();
+		vStoredCollapsed.pop_back();
+		if (!bCollapsed)
+		{
+			float flHeight = GetItemRectMax().y - GetWindowPos().y;
+			if (flHeight > 0.f)
+				mLastHeights[uHash] = flHeight + GetStyle().WindowPadding.y;
+		}
 
 		PopStyleVar();
 		EndChild();
 		PopStyleVar();
+	}
+
+	// Phase 3: subgroup separator — a small dim bold label with a hairline rule
+	// filling the rest of the row, plus breathing room above. Draws a full-width
+	// standalone row, so place it only at a fresh row boundary (never between a
+	// Left and its Right widget) to keep AddRowSize packing intact.
+	inline void SubGroup(const char* sLabel, bool bFirst = false)
+	{
+		if (!bFirst)
+			DebugDummy({ 0, H::Draw.Scale(Tokens::SubGroupTop) });
+
+		ImDrawList* pDrawList = GetWindowDrawList();
+		ImVec2 vDrawPos = GetDrawPos() + GetCursorPos() + ImVec2(H::Draw.Scale(Tokens::SubGroupInset), 0);
+
+		PushFont(F::Render.FontSmall);
+		std::string sText = StripDoubleHash(sLabel);
+		std::transform(sText.begin(), sText.end(), sText.begin(), ::toupper); // uppercase = scannable pattern tier
+		ImVec2 vText = CalcTextSize(sText.c_str());
+		pDrawList->AddText(vDrawPos, F::Render.TextDim, sText.c_str());
+
+		float flLineY = roundf(vDrawPos.y + vText.y / 2.f);
+		float flLeft = vDrawPos.x + vText.x + H::Draw.Scale(Tokens::SubGroupRuleGap);
+		float flRight = GetDrawPosX() + GetWindowWidth() - GetStyle().WindowPadding.x;
+		if (flRight > flLeft)
+			pDrawList->AddRectFilled({ flLeft, flLineY }, { flRight, flLineY + H::Draw.Scale(1) }, F::Render.Background2);
+		PopFont();
+
+		DebugDummy({ 0, vText.y + H::Draw.Scale(Tokens::SubGroupBottom) });
 	}
 
 	inline std::vector<WidgetWindow_t> WidgetTable(int iCount, float flHeight, std::vector<float> vWidths = {}, ImGuiChildFlags iWindowFlags = ImGuiChildFlags_AlwaysUseWindowPadding, ImGuiWindowFlags iChildFlags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)
@@ -2717,6 +2793,29 @@ namespace ImGui
 			PopTransparent();
 	}
 
+	// Phase 3: master enable toggle rendered into a section header (top-right).
+	// Reads/writes the enable var through the bind system. Returns the resolved
+	// value so the caller can dim (but keep interactive) the body:
+	//   if (Section("Glow")) { bool bOn = SectionToggle(Vars::...Enabled);
+	//       PushTransparent(!bOn, true); ...body...; PopTransparent(1, 1);
+	//   } EndSection();
+	inline bool SectionToggle(ConfigVar<bool>& tVar)
+	{
+		ImVec2 vSave = GetCursorPos();
+
+		auto& bVal = FGet(tVar, true); // WRAPPER-style: may push disabled/transparent
+		bool bActive = bVal;
+
+		float flSize = H::Draw.Scale(22);
+		SetCursorPos({ GetWindowWidth() - flSize - H::Draw.Scale(28), H::Draw.Scale(3) }); // clear of the collapse chevron
+		if (IconButton(bActive ? ICON_MD_CHECK_BOX : ICON_MD_CHECK_BOX_OUTLINE_BLANK, flSize, (bActive ? F::Render.Accent : F::Render.Inactive).Value))
+			bActive = !bActive;
+
+		FSet(tVar, bActive); // pops whatever FGet pushed
+		SetCursorPos(vSave);
+		return bActive;
+	}
+
 	template <class T>
 	inline void DrawBindInfo(ConfigVar<T>& tVar, T& tVal, const char* sType, const std::string& sBind, bool bNewPopup, bool& bLastHovered)
 	{
@@ -2877,16 +2976,78 @@ namespace ImGui
 		}
 	}
 
+	// Phase 4 help system: parallel description table keyed by ConfigVar address
+	// (compile-checked, no per-var Vars.h edits). Populated once at menu init.
+	inline std::unordered_map<const void*, const char*> g_Descriptions = {};
+
+	// Redesign: parallel DISPLAY-label table. Overrides the on-screen widget label
+	// only - the config serialization key (ConfigVar::Name()) and the bind key
+	// (m_vNames.back()) are untouched, so existing configs/binds stay compatible.
+	// Search still matches on the original m_vNames, so renames don't hide vars.
+	inline std::unordered_map<const void*, const char*> g_DisplayLabels = {};
+	inline const char* DisplayLabelFor(const void* pVar, const char* sFallback)
+	{
+		auto it = g_DisplayLabels.find(pVar);
+		return it != g_DisplayLabels.end() && it->second ? it->second : sFallback;
+	}
+
+	// Show the description tooltip after a short hover dwell so it never flashes
+	// while the eye sweeps a column of widgets. Every control gets a tooltip:
+	// a curated g_Descriptions entry if one exists, otherwise the widget's own
+	// label so nothing is left silent.
+	inline void DescTooltip(const void* pVar, bool bHovered, const char* sFallbackLabel = nullptr)
+	{
+		static const void* pLast = nullptr;
+		static double dStart = 0.0;
+		if (!bHovered || Disabled)
+		{
+			if (pLast == pVar)
+				pLast = nullptr;
+			return;
+		}
+		auto it = g_Descriptions.find(pVar);
+		const char* sText = (it != g_Descriptions.end() && it->second) ? it->second : sFallbackLabel;
+		if (!sText || !sText[0])
+			return;
+		if (pLast != pVar)
+		{
+			pLast = pVar;
+			dStart = GetTime();
+			return;
+		}
+		if (GetTime() - dStart < 0.4)
+			return;
+		FTooltip(sText, true);
+	}
+
+	// Phase 2 bind discoverability: does this var carry any per-bind override?
+	template <class T>
+	inline bool HasBindOverride(ConfigVar<T>& tVar)
+	{
+		if (tVar.m_iFlags & (NOSAVE | NOBIND))
+			return false;
+		for (auto& iKey : tVar.Map | std::views::keys)
+			if (iKey != DEFAULT_BIND)
+				return true;
+		return false;
+	}
+
 	#define WRAPPER(function, type, parameters, arguments) \
 	inline bool function(ConfigVar<type>& tVar, parameters, bool* pHovered = nullptr, int iBindOverride = -1, int iLabelOverride = -1) \
 	{ \
-		const char* sLabel = iLabelOverride != -1 ? tVar.m_vNames[iLabelOverride] : tVar.m_vNames.front(); \
+		const char* sLabel = iLabelOverride != -1 ? tVar.m_vNames[iLabelOverride] : DisplayLabelFor(&tVar, tVar.m_vNames.front()); \
 		int iVarFlags = tVar.m_iFlags & ~(VISUAL | NOSAVE | NOBIND | DEBUGVAR); \
 		iFlags |= iVarFlags; \
 		auto tVal = FGet(tVar, true); \
 		bool bHovered = false; \
 		bool bReturn = function(std::format("{}## {}", sLabel, tVar.Name()).c_str(), arguments, &bHovered); \
 		FSet(tVar, tVal); \
+		if (CurrentBind == DEFAULT_BIND && HasBindOverride(tVar)) \
+		{	/*Phase 2: accent marker on any widget with a bind override*/ \
+			ImVec2 vMax = GetItemRectMax(); \
+			GetWindowDrawList()->AddCircleFilled({ vMax.x - H::Draw.Scale(4), GetItemRectMin().y + H::Draw.Scale(4) }, H::Draw.Scale(2), F::Render.Accent); \
+		} \
+		DescTooltip(&tVar, bHovered, StripDoubleHash(sLabel).c_str()); \
 		if (pHovered) \
 			*pHovered = bHovered; \
 		if (!(tVar.m_iFlags & (NOBIND | NOSAVE)) && !Disabled && CurrentBind == DEFAULT_BIND) \

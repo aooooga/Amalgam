@@ -26,12 +26,14 @@ public:
 	ImColor Background2 = {};
 	ImColor Inactive = {};
 	ImColor Active = {};
+	ImColor TextDim = {}; // Phase 1: mid tier between Inactive and Active for subgroup labels
 
 	// Fonts
 	ImFont* FontSmall = nullptr;
 	ImFont* FontRegular = nullptr;
 	ImFont* FontBold = nullptr;
 	ImFont* FontLarge = nullptr;
+	ImFont* FontTitle = nullptr; // Phase 3 redesign: larger bold for section headers
 	ImFont* FontMono = nullptr;
 
 	ImFont* IconFont = nullptr;

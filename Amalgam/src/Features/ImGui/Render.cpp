@@ -57,6 +57,23 @@ void CRender::LoadColors()
 {
 	using namespace ImGui;
 
+	// Phase 5: the theme colours only change when the user edits them, but the
+	// derived table + ImGui style colours were rebuilt every frame. Skip the
+	// rebuild while the four source colours are unchanged.
+	{
+		auto uPack = [](Color_t c) -> uint32_t { return uint32_t(c.r) << 24 | uint32_t(c.g) << 16 | uint32_t(c.b) << 8 | uint32_t(c.a); };
+		uint32_t uNew = uPack(Vars::Menu::Theme::Accent.Value) * 2654435761u
+					  ^ uPack(Vars::Menu::Theme::Background.Value) * 40503u
+					  ^ uPack(Vars::Menu::Theme::Inactive.Value) * 131u
+					  ^ uPack(Vars::Menu::Theme::Active.Value);
+		static uint32_t uCache = 0;
+		static bool bFirst = true;
+		if (!bFirst && uNew == uCache)
+			return;
+		bFirst = false;
+		uCache = uNew;
+	}
+
 	Accent = ColorByteToFloat(Vars::Menu::Theme::Accent.Value);
 	Background0 = ColorByteToFloat(Vars::Menu::Theme::Background.Value);
 	Background0p5 = ColorByteToFloat(Vars::Menu::Theme::Background.Value.Lerp({ 127, 127, 127 }, 0.5f / 9, LerpEnum::NoAlpha));
@@ -66,6 +83,19 @@ void CRender::LoadColors()
 	Background2 = ColorByteToFloat(Vars::Menu::Theme::Background.Value.Lerp({ 127, 127, 127 }, 2.f / 9, LerpEnum::NoAlpha));
 	Inactive = ColorByteToFloat(Vars::Menu::Theme::Inactive.Value);
 	Active = ColorByteToFloat(Vars::Menu::Theme::Active.Value);
+
+	// Phase 1: raise base label contrast without hardcoding (theme-derived).
+	// Nudge the muted "inactive" text toward the active text so off-state labels
+	// read more clearly, and build a mid tier for subgroup headers.
+	auto Mix = [](const ImColor& a, const ImColor& b, float t) -> ImColor
+	{
+		return { a.Value.x + (b.Value.x - a.Value.x) * t,
+				 a.Value.y + (b.Value.y - a.Value.y) * t,
+				 a.Value.z + (b.Value.z - a.Value.z) * t,
+				 a.Value.w + (b.Value.w - a.Value.w) * t };
+	};
+	Inactive = Mix(Inactive, Active, 0.22f);
+	TextDim = Mix(Inactive, Active, 0.55f);
 
 	ImVec4* colors = GetStyle().Colors;
 	colors[ImGuiCol_Border] = Background2;
@@ -106,12 +136,14 @@ void CRender::LoadFonts()
 	FontRegular = io.Fonts->AddFontFromFileTTF(R"(C:\Windows\Fonts\verdana.ttf)", H::Draw.Scale(13), &tFontConfig);
 	FontBold = io.Fonts->AddFontFromFileTTF(R"(C:\Windows\Fonts\verdanab.ttf)", H::Draw.Scale(13), &tFontConfig);
 	FontLarge = io.Fonts->AddFontFromFileTTF(R"(C:\Windows\Fonts\verdana.ttf)", H::Draw.Scale(14), &tFontConfig);
+	FontTitle = io.Fonts->AddFontFromFileTTF(R"(C:\Windows\Fonts\verdanab.ttf)", H::Draw.Scale(16), &tFontConfig);
 	FontMono = io.Fonts->AddFontFromFileTTF(R"(C:\Windows\Fonts\cour.ttf)", H::Draw.Scale(16), &tFontConfig); // windows mono font installed by default
 #else
 	FontSmall = io.Fonts->AddFontFromMemoryCompressedTTF(RobotoMedium_compressed_data, RobotoMedium_compressed_size, H::Draw.Scale(12), &tFontConfig);
 	FontRegular = io.Fonts->AddFontFromMemoryCompressedTTF(RobotoMedium_compressed_data, RobotoMedium_compressed_size, H::Draw.Scale(13), &tFontConfig);
 	FontBold = io.Fonts->AddFontFromMemoryCompressedTTF(RobotoBlack_compressed_data, RobotoBlack_compressed_size, H::Draw.Scale(13), &tFontConfig);
 	FontLarge = io.Fonts->AddFontFromMemoryCompressedTTF(RobotoMedium_compressed_data, RobotoMedium_compressed_size, H::Draw.Scale(15), &tFontConfig);
+	FontTitle = io.Fonts->AddFontFromMemoryCompressedTTF(RobotoBlack_compressed_data, RobotoBlack_compressed_size, H::Draw.Scale(16), &tFontConfig);
 	FontMono = io.Fonts->AddFontFromMemoryCompressedTTF(CascadiaMono_compressed_data, CascadiaMono_compressed_size, H::Draw.Scale(15), &tFontConfig);
 #endif
 
@@ -136,7 +168,7 @@ void CRender::LoadStyle()
 	style.FramePadding = { 0, 0 };
 	style.FrameRounding = H::Draw.Scale(4);
 	style.ItemInnerSpacing = { 0, 0 };
-	style.ItemSpacing = { H::Draw.Scale(8), H::Draw.Scale(8) };
+	style.ItemSpacing = { H::Draw.Scale(8), H::Draw.Scale(Tokens::SectionGutter) }; // Phase 1: wider section gutters
 	style.PopupBorderSize = 0.f;
 	style.PopupRounding = H::Draw.Scale(4);
 	style.ScrollbarSize = 6.f + H::Draw.Scale(3);

@@ -11,6 +11,13 @@ private:
 
 	void DrawModel(CBaseEntity* pEntity, const Chams_t& tChams, IMatRenderContext* pRenderContext, int iModel = ModelEnum::Visible, bool bTwoModel = false);
 
+	// Body-part selection: returns a bone set with deselected parts collapsed
+	// (chams then skip that geometry), or nullptr when the full model draws.
+	matrix3x4* ApplyBodyPartFilter(const DrawModelState_t& pState, const ModelRenderInfo_t& pInfo, matrix3x4* pBoneToWorld);
+	// BodyParts mask of the material currently drawing, set around each
+	// DrawModel call in DrawModel(); BODYPART_ALL outside cham passes.
+	int m_iActiveBodyParts = BODYPART_ALL;
+
 	void RenderBacktrack(const DrawModelState_t& pState, const ModelRenderInfo_t& pInfo);
 	void RenderFakeAngle(const DrawModelState_t& pState, const ModelRenderInfo_t& pInfo);
 
@@ -21,6 +28,9 @@ private:
 	// matches what RenderMain() draws the same frame.
 	int GetCrosshairTarget(CTFPlayer* pLocal);
 	int m_iTargetedEntity = 0;
+	// EBodyParts bit of the hitgroup under the crosshair (0 = unknown, matches
+	// every layer). Selects which targeted-material layers draw.
+	int m_iTargetedPart = 0;
 
 	struct ChamsInfo_t
 	{

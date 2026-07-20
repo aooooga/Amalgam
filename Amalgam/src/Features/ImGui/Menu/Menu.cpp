@@ -1070,16 +1070,18 @@ void CMenu::MenuVisuals(int iTab)
 				} EndSection();
 				if (Section("Chams"))
 				{
+					// Body-part pickers only make sense for player models.
+					const bool bBodyParts = !tGroup.m_iTargets || tGroup.m_iTargets & TargetsEnum::Players;
 					if (!tGroup.m_iTargets || tGroup.m_iTargets & TargetsEnum::Occluded)
 					{
-						FMDropdown("Visible material", &tGroup.m_tChams.Visible, FDropdownEnum::Left);
-						FMDropdown("Occluded material", &tGroup.m_tChams.Occluded, FDropdownEnum::Right);
+						FMDropdown("Visible material", &tGroup.m_tChams.Visible, FDropdownEnum::Left, 0, nullptr, bBodyParts);
+						FMDropdown("Occluded material", &tGroup.m_tChams.Occluded, FDropdownEnum::Right, 0, nullptr, bBodyParts);
 					}
 					else
-						FMDropdown("Material", &tGroup.m_tChams.Visible);
+						FMDropdown("Material", &tGroup.m_tChams.Visible, FDropdownEnum::None, 0, nullptr, bBodyParts);
 
 					// Rendered only while the crosshair is on this group's entity.
-					FMDropdown("Targeted material", &tGroup.m_tTargetChams.Visible);
+					FMDropdown("Targeted material", &tGroup.m_tTargetChams.Visible, FDropdownEnum::None, 0, nullptr, bBodyParts);
 				} EndSection();
 				if (Section("Glow", 8))
 				{

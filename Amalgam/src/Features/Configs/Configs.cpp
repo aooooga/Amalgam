@@ -74,6 +74,9 @@ template <> void CConfigs::SaveJson(boost::property_tree::ptree& t, const std::s
 		SaveJson(tLayer, "Material", m);
 		SaveJson(tLayer, "Color", c.Color);
 		SaveJson(tLayer, "Distance", c.Distance);
+		SaveJson(tLayer, "BodyParts", c.BodyParts);
+		SaveJson(tLayer, "IgnoreZ", c.IgnoreZ);
+		SaveJson(tLayer, "Fullbright", c.Fullbright);
 
 		tChild.push_back({ "", tLayer });
 	}
@@ -209,6 +212,9 @@ template <> void CConfigs::LoadJson(const boost::property_tree::ptree& t, const 
 				MaterialColor_t c;
 				LoadJson(tLayer, "Color", c.Color);
 				LoadJson(tLayer, "Distance", c.Distance); // absent in old configs, keeps defaults
+				LoadJson(tLayer, "BodyParts", c.BodyParts); // absent in old configs, keeps default (all)
+				LoadJson(tLayer, "IgnoreZ", c.IgnoreZ);
+				LoadJson(tLayer, "Fullbright", c.Fullbright);
 				v.emplace_back(m, c);
 			}
 		}

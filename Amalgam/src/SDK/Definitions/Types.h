@@ -1192,18 +1192,39 @@ struct DistanceColor_t
 	}
 };
 
+// Body parts a player cham material can be restricted to (MaterialColor_t::BodyParts).
+enum EBodyParts
+{
+	BODYPART_HEAD = 1 << 0,
+	BODYPART_SPINE = 1 << 1,
+	BODYPART_LEFT_ARM = 1 << 2,
+	BODYPART_RIGHT_ARM = 1 << 3,
+	BODYPART_LEFT_LEG = 1 << 4,
+	BODYPART_RIGHT_LEG = 1 << 5,
+	BODYPART_WEAPON = 1 << 6, // held weapon; off in masks saved before it existed
+	BODYPART_ALL = (1 << 7) - 1
+};
+
 // A material tint: flat color, optionally overridden by a distance gradient.
 struct MaterialColor_t
 {
 	Color_t Color = {};
 	DistanceColor_t Distance = {};
+	// Players draw only the selected parts; held-weapon entities draw only
+	// when BODYPART_WEAPON is set. Other entities always draw whole.
+	int BodyParts = BODYPART_ALL;
+	// Draw this layer through everything (world, the player model itself).
+	bool IgnoreZ = false;
+	// "Original" layers only: draw the model's own materials with engine
+	// lighting suppressed (fullbright).
+	bool Fullbright = false;
 
 	MaterialColor_t() = default;
 	MaterialColor_t(const Color_t& tColor) : Color(tColor) {}
 
 	inline bool operator==(const MaterialColor_t& t) const
 	{
-		return Color == t.Color && Distance == t.Distance;
+		return Color == t.Color && Distance == t.Distance && BodyParts == t.BodyParts && IgnoreZ == t.IgnoreZ && Fullbright == t.Fullbright;
 	}
 
 	inline bool operator!=(const MaterialColor_t& t) const

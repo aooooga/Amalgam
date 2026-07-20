@@ -2123,7 +2123,7 @@ namespace ImGui
 	// popup gains a "Distance based" checkbox; when checked, a gradient stop
 	// editor maps the local player's distance to the entity (near -> far) onto
 	// the color, and the swatch previews the gradient instead of the flat color.
-	inline bool ColorPicker(const char* sLabel, Color_t* pColor, DistanceColor_t* pDistance, bool bTooltip = true, ImVec2 vSize = { H::Draw.Scale(12), H::Draw.Scale(12) })
+	inline bool ColorPicker(const char* sLabel, Color_t* pColor, DistanceColor_t* pDistance, bool bTooltip = true, ImVec2 vSize = { H::Draw.Scale(12), H::Draw.Scale(12) }, int* pBodyParts = nullptr, bool* pIgnoreZ = nullptr, bool* pFullbright = nullptr)
 	{
 		if (!pDistance)
 			return ColorPicker(sLabel, pColor, bTooltip, vSize);
@@ -2198,6 +2198,30 @@ namespace ImGui
 			{
 				Dummy({ 0, H::Draw.Scale(2) });
 				FGradientStops("DistanceStops", pDistance->Stops, flWidth, 0.f, DistanceColor_t::MaxDistance, "%.0f HU");
+			}
+
+			// Draw the layer through everything, including the model itself.
+			if (pIgnoreZ)
+			{
+				Dummy({ 0, H::Draw.Scale(4) });
+				bReturn |= Checkbox("Ignore Z", pIgnoreZ);
+			}
+
+			// Original material only: draw the model's own materials fullbright.
+			if (pFullbright)
+			{
+				Dummy({ 0, H::Draw.Scale(4) });
+				bReturn |= Checkbox("Fullbright", pFullbright);
+			}
+
+			// Which player body parts this material renders on (chams only).
+			if (pBodyParts)
+			{
+				Dummy({ 0, H::Draw.Scale(4) });
+				bReturn |= FDropdown("Body parts", pBodyParts,
+					{ "Head", "Spine", "Left arm", "Right arm", "Left leg", "Right leg", "Weapon" },
+					{ BODYPART_HEAD, BODYPART_SPINE, BODYPART_LEFT_ARM, BODYPART_RIGHT_ARM, BODYPART_LEFT_LEG, BODYPART_RIGHT_LEG, BODYPART_WEAPON },
+					FDropdownEnum::Multi);
 			}
 
 			EndPopup();
@@ -2400,7 +2424,7 @@ namespace ImGui
 	}
 
 	// dropdown for materials
-	inline bool FMDropdown(const char* sLabel, std::vector<std::pair<std::string, MaterialColor_t>>* pVar, int iFlags = FDropdownEnum::None, int iSizeOffset = 0, bool* pHovered = nullptr)
+	inline bool FMDropdown(const char* sLabel, std::vector<std::pair<std::string, MaterialColor_t>>* pVar, int iFlags = FDropdownEnum::None, int iSizeOffset = 0, bool* pHovered = nullptr, bool bBodyParts = false)
 	{
 		// material stuff
 		std::vector<Material_t> vMaterials;
@@ -2497,7 +2521,9 @@ namespace ImGui
 				if (bFlagActive) // do here so as to not sink input
 				{
 					SetCursorPos(vOriginalPos2 + ImVec2(vSize.x - H::Draw.Scale(31), H::Draw.Scale(1)));
-					ColorPicker(std::format("MaterialColor{}", iEntry).c_str(), &it->second->second.Color, &it->second->second.Distance, false);
+					ColorPicker(std::format("MaterialColor{}", iEntry).c_str(), &it->second->second.Color, &it->second->second.Distance, false,
+						{ H::Draw.Scale(12), H::Draw.Scale(12) }, bBodyParts ? &it->second->second.BodyParts : nullptr, &it->second->second.IgnoreZ,
+						it->second->first == "Original" ? &it->second->second.Fullbright : nullptr);
 					SetCursorPos(vOriginalPos2);
 				}
 				bool bHovered = bFlagActive ? IsItemHovered() : false;

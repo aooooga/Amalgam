@@ -21,6 +21,20 @@ void CChams::End()
 
 void CChams::DrawModel(CBaseEntity* pEntity, const Chams_t& tChams, IMatRenderContext* pRenderContext, int iModel, bool bTwoModel)
 {
+	// Held-weapon entities follow each layer's Weapon body-part bit; when no
+	// layer includes it, leave the original weapon model untouched entirely
+	// (no suppression, no cham).
+	const bool bWeaponEntity = pEntity->IsBaseCombatWeapon();
+	if (bWeaponEntity)
+	{
+		const auto HasWeapon = [](const std::vector<std::pair<std::string, MaterialColor_t>>& v)
+		{
+			return std::ranges::any_of(v, [](const auto& tPair) { return tPair.second.BodyParts & BODYPART_WEAPON; });
+		};
+		if (!HasWeapon(tChams.Visible) && !HasWeapon(tChams.Occluded))
+			return;
+	}
+
 	if (!m_iFlags && iModel == ModelEnum::Visible)
 		m_mEntities[pEntity->entindex()];
 
@@ -77,6 +91,9 @@ void CChams::DrawModel(CBaseEntity* pEntity, const Chams_t& tChams, IMatRenderCo
 		auto& vMaterials = tChams.GetVisible();
 		for (auto& [sName, tColor] : vMaterials)
 		{
+			if (bWeaponEntity && !(tColor.BodyParts & BODYPART_WEAPON))
+				continue;
+
 			auto pMaterial = F::Materials.GetMaterial(FNV1A::Hash32(sName.c_str()));
 
 			F::Materials.SetColor(pMaterial, ResolveColor(tColor));
@@ -89,9 +106,46 @@ void CChams::DrawModel(CBaseEntity* pEntity, const Chams_t& tChams, IMatRenderCo
 					pRenderContext->SetStencilZFailOperation(STENCILOPERATION_REPLACE);
 			}
 
+			// Ignore Z: compress the layer into the near depth range so it
+			// passes the depth test over the world and the model itself.
+			if (tColor.IgnoreZ)
+				pRenderContext->DepthRange(0.f, 0.2f);
+
+			// Fullbright Original: no override material (the model draws its own).
+			// Suppressing engine lighting alone just leaves studiorender on stale
+			// lighting state, so explicitly feed it a full-white ambient cube and
+			// no local lights for these draws.
+			const bool bFullbright = !pMaterial && tColor.Fullbright;
+			if (bFullbright)
+			{
+				static const Vector vWhiteCube[6] = { {1,1,1}, {1,1,1}, {1,1,1}, {1,1,1}, {1,1,1}, {1,1,1} };
+				I::ModelRender->SuppressEngineLighting(true);
+				I::StudioRender->SetAmbientLightColors(vWhiteCube);
+				I::StudioRender->SetLocalLights(0, nullptr);
+			}
+
+			m_iActiveBodyParts = tColor.BodyParts;
 			m_bRendering = true;
 			pEntity->DrawModel(STUDIO_RENDER);
+			// Weapon option: also cham the held weapon with this material and
+			// suppress its original model, like the player's.
+			if (tColor.BodyParts & BODYPART_WEAPON && pEntity->IsPlayer())
+			{
+				if (auto pWeapon = pEntity->As<CTFPlayer>()->m_hActiveWeapon()->As<CTFWeaponBase>())
+				{
+					if (iModel == ModelEnum::Visible)
+						m_mEntities[pWeapon->entindex()];
+					pWeapon->DrawModel(STUDIO_RENDER);
+				}
+			}
 			m_bRendering = false;
+			m_iActiveBodyParts = BODYPART_ALL;
+
+			if (bFullbright)
+				I::ModelRender->SuppressEngineLighting(false);
+
+			if (tColor.IgnoreZ)
+				pRenderContext->DepthRange(0.f, 1.f);
 
 			if (pMaterial)
 			{
@@ -129,6 +183,9 @@ void CChams::DrawModel(CBaseEntity* pEntity, const Chams_t& tChams, IMatRenderCo
 		auto& vMaterials = tChams.GetOccluded();
 		for (auto& [sName, tColor] : vMaterials)
 		{
+			if (bWeaponEntity && !(tColor.BodyParts & BODYPART_WEAPON))
+				continue;
+
 			auto pMaterial = F::Materials.GetMaterial(FNV1A::Hash32(sName.c_str()));
 
 			F::Materials.SetColor(pMaterial, ResolveColor(tColor));
@@ -136,9 +193,35 @@ void CChams::DrawModel(CBaseEntity* pEntity, const Chams_t& tChams, IMatRenderCo
 			if (pMaterial && pMaterial->m_bInvertCull)
 				pRenderContext->CullMode(MATERIAL_CULLMODE_CW);
 
+			// Fullbright Original: see the visible pass.
+			const bool bFullbright = !pMaterial && tColor.Fullbright;
+			if (bFullbright)
+			{
+				static const Vector vWhiteCube[6] = { {1,1,1}, {1,1,1}, {1,1,1}, {1,1,1}, {1,1,1}, {1,1,1} };
+				I::ModelRender->SuppressEngineLighting(true);
+				I::StudioRender->SetAmbientLightColors(vWhiteCube);
+				I::StudioRender->SetLocalLights(0, nullptr);
+			}
+
+			m_iActiveBodyParts = tColor.BodyParts;
 			m_bRendering = true;
 			pEntity->DrawModel(STUDIO_RENDER);
+			// Weapon option: also cham the held weapon with this material and
+			// suppress its original model, like the player's.
+			if (tColor.BodyParts & BODYPART_WEAPON && pEntity->IsPlayer())
+			{
+				if (auto pWeapon = pEntity->As<CTFPlayer>()->m_hActiveWeapon()->As<CTFWeaponBase>())
+				{
+					if (iModel == ModelEnum::Visible)
+						m_mEntities[pWeapon->entindex()];
+					pWeapon->DrawModel(STUDIO_RENDER);
+				}
+			}
 			m_bRendering = false;
+			m_iActiveBodyParts = BODYPART_ALL;
+
+			if (bFullbright)
+				I::ModelRender->SuppressEngineLighting(false);
 
 			if (pMaterial && pMaterial->m_bInvertCull)
 				pRenderContext->CullMode(MATERIAL_CULLMODE_CCW);
@@ -172,8 +255,34 @@ int CChams::GetCrosshairTarget(CTFPlayer* pLocal)
 	SDK::Trace(vEyePos, vEyePos + vForward * 8192.f, MASK_SHOT | CONTENTS_GRATE, &filter, &trace);
 
 	if (auto pEnt = trace.m_pEnt; pEnt && pEnt->IsPlayer())
+	{
+		switch (trace.hitgroup)
+		{
+		case HITGROUP_HEAD: m_iTargetedPart = BODYPART_HEAD; break;
+		case HITGROUP_CHEST: case HITGROUP_STOMACH: m_iTargetedPart = BODYPART_SPINE; break;
+		case HITGROUP_LEFTARM: m_iTargetedPart = BODYPART_LEFT_ARM; break;
+		case HITGROUP_RIGHTARM: m_iTargetedPart = BODYPART_RIGHT_ARM; break;
+		case HITGROUP_LEFTLEG: m_iTargetedPart = BODYPART_LEFT_LEG; break;
+		case HITGROUP_RIGHTLEG: m_iTargetedPart = BODYPART_RIGHT_LEG; break;
+		default: m_iTargetedPart = 0; break;
+		}
 		return pEnt->entindex();
+	}
+	m_iTargetedPart = 0;
 	return 0;
+}
+
+// Targeted-material layers that apply to the body part under the crosshair;
+// an unknown part matches every layer.
+static std::vector<std::pair<std::string, MaterialColor_t>> FilterTargetLayers(const std::vector<std::pair<std::string, MaterialColor_t>>& vLayers, int iPart)
+{
+	std::vector<std::pair<std::string, MaterialColor_t>> vOut;
+	for (auto& tPair : vLayers)
+	{
+		if (!iPart || tPair.second.BodyParts & iPart)
+			vOut.push_back(tPair);
+	}
+	return vOut;
 }
 
 void CChams::Store(CTFPlayer* pLocal)
@@ -251,7 +360,9 @@ void CChams::UpdateTarget()
 			continue;
 
 		const int iIndex = tInfo.m_pEntity->entindex();
-		if (m_iTargetedEntity && iIndex == m_iTargetedEntity)
+		const bool bDraws = m_iTargetedEntity && iIndex == m_iTargetedEntity
+			&& std::ranges::any_of(tInfo.m_pTargetChams->Visible, [&](const auto& tPair) { return !m_iTargetedPart || tPair.second.BodyParts & m_iTargetedPart; });
+		if (bDraws)
 			m_mEntities[iIndex];
 		else
 			m_mEntities.erase(iIndex);
@@ -282,14 +393,18 @@ void CChams::RenderMain()
 	{
 		if (IsTargeted(tInfo))
 		{
-			tTarget.Visible = tInfo.m_pTargetChams->Visible;
-			tTarget.Occluded = tInfo.m_pTargetChams->Visible;
+			// Only the layers assigned to the body part under the crosshair.
+			// Occluded stays empty: a crosshair target is visible by definition,
+			// and the visible pass honors each layer's Ignore Z (the occluded
+			// pass would force always-on-top regardless of it).
+			tTarget.Visible = FilterTargetLayers(tInfo.m_pTargetChams->Visible, m_iTargetedPart);
 			break;
 		}
 	}
 	auto GetChams = [&](const ChamsInfo_t& tInfo) -> const Chams_t*
 	{
-		return IsTargeted(tInfo) ? &tTarget : tInfo.m_pChams;
+		// No layer for the targeted part: fall back to the regular chams.
+		return IsTargeted(tInfo) && !tTarget.Visible.empty() ? &tTarget : tInfo.m_pChams;
 	};
 
 	for (int iModel : { ModelEnum::Visible, ModelEnum::Occluded })
@@ -395,10 +510,88 @@ void CChams::RenderFakeAngle(const DrawModelState_t& pState, const ModelRenderIn
 	static auto IVModelRender_DrawModelExecute = U::Hooks.m_mHooks["IVModelRender_DrawModelExecute"];
 	IVModelRender_DrawModelExecute->Call<void>(I::ModelRender, pState, pInfo, F::FakeAngle.aBones);
 }
+// Classify every bone of a player model into an EBodyParts bit by name, children
+// inheriting from their parent (covers fingers, toes, weapon/attachment bones).
+// Bones that classify to nothing (root helpers etc.) always draw.
+static int ClassifyBone(const char* sName, int iParentPart)
+{
+	std::string sLower = sName;
+	std::transform(sLower.begin(), sLower.end(), sLower.begin(), ::tolower);
+	const auto Has = [&](const char* s) { return sLower.find(s) != std::string::npos; };
+	const bool bLeft = sLower.ends_with("_l");
+
+	if (Has("head") || Has("neck"))
+		return BODYPART_HEAD;
+	if (Has("spine") || Has("pelvis"))
+		return BODYPART_SPINE;
+	if (Has("arm") || Has("hand") || Has("collar"))
+		return bLeft ? BODYPART_LEFT_ARM : BODYPART_RIGHT_ARM;
+	if (Has("hip") || Has("knee") || Has("foot") || Has("toe"))
+		return bLeft ? BODYPART_LEFT_LEG : BODYPART_RIGHT_LEG;
+	return iParentPart;
+}
+
+static matrix3x4 s_aFilteredBones[MAXSTUDIOBONES];
+
+matrix3x4* CChams::ApplyBodyPartFilter(const DrawModelState_t& pState, const ModelRenderInfo_t& pInfo, matrix3x4* pBoneToWorld)
+{
+	const int iParts = m_iActiveBodyParts & BODYPART_ALL;
+	if (iParts == BODYPART_ALL)
+		return nullptr;
+
+	auto pHdr = pState.m_pStudioHdr;
+	if (!pHdr || pHdr->numbones < 1 || pHdr->numbones > MAXSTUDIOBONES)
+		return nullptr;
+
+	auto pEntity = I::ClientEntityList->GetClientEntity(pInfo.entity_index)->As<CTFPlayer>();
+	if (!pEntity || !pEntity->IsPlayer())
+		return nullptr;
+
+	// Per-model bone->part table, cached by studiohdr (checksum-validated in
+	// case the pointer is reused after a model reload).
+	static std::unordered_map<const studiohdr_t*, std::pair<int, std::vector<uint8_t>>> mPartCache;
+	auto& [iChecksum, vParts] = mPartCache[pHdr];
+	if (iChecksum != pHdr->checksum || vParts.size() != size_t(pHdr->numbones))
+	{
+		iChecksum = pHdr->checksum;
+		vParts.assign(pHdr->numbones, 0);
+		for (int i = 0; i < pHdr->numbones; i++)
+		{
+			auto pBone = pHdr->pBone(i);
+			int iParentPart = pBone->parent >= 0 && pBone->parent < i ? vParts[pBone->parent] : 0;
+			vParts[i] = uint8_t(ClassifyBone(pBone->pszName(), iParentPart));
+		}
+	}
+
+	// The engine usually calls DrawModelExecute without an explicit bone array;
+	// pull the current pose ourselves in that case.
+	if (pBoneToWorld)
+		memcpy(s_aFilteredBones, pBoneToWorld, sizeof(matrix3x4) * pHdr->numbones);
+	else if (!pEntity->SetupBones(s_aFilteredBones, MAXSTUDIOBONES, BONE_USED_BY_ANYTHING, I::GlobalVars->curtime))
+		return nullptr;
+
+	// Collapse deselected parts: zero the rotation/scale but keep the bone's
+	// position, so skinned vertices degenerate to a point in place instead of
+	// spiking toward the world origin.
+	for (int i = 0; i < pHdr->numbones; i++)
+	{
+		if (!vParts[i] || iParts & vParts[i])
+			continue;
+
+		auto& m = s_aFilteredBones[i];
+		for (int r = 0; r < 3; r++)
+			m[r][0] = m[r][1] = m[r][2] = 0.f;
+	}
+	return s_aFilteredBones;
+}
+
 void CChams::RenderHandler(const DrawModelState_t& pState, const ModelRenderInfo_t& pInfo, matrix3x4* pBoneToWorld)
 {
 	if (!m_iFlags)
 	{
+		if (auto pFiltered = ApplyBodyPartFilter(pState, pInfo, pBoneToWorld))
+			pBoneToWorld = pFiltered;
+
 		static auto IVModelRender_DrawModelExecute = U::Hooks.m_mHooks["IVModelRender_DrawModelExecute"];
 		IVModelRender_DrawModelExecute->Call<void>(I::ModelRender, pState, pInfo, pBoneToWorld);
 	}

@@ -1406,11 +1406,12 @@ void CFlexFOV::DrawComposite()
 	static float s_flCacheFov = -1.f, s_flCacheStrength = -1.f, s_flCacheAspect = -1.f, s_flCacheStereo = -1.f;
 	static float s_flCacheLo = -1.f, s_flCacheHi = -1.f;
 	static int s_iCacheWide = -1;
+	static int s_iCacheW = -1, s_iCacheH = -1; // half-pixel offset is resolution-dependent
 	static unsigned int s_uCacheFrusGen = 0xffffffffu;
 	static bool s_bBucketsAligned = true; // cached buckets were built all-identity
 	const bool bParamsChanged = flFovX != s_flCacheFov || flStrength != s_flCacheStrength || flAspect != s_flCacheAspect || flStereo != s_flCacheStereo
 		|| flLo != s_flCacheLo || flHi != s_flCacheHi
-		|| int(m_bWideRig) != s_iCacheWide;
+		|| int(m_bWideRig) != s_iCacheWide || sw != s_iCacheW || sh != s_iCacheH;
 	m_flMeshBuildMs = 0.f;
 	const bool bFullRebuild = bParamsChanged || m_bWantDirty;
 	const bool bRebuiltNow = bFullRebuild || m_uFrustumGen != s_uCacheFrusGen || !bAllAligned || !s_bBucketsAligned;
@@ -1420,6 +1421,7 @@ void CFlexFOV::DrawComposite()
 		s_flCacheFov = flFovX; s_flCacheStrength = flStrength; s_flCacheAspect = flAspect; s_flCacheStereo = flStereo;
 		s_flCacheLo = flLo; s_flCacheHi = flHi;
 		s_iCacheWide = int(m_bWideRig);
+		s_iCacheW = sw; s_iCacheH = sh;
 		s_uCacheFrusGen = m_uFrustumGen;
 		s_bBucketsAligned = bAllAligned;
 
@@ -1757,15 +1759,22 @@ void CFlexFOV::DrawComposite()
 	pRenderContext->PushMatrix();
 	pRenderContext->LoadIdentity();
 
+	// D3D9 half-pixel convention: raw clip coords land half a pixel right/down
+	// of the pixel grid, so a [-1,1] mesh leaves the top row and left column
+	// uncovered (a 1px seam of the pass underneath). Nudge every vertex half a
+	// pixel up-left (clip y is up = screen top) so the mesh covers row 0/col 0.
+	const float flHalfPxX = sw > 0 ? 1.f / sw : 0.f;
+	const float flHalfPxY = sh > 0 ? 1.f / sh : 0.f;
+
 	// Vertex/index fill shared by the dynamic and retained (static) mesh paths.
-	const auto FillVerts = [](MeshDesc_t& desc, const std::vector<FVert>& vBucket, int base, int nCount)
+	const auto FillVerts = [flHalfPxX, flHalfPxY](MeshDesc_t& desc, const std::vector<FVert>& vBucket, int base, int nCount)
 	{
 		for (int n = 0; n < nCount; n++)
 		{
 			const FVert& fv = vBucket[base + n];
 
 			float* pPos = reinterpret_cast<float*>(reinterpret_cast<unsigned char*>(desc.m_pPosition) + n * desc.m_VertexSize_Position);
-			pPos[0] = fv.x; pPos[1] = fv.y; pPos[2] = fv.z;
+			pPos[0] = fv.x - flHalfPxX; pPos[1] = fv.y + flHalfPxY; pPos[2] = fv.z;
 
 			float* pUV = reinterpret_cast<float*>(reinterpret_cast<unsigned char*>(desc.m_pTexCoord[0]) + n * desc.m_VertexSize_TexCoord[0]);
 			pUV[0] = fv.u; pUV[1] = fv.v;

@@ -99,8 +99,35 @@ MAKE_HOOK(IVModelRender_DrawModelExecute, U::Memory.GetVirtual(I::ModelRender, 1
 	if (F::Glow.m_bRendering)
 		return F::Glow.RenderHandler(pState, pInfo, pBoneToWorld);
 
-	if (F::Chams.m_mEntities.contains(pInfo.entity_index))
+	if (auto it = F::Chams.m_mEntities.find(pInfo.entity_index); it != F::Chams.m_mEntities.end())
+	{
+		// false: suppressed - RenderMain redraws this entity with cham materials.
+		if (!it->second)
+			return;
+
+		// true: plain-Original passthrough - this engine draw IS the visible
+		// cham. Wrap it in the stencil write the visible redraw used to do, so
+		// the occluded layers' ==0 test still masks visibly-drawn pixels.
+		// Shadow depth passes have no use for the mask.
+		if (pInfo.flags & STUDIO_SHADOWDEPTHTEXTURE)
+			return CALL_ORIGINAL(rcx, pState, pInfo, pBoneToWorld);
+
+		auto pRenderContext = I::MaterialSystem->GetRenderContext();
+		if (!pRenderContext)
+			return CALL_ORIGINAL(rcx, pState, pInfo, pBoneToWorld);
+
+		pRenderContext->SetStencilEnable(true);
+		pRenderContext->SetStencilCompareFunction(STENCILCOMPARISONFUNCTION_ALWAYS);
+		pRenderContext->SetStencilPassOperation(STENCILOPERATION_REPLACE);
+		pRenderContext->SetStencilFailOperation(STENCILOPERATION_KEEP);
+		pRenderContext->SetStencilZFailOperation(STENCILOPERATION_KEEP);
+		pRenderContext->SetStencilReferenceValue(1);
+		pRenderContext->SetStencilWriteMask(0xFF);
+		pRenderContext->SetStencilTestMask(0x0);
+		CALL_ORIGINAL(rcx, pState, pInfo, pBoneToWorld);
+		pRenderContext->SetStencilEnable(false);
 		return;
+	}
 
 	auto pEntity = I::ClientEntityList->GetClientEntity(pInfo.entity_index)->As<CBaseEntity>();
 	if (pEntity && pEntity->IsWearableVM() /*pEntity->IsViewmodel()*/)

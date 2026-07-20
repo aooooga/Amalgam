@@ -589,6 +589,9 @@ NAMESPACE_BEGIN(Vars)
 			CVar(FlexFOVTightFaces, "Tight faces## FlexFOVTightFaces", true, VISUAL);
 			CVar(RearView, "Enabled## RearView", false, VISUAL);
 			CVar(RearViewCameras, "Cameras## RearViewCameras", 4, VISUAL, 2, 8);
+			// Refresh alternating cameras each frame (each tile updates at half
+			// framerate), halving the per-frame flank draw cost.
+			CVar(RearViewHalfRate, "Half rate## RearViewHalfRate", true, VISUAL);
 			CVar(RearViewFOVOffset, "FOV offset## RearViewFOVOffset", 0.f, VISUAL | SLIDER_CLAMP | SLIDER_PRECISION, -180.f, 180.f, 1.f);
 			CVar(RearViewFlipPitch, "Flip pitch## RearViewFlipPitch", false, VISUAL);
 			CVar(RearViewGlowStencil, "Glow stencil## RearViewGlowStencil", 0, VISUAL, 0, 10);
@@ -876,6 +879,11 @@ NAMESPACE_BEGIN(Vars)
 			// merging per render pass - and every extra pass (FlexFOV faces,
 			// rearview flanks) multiplies it. Players and weapons are untouched.
 			CVar(CosmeticCullDistance, "Cosmetic cull distance", 2500, SLIDER_CLAMP, 0, 10000);
+			// Groups whose visible chams are just the untouched "Original" layer
+			// skip the suppress-and-redraw round trip: the engine's own scene
+			// draw is kept (stencil-marked so occluded layers still mask against
+			// it), saving a full model draw per entity per render pass.
+			CVar(OriginalChamsOptimization, "Original chams optimization", true);
 			CVar(AntiCheatCompatibility, "Anti-cheat compatibility", false);
 
 			CVar(AntiCheatCritHack, "Anti-cheat crit hack", false, NOSAVE | DEBUGVAR);

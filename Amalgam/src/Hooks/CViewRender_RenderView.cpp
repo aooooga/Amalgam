@@ -1,6 +1,7 @@
 #include "../SDK/SDK.h"
 
 #include "../Features/Visuals/CameraWindow/CameraWindow.h"
+#include "../Features/Visuals/Chams/Chams.h"
 #include "../Features/Visuals/FlexFOV/FlexFOV.h"
 #include "../Features/Visuals/RearView/RearView.h"
 
@@ -27,6 +28,16 @@ MAKE_HOOK(CViewRender_ViewDrawScene, S::CViewRender_ViewDrawScene(), void,
 	{
 		F::FlexFOV.m_bSceneSkipped = true;
 		return;
+	}
+
+	// Plain-Original chams passthrough: entities registered for the stencil
+	// wrap mark this scene's stencil as they draw, and the occluded cham pass
+	// (post-scene) tests those marks - so the buffer must start the scene
+	// clean. RenderMain skips its own pre-clear while these marks are live.
+	if (F::Chams.m_bScenePassthrough)
+	{
+		if (auto pRenderContext = I::MaterialSystem->GetRenderContext())
+			pRenderContext->ClearBuffers(false, false, true);
 	}
 
 	const double flStart = SDK::PlatFloatTime();

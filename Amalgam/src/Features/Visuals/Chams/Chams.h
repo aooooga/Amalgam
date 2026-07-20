@@ -59,7 +59,15 @@ public:
 
 	bool m_bRendering = false;
 
+	// Entities whose engine scene draw the DrawModelExecute hook intercepts.
+	// false: suppressed - RenderMain redraws them with cham materials.
+	// true: plain-Original passthrough - the engine draw is kept but wrapped in
+	// the visible-pass stencil write, so occluded layers still mask against it.
 	std::unordered_mapset<int> m_mEntities = {};
+	// Any passthrough entities registered for the upcoming scene: the
+	// ViewDrawScene hook clears the stencil at scene start so their marks land
+	// on a clean buffer, and RenderMain skips its own pre-clear to keep them.
+	bool m_bScenePassthrough = false;
 };
 
 ADD_FEATURE(CChams, Chams);

@@ -147,7 +147,7 @@ void CRearView::FreeTargets()
 	m_vAlphaVars.clear();
 }
 
-void CRearView::GatherVisibleEnemies(CTFPlayer* pLocal, float flViewYaw, float flFrontFOV, float flPerCam, int iCams)
+void CRearView::GatherVisibleEnemies(CTFPlayer* pLocal, float flViewYaw, float flFrontFOV, float flPerCam, int iCams, uint32_t uUpdateMask)
 {
 	m_vVisible.clear();
 
@@ -176,8 +176,9 @@ void CRearView::GatherVisibleEnemies(CTFPlayer* pLocal, float flViewYaw, float f
 					uCamMask |= 1u << i;
 			}
 		}
-		// No camera covers them (frontal enemies, mostly) - skip the LOS trace too.
-		if (!uCamMask)
+		// No camera covers them (frontal enemies, mostly), or only cameras that
+		// aren't refreshing this frame - skip the LOS trace too.
+		if (!(uCamMask & uUpdateMask))
 			continue;
 
 		// Only enemies with a clear line of sight, matching the Lua's IsLineClear.
@@ -444,11 +445,28 @@ void CRearView::Capture(void* rcx, const CViewSetup& tView)
 	const float flPerCam = flRemaining / iCams;
 	const float flSideFOV = SanitizeFOV(flPerCam - 1.25f, 125.f); // small seam overlap (OVERLAP_DEG)
 
-	GatherVisibleEnemies(pLocal, tView.angles.y, flFrontFOV, flPerCam, iCams);
+	// Half rate: refresh alternating cameras each frame (even indices on even
+	// frames), halving the per-frame flank draw cost; skipped tiles keep last
+	// frame's image.
+	uint32_t uUpdateMask = (1u << iCams) - 1;
+	if (Vars::Visuals::UI::RearViewHalfRate.Value)
+	{
+		const uint32_t uParity = I::GlobalVars->framecount & 1;
+		for (int i = 0; i < iCams; i++)
+		{
+			if ((uint32_t(i) & 1) != uParity)
+				uUpdateMask &= ~(1u << i);
+		}
+	}
+
+	GatherVisibleEnemies(pLocal, tView.angles.y, flFrontFOV, flPerCam, iCams, uUpdateMask);
 
 	m_bCapturing = true;
 	for (int i = 0; i < iCams; i++)
 	{
+		if (!(uUpdateMask & (1u << i)))
+			continue;
+
 		// Sweep from the edge of the front cone around the back: each camera centred
 		// one coverage step further round than the last.
 		const float flYaw = flFrontFOV * 0.5f + (i + 0.5f) * flPerCam;

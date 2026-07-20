@@ -369,17 +369,45 @@ void CChams::UpdateTarget()
 	}
 }
 
+// A visible set that reproduces the engine's own draw exactly: one "Original"
+// layer, untinted, opaque, no fullbright / Ignore Z / body-part subset. For
+// these the suppress-and-redraw round trip is pure waste - the engine's scene
+// draw IS the visible cham (see OriginalChamsOptimization).
+static bool IsPlainOriginal(const std::vector<std::pair<std::string, MaterialColor_t>>& vVisible)
+{
+	if (vVisible.size() != 1)
+		return false;
+
+	auto& [sName, tColor] = vVisible.front();
+	return FNV1A::Hash32(sName.c_str()) == FNV1A::Hash32Const("Original")
+		&& !tColor.Fullbright && !tColor.IgnoreZ
+		&& (tColor.BodyParts & BODYPART_ALL) == BODYPART_ALL
+		&& !tColor.Distance.Enabled
+		&& tColor.Color == Color_t(255, 255, 255, 255);
+}
+
 void CChams::RenderMain()
 {
 	auto pRenderContext = I::MaterialSystem->GetRenderContext();
 	if (!pRenderContext)
 		return;
 
+	// Whether this pass' scene carries live passthrough stencil marks (cleared
+	// at scene start by the ViewDrawScene hook, written by the wrapped engine
+	// draws); they must survive here for the occluded pass to test against.
+	const bool bSceneMarks = m_bScenePassthrough;
+	m_bScenePassthrough = false;
+
 	m_mEntities.clear();
 	if (m_vEntities.empty())
+	{
+		if (bSceneMarks)
+			pRenderContext->ClearBuffers(false, false, true);
 		return;
+	}
 
-	pRenderContext->ClearBuffers(false, false, true);
+	if (!bSceneMarks)
+		pRenderContext->ClearBuffers(false, false, true);
 
 	// The crosshair-targeted entity draws with its group's targeted material on
 	// both the visible and occluded passes (a solid, always-on-top highlight)
@@ -407,6 +435,26 @@ void CChams::RenderMain()
 		return IsTargeted(tInfo) && !tTarget.Visible.empty() ? &tTarget : tInfo.m_pChams;
 	};
 
+	// Passthrough registration: with occluded layers the engine draw must
+	// stencil-mark its visible pixels (mapped value true -> the hook wraps it),
+	// and the held weapon draws through the same wrap when the layer covers it
+	// (matching the redraw path, which draws the weapon alongside its owner).
+	// Without occluded layers nothing tests the mask, so the entity isn't
+	// registered at all and the engine draw needs no help.
+	auto RegisterPassthrough = [&](const ChamsInfo_t& tInfo, const Chams_t& tChams)
+	{
+		if (tChams.Occluded.empty())
+			return;
+
+		m_mEntities[tInfo.m_pEntity->entindex()] = true;
+		m_bScenePassthrough = true;
+		if (tChams.Visible.front().second.BodyParts & BODYPART_WEAPON && tInfo.m_pEntity->IsPlayer())
+		{
+			if (auto pWeapon = tInfo.m_pEntity->As<CTFPlayer>()->m_hActiveWeapon()->As<CTFWeaponBase>())
+				m_mEntities[pWeapon->entindex()] = true;
+		}
+	};
+
 	for (int iModel : { ModelEnum::Visible, ModelEnum::Occluded })
 	{
 		for (auto& tInfo : m_vEntities)
@@ -414,6 +462,15 @@ void CChams::RenderMain()
 			const Chams_t* pChams = GetChams(tInfo);
 			if (!pChams)
 				continue;
+
+			// Plain-Original visible set: the engine's scene draw already
+			// rendered exactly this image, so skip the visible redraw (and the
+			// suppression that forces it). The Visible == Occluded case keeps
+			// the redraw path: it draws the occluded set always-on-top instead
+			// and must keep suppressing the original.
+			const bool bPassthrough = Vars::Misc::Game::OriginalChamsOptimization.Value
+				&& !tInfo.m_iFlags && IsPlainOriginal(pChams->Visible)
+				&& (pChams->Occluded.empty() || pChams->Occluded != pChams->Visible);
 
 			// FlexFOV face capture: skip entities this face can't see (the same
 			// angular cull the glow face pass uses) - at wide fov half the cham
@@ -426,7 +483,21 @@ void CChams::RenderMain()
 			if (F::FlexFOV.m_bDrawing && !F::FlexFOV.FaceCanSee(tInfo.m_pEntity->GetAbsOrigin()))
 			{
 				if (!tInfo.m_iFlags && iModel == ModelEnum::Visible)
-					m_mEntities[tInfo.m_pEntity->entindex()];
+				{
+					if (bPassthrough)
+						RegisterPassthrough(tInfo, *pChams);
+					else
+						m_mEntities[tInfo.m_pEntity->entindex()];
+				}
+				continue;
+			}
+
+			if (bPassthrough)
+			{
+				if (iModel == ModelEnum::Visible)
+					RegisterPassthrough(tInfo, *pChams);
+				else if (!pChams->Occluded.empty())
+					DrawModel(tInfo.m_pEntity, *pChams, pRenderContext, iModel, true);
 				continue;
 			}
 

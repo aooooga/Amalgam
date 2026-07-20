@@ -48,7 +48,7 @@ private:
 
 	bool SetupTargets(int iScrW, int iScrH, int iCams);
 	void FreeTargets();
-	void GatherVisibleEnemies(CTFPlayer* pLocal, float flViewYaw, float flFrontFOV, float flPerCam, int iCams);
+	void GatherVisibleEnemies(CTFPlayer* pLocal, float flViewYaw, float flFrontFOV, float flPerCam, int iCams, uint32_t uUpdateMask);
 	void RenderSideCamera(const CViewSetup& tView, float flYawOffset, float flSideFOV, ITexture* pTexture, int iCamW, int iScrH, uint32_t uCamBit);
 	void DrawEnemies(uint32_t uCamBit);
 	void RenderGlow(int iCamW, int iScrH, uint32_t uCamBit); // outline glow into the currently-bound flank RT

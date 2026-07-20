@@ -26,10 +26,8 @@ void CGlow::End()
 	I::ModelRender->ForcedMaterialOverride(m_pOriginalMaterial, m_iOriginalOverride);
 }
 
-void CGlow::FirstBegin(IMatRenderContext* pRenderContext)
+void CGlow::StampStencilBegin(IMatRenderContext* pRenderContext)
 {
-	Begin();
-
 	pRenderContext->SetStencilEnable(true);
 	pRenderContext->SetStencilCompareFunction(STENCILCOMPARISONFUNCTION_ALWAYS);
 	pRenderContext->SetStencilPassOperation(STENCILOPERATION_REPLACE);
@@ -39,32 +37,48 @@ void CGlow::FirstBegin(IMatRenderContext* pRenderContext)
 	pRenderContext->SetStencilWriteMask(0xFF);
 	pRenderContext->SetStencilTestMask(0x0);
 }
-void CGlow::FirstEnd(IMatRenderContext* pRenderContext)
+void CGlow::StampStencilEnd(IMatRenderContext* pRenderContext)
 {
 	pRenderContext->SetStencilEnable(false);
+}
+
+void CGlow::FirstBegin(IMatRenderContext* pRenderContext)
+{
+	Begin();
+	StampStencilBegin(pRenderContext);
+}
+void CGlow::FirstEnd(IMatRenderContext* pRenderContext)
+{
+	StampStencilEnd(pRenderContext);
 
 	End();
 }
 
-void CGlow::SecondBegin(IMatRenderContext* pRenderContext, int w, int h)
+void CGlow::SecondBegin(IMatRenderContext* pRenderContext)
 {
 	Begin();
 
 	pRenderContext->PushRenderTargetAndViewport();
 	pRenderContext->SetRenderTarget(m_pRenderBuffer1);
-	pRenderContext->Viewport(0, 0, w, h);
+	pRenderContext->Viewport(0, 0, m_iBufW, m_iBufH);
 	pRenderContext->ClearColor4ub(0, 0, 0, 0);
-	pRenderContext->ClearBuffers(true, false, false);
+	// Scaled buffer: its own depth, cleared per batch, so the silhouettes are
+	// through-walls by construction (like the FlexFOV face path). Shared buffer
+	// (scale 1): the depth IS the scene's - never clear it.
+	pRenderContext->ClearBuffers(true, !m_bBufShared, false);
 }
 void CGlow::SecondEnd(Glow_t tGlow, IMatRenderContext* pRenderContext, int w, int h)
 {
 	pRenderContext->PopRenderTargetAndViewport();
 
-	// RenderBuffer2 is half-res: BlurX downsamples the full-res silhouette into it,
-	// BlurY upscales the blurred result back into the full-res RenderBuffer1 (which
-	// the halo blits below sample). Halving the blur intermediate is imperceptible
-	// on an already-blurred outline and cuts that pass's fill roughly in half.
-	const int bw = w / 2, bh = h / 2;
+	// Buffer-space dims: the silhouette lives at bw x bh (screen * GlowResolution);
+	// the halo blits at the bottom upscale it to the w x h screen.
+	const int bw = m_iBufW, bh = m_iBufH;
+	// RenderBuffer2 is half the silhouette buffer: BlurX downsamples into it,
+	// BlurY upscales the blurred result back into RenderBuffer1 (which the halo
+	// blits below sample). Halving the blur intermediate is imperceptible on an
+	// already-blurred outline and cuts that pass's fill roughly in half.
+	const int b2w = bw / 2, b2h = bh / 2;
 
 	if (tGlow.Blur)
 	{
@@ -73,11 +87,11 @@ void CGlow::SecondEnd(Glow_t tGlow, IMatRenderContext* pRenderContext, int w, in
 		pRenderContext->PushRenderTargetAndViewport();
 		{
 			pRenderContext->SetRenderTarget(m_pRenderBuffer2);
-			pRenderContext->Viewport(0, 0, bw, bh);
-			pRenderContext->DrawScreenSpaceRectangle(m_pMatBlurX, 0, 0, bw, bh, 0.f, 0.f, w - 1, h - 1, w, h);
+			pRenderContext->Viewport(0, 0, b2w, b2h);
+			pRenderContext->DrawScreenSpaceRectangle(m_pMatBlurX, 0, 0, b2w, b2h, 0.f, 0.f, bw - 1, bh - 1, bw, bh);
 			pRenderContext->SetRenderTarget(m_pRenderBuffer1);
-			pRenderContext->Viewport(0, 0, w, h);
-			pRenderContext->DrawScreenSpaceRectangle(m_pMatBlurY, 0, 0, w, h, 0.f, 0.f, bw - 1, bh - 1, bw, bh);
+			pRenderContext->Viewport(0, 0, bw, bh);
+			pRenderContext->DrawScreenSpaceRectangle(m_pMatBlurY, 0, 0, bw, bh, 0.f, 0.f, b2w - 1, b2h - 1, b2w, b2h);
 		}
 		pRenderContext->PopRenderTargetAndViewport();
 	}
@@ -98,13 +112,13 @@ void CGlow::SecondEnd(Glow_t tGlow, IMatRenderContext* pRenderContext, int w, in
 		// cardinal blits' overlap already fills the diagonals - the same trim the
 		// FlexFOV face path relies on. This is the main fill-rate win for glow.
 		int iSide = (tGlow.Stencil + 1) / 2.f;
-		pRenderContext->DrawScreenSpaceRectangle(m_pMatHaloAddToScreen, -iSide, 0, w, h, 0.f, 0.f, w - 1, h - 1, w, h);
-		pRenderContext->DrawScreenSpaceRectangle(m_pMatHaloAddToScreen, 0, -iSide, w, h, 0.f, 0.f, w - 1, h - 1, w, h);
-		pRenderContext->DrawScreenSpaceRectangle(m_pMatHaloAddToScreen, iSide, 0, w, h, 0.f, 0.f, w - 1, h - 1, w, h);
-		pRenderContext->DrawScreenSpaceRectangle(m_pMatHaloAddToScreen, 0, iSide, w, h, 0.f, 0.f, w - 1, h - 1, w, h);
+		pRenderContext->DrawScreenSpaceRectangle(m_pMatHaloAddToScreen, -iSide, 0, w, h, 0.f, 0.f, bw - 1.f, bh - 1.f, bw, bh);
+		pRenderContext->DrawScreenSpaceRectangle(m_pMatHaloAddToScreen, 0, -iSide, w, h, 0.f, 0.f, bw - 1.f, bh - 1.f, bw, bh);
+		pRenderContext->DrawScreenSpaceRectangle(m_pMatHaloAddToScreen, iSide, 0, w, h, 0.f, 0.f, bw - 1.f, bh - 1.f, bw, bh);
+		pRenderContext->DrawScreenSpaceRectangle(m_pMatHaloAddToScreen, 0, iSide, w, h, 0.f, 0.f, bw - 1.f, bh - 1.f, bw, bh);
 	}
 	if (tGlow.Blur)
-		pRenderContext->DrawScreenSpaceRectangle(m_pMatHaloAddToScreen, 0, 0, w, h, 0.f, 0.f, w - 1, h - 1, w, h);
+		pRenderContext->DrawScreenSpaceRectangle(m_pMatHaloAddToScreen, 0, 0, w, h, 0.f, 0.f, bw - 1.f, bh - 1.f, bw, bh);
 
 	pRenderContext->SetStencilEnable(false);
 
@@ -217,9 +231,19 @@ void CGlow::Store(CTFPlayer* pLocal)
 
 void CGlow::RenderFirst()
 {
+	EnsureScreenBuffers();
+
 	auto pRenderContext = I::MaterialSystem->GetRenderContext();
 	if (!pRenderContext || !m_pMatGlowColor || !m_pMatBlurX || !m_pMatBlurY || !m_pMatHaloAddToScreen)
 		return F::Materials.ReloadMaterials();
+
+	// Single batch on the shared-depth buffer: RenderSecond's silhouette pass
+	// stamps the halo mask itself through the shared depth-stencil, making this
+	// whole pass (one model draw per glowing entity) redundant. Multiple batches
+	// keep the global pre-stamp so an earlier batch's halo can't bleed over a
+	// later batch's not-yet-stamped interior.
+	if (UseInlineStamp())
+		return;
 
 	FirstBegin(pRenderContext);
 	for (auto& [tGlow, vInfo] : m_mEntities)
@@ -236,14 +260,23 @@ void CGlow::RenderFirst()
 
 void CGlow::RenderSecond()
 {
+	EnsureScreenBuffers();
+
 	auto pRenderContext = I::MaterialSystem->GetRenderContext();
 	if (!pRenderContext || !m_pMatGlowColor || !m_pMatBlurX || !m_pMatBlurY || !m_pMatHaloAddToScreen)
 		return F::Materials.ReloadMaterials();
 
+	// See RenderFirst: the silhouette draws below double as the interior stamp
+	// (the buffer's depth-stencil is the screen's, and the stamp ops mark every
+	// covered pixel regardless of the color output going to the buffer).
+	const bool bInlineStamp = UseInlineStamp();
+
 	const int w = H::Draw.m_nScreenW, h = H::Draw.m_nScreenH;
 	for (auto& [tGlow, vInfo] : m_mEntities)
 	{
-		SecondBegin(pRenderContext, w, h);
+		SecondBegin(pRenderContext);
+		if (bInlineStamp)
+			StampStencilBegin(pRenderContext);
 		for (auto& tInfo : vInfo)
 		{
 			I::RenderView->SetColorModulation(tInfo.m_cColor);
@@ -253,17 +286,26 @@ void CGlow::RenderSecond()
 			DrawModel(tInfo.m_pEntity);
 			m_iFlags = false;
 		}
+		if (bInlineStamp)
+			StampStencilEnd(pRenderContext);
 		SecondEnd(tGlow, pRenderContext, w, h);
 	}
 }
 
 void CGlow::InitFlexBuffers(int iW, int iH)
 {
-	if (m_pFlexBuffer1 && iW == m_iFlexW && iH == m_iFlexH)
+	// GlowResolution scales these like the screen buffers; face glow already has
+	// its own separate cleared depth, so only the buffer dims change.
+	const float flScale = std::clamp(Vars::Misc::Game::GlowResolution.Value, 0.3f, 1.5f);
+	const int iSW = std::max(int(iW * flScale), 64);
+	const int iSH = std::max(int(iH * flScale), 64);
+	if (m_pFlexBuffer1 && iSW == m_iFlexW && iSH == m_iFlexH)
 		return;
 	UnloadFlexBuffers();
-	m_iFlexW = iW;
-	m_iFlexH = iH;
+	m_iFlexBaseW = iW;
+	m_iFlexBaseH = iH;
+	m_iFlexW = iSW;
+	m_iFlexH = iSH;
 
 	// Mirrors the RenderBuffer setup but face-sized and with its own depth (the
 	// framebuffer-shared depth is smaller than a face). The cleared separate
@@ -274,7 +316,7 @@ void CGlow::InitFlexBuffers(int iW, int iH)
 		ITexture*& pBuffer = i ? m_pFlexBuffer2 : m_pFlexBuffer1;
 		pBuffer = I::MaterialSystem->CreateNamedRenderTargetTextureEx(
 			i ? "FlexFOVGlow2" : "FlexFOVGlow1",
-			iW, iH,
+			m_iFlexW, m_iFlexH,
 			RT_SIZE_LITERAL,
 			IMAGE_FORMAT_RGB888,
 			MATERIAL_RT_DEPTH_SEPARATE,
@@ -328,6 +370,7 @@ void CGlow::UnloadFlexBuffers()
 		}
 	}
 	m_iFlexW = m_iFlexH = 0;
+	m_iFlexBaseW = m_iFlexBaseH = 0;
 }
 
 // Runs the full glow pipeline against the currently-bound FlexFOV face RT.
@@ -338,6 +381,11 @@ void CGlow::UnloadFlexBuffers()
 // stencil mask lands in the face RT's own depth-stencil.
 void CGlow::RenderOnFlexFace()
 {
+	// Pick up GlowResolution changes: re-run the init with the caller's original
+	// dims (InitFlexBuffers early-outs when the scaled dims are unchanged).
+	if (m_pFlexBuffer1 && m_iFlexBaseW && m_iFlexBaseH)
+		InitFlexBuffers(m_iFlexBaseW, m_iFlexBaseH);
+
 	if (m_mEntities.empty() || !m_pFlexBuffer1 || !m_pFlexBuffer2 || !m_pFlexHalo || !m_pFlexBlurX || !m_pFlexBlurY)
 		return;
 
@@ -553,17 +601,28 @@ void CGlow::RenderViewmodel(void* rcx, int flags)
 
 	static auto CBaseAnimating_InternalDrawModel = U::Hooks.m_mHooks["CBaseAnimating_InternalDrawModel"];
 
+	EnsureScreenBuffers();
 	const int w = H::Draw.m_nScreenW, h = H::Draw.m_nScreenH;
 
 	pRenderContext->CullMode(MATERIAL_CULLMODE_CCW); // glow won't work properly with MATERIAL_CULLMODE_CW
-	FirstBegin(pRenderContext);
-	CBaseAnimating_InternalDrawModel->Call<int>(rcx, flags);
-	FirstEnd(pRenderContext);
-	SecondBegin(pRenderContext, w, h);
+	// Shared-depth buffer: the silhouette draw below stamps the interior itself
+	// (one glow config here, so the multi-batch ordering concern never applies);
+	// scaled buffers need the separate screen-stencil stamp pass.
+	if (!m_bBufShared)
+	{
+		FirstBegin(pRenderContext);
+		CBaseAnimating_InternalDrawModel->Call<int>(rcx, flags);
+		FirstEnd(pRenderContext);
+	}
+	SecondBegin(pRenderContext);
+	if (m_bBufShared)
+		StampStencilBegin(pRenderContext);
 	const Color_t tGlowColor = pGroup->m_tGlow.GetColor(-1.f, 0.f); // viewmodel = distance 0
 	I::RenderView->SetColorModulation(tGlowColor);
 	I::RenderView->SetBlend(tGlowColor.a / 255.f);
 	CBaseAnimating_InternalDrawModel->Call<int>(rcx, flags);
+	if (m_bBufShared)
+		StampStencilEnd(pRenderContext);
 	SecondEnd(pGroup->m_tGlow, pRenderContext, w, h);
 	pRenderContext->CullMode(G::FlipViewmodels ? MATERIAL_CULLMODE_CW : MATERIAL_CULLMODE_CCW);
 }
@@ -582,81 +641,92 @@ void CGlow::RenderViewmodel(const DrawModelState_t& pState, const ModelRenderInf
 
 	static auto IVModelRender_DrawModelExecute = U::Hooks.m_mHooks["IVModelRender_DrawModelExecute"];
 
+	EnsureScreenBuffers();
 	const int w = H::Draw.m_nScreenW, h = H::Draw.m_nScreenH;
 
-	FirstBegin(pRenderContext);
-	IVModelRender_DrawModelExecute->Call<void>(I::ModelRender, pState, pInfo, pBoneToWorld);
-	FirstEnd(pRenderContext);
-	SecondBegin(pRenderContext, w, h);
+	// See the InternalDrawModel overload: inline stamp on the shared buffer,
+	// separate stamp pass on scaled ones.
+	if (!m_bBufShared)
+	{
+		FirstBegin(pRenderContext);
+		IVModelRender_DrawModelExecute->Call<void>(I::ModelRender, pState, pInfo, pBoneToWorld);
+		FirstEnd(pRenderContext);
+	}
+	SecondBegin(pRenderContext);
+	if (m_bBufShared)
+		StampStencilBegin(pRenderContext);
 	const Color_t tGlowColor = pGroup->m_tGlow.GetColor(-1.f, 0.f); // viewmodel = distance 0
 	I::RenderView->SetColorModulation(tGlowColor);
 	I::RenderView->SetBlend(tGlowColor.a / 255.f);
 	IVModelRender_DrawModelExecute->Call<void>(I::ModelRender, pState, pInfo, pBoneToWorld);
+	if (m_bBufShared)
+		StampStencilEnd(pRenderContext);
 	SecondEnd(pGroup->m_tGlow, pRenderContext, w, h);
 }
 
 
 
-void CGlow::Initialize()
+void CGlow::EnsureScreenBuffers()
 {
 	int nWidth, nHeight; I::MatSystemSurface->GetScreenSize(nWidth, nHeight);
+	if (nWidth <= 0 || nHeight <= 0)
+		return;
 
-	if (!m_pMatGlowColor)
-	{
-		m_pMatGlowColor = I::MaterialSystem->FindMaterial("dev/glow_color", TEXTURE_GROUP_OTHER);
-		m_pMatGlowColor->IncrementReferenceCount();
-		F::Materials.m_mMatList[m_pMatGlowColor];
-	}
+	const float flScale = std::clamp(Vars::Misc::Game::GlowResolution.Value, 0.3f, 1.5f);
+	const int iBufW = std::max(int(nWidth * flScale), 64);
+	const int iBufH = std::max(int(nHeight * flScale), 64);
+	if (m_pRenderBuffer1 && iBufW == m_iBufW && iBufH == m_iBufH)
+		return;
 
-	if (!m_pRenderBuffer1)
-	{
-		m_pRenderBuffer1 = I::MaterialSystem->CreateNamedRenderTargetTextureEx(
-			"RenderBuffer1",
-			nWidth, nHeight,
-			RT_SIZE_LITERAL,
-			IMAGE_FORMAT_RGB888,
-			MATERIAL_RT_DEPTH_SHARED,
-			TEXTUREFLAGS_CLAMPS | TEXTUREFLAGS_CLAMPT | TEXTUREFLAGS_EIGHTBITALPHA,
-			CREATERENDERTARGETFLAGS_HDR
-		);
-		m_pRenderBuffer1->IncrementReferenceCount();
-	}
+	FreeScreenBuffers();
+	m_iBufW = iBufW;
+	m_iBufH = iBufH;
+	// At exactly screen size the buffer shares the engine's depth-stencil, which
+	// keeps the classic depth behavior AND lets the silhouette pass stamp the
+	// halo mask inline (see UseInlineStamp). Any other size must carry its own
+	// depth (a shared depth can't be larger than the framebuffer, and a scaled
+	// viewport would misalign against it anyway) - it is cleared per batch, so
+	// scaled silhouettes are through-walls by construction like the FlexFOV
+	// face path.
+	m_bBufShared = iBufW == nWidth && iBufH == nHeight;
 
-	if (!m_pRenderBuffer2)
-	{
-		// Half resolution: this only ever holds the blur intermediate (a screen-
-		// space pass with no depth test), so quartering its fill is free. The
-		// silhouette buffer (RenderBuffer1) stays full-res because its shared depth
-		// is the full-res scene depth - a half-res silhouette viewport would sample
-		// that depth misaligned and lose the glow's world occlusion.
-		m_pRenderBuffer2 = I::MaterialSystem->CreateNamedRenderTargetTextureEx(
-			"RenderBuffer2",
-			nWidth / 2, nHeight / 2,
-			RT_SIZE_LITERAL,
-			IMAGE_FORMAT_RGB888,
-			MATERIAL_RT_DEPTH_SHARED,
-			TEXTUREFLAGS_CLAMPS | TEXTUREFLAGS_CLAMPT | TEXTUREFLAGS_EIGHTBITALPHA,
-			CREATERENDERTARGETFLAGS_HDR
-		);
-		m_pRenderBuffer2->IncrementReferenceCount();
-	}
+	m_pRenderBuffer1 = I::MaterialSystem->CreateNamedRenderTargetTextureEx(
+		"RenderBuffer1",
+		iBufW, iBufH,
+		RT_SIZE_LITERAL,
+		IMAGE_FORMAT_RGB888,
+		m_bBufShared ? MATERIAL_RT_DEPTH_SHARED : MATERIAL_RT_DEPTH_SEPARATE,
+		TEXTUREFLAGS_CLAMPS | TEXTUREFLAGS_CLAMPT | TEXTUREFLAGS_EIGHTBITALPHA,
+		CREATERENDERTARGETFLAGS_HDR
+	);
+	m_pRenderBuffer1->IncrementReferenceCount();
 
-	if (!m_pMatHaloAddToScreen)
+	// Half the silhouette buffer: this only ever holds the blur intermediate (a
+	// screen-space pass with no depth test), so quartering its fill is free. Never
+	// larger than the framebuffer (max scale 1.5 -> 0.75x screen), so shared
+	// depth stays legal.
+	m_pRenderBuffer2 = I::MaterialSystem->CreateNamedRenderTargetTextureEx(
+		"RenderBuffer2",
+		iBufW / 2, iBufH / 2,
+		RT_SIZE_LITERAL,
+		IMAGE_FORMAT_RGB888,
+		MATERIAL_RT_DEPTH_SHARED,
+		TEXTUREFLAGS_CLAMPS | TEXTUREFLAGS_CLAMPT | TEXTUREFLAGS_EIGHTBITALPHA,
+		CREATERENDERTARGETFLAGS_HDR
+	);
+	m_pRenderBuffer2->IncrementReferenceCount();
+
 	{
 		KeyValues* kv = new KeyValues("UnlitGeneric");
 		kv->SetString("$basetexture", "RenderBuffer1");
 		kv->SetString("$additive", "1");
 		m_pMatHaloAddToScreen = F::Materials.Create("MatHaloAddToScreen", kv);
 	}
-
-	if (!m_pMatBlurX)
 	{
 		KeyValues* kv = new KeyValues("BlurFilterX");
 		kv->SetString("$basetexture", "RenderBuffer1");
 		m_pMatBlurX = F::Materials.Create("MatBlurX", kv);
 	}
-
-	if (!m_pMatBlurY)
 	{
 		KeyValues* kv = new KeyValues("BlurFilterY");
 		kv->SetString("$basetexture", "RenderBuffer2");
@@ -665,49 +735,54 @@ void CGlow::Initialize()
 	}
 }
 
+void CGlow::FreeScreenBuffers()
+{
+	// Materials before textures, through F::Materials.Remove (see
+	// UnloadFlexBuffers: a raw release leaves a dangling m_mMatList entry).
+	for (IMaterial** ppMat : { &m_pMatHaloAddToScreen, &m_pMatBlurX, &m_pMatBlurY })
+	{
+		if (*ppMat)
+		{
+			F::Materials.Remove(*ppMat);
+			*ppMat = nullptr;
+		}
+	}
+	m_pBloomAmount = nullptr;
+
+	for (ITexture** ppTex : { &m_pRenderBuffer1, &m_pRenderBuffer2 })
+	{
+		if (*ppTex)
+		{
+			(*ppTex)->DecrementReferenceCount();
+			(*ppTex)->DeleteIfUnreferenced();
+			*ppTex = nullptr;
+		}
+	}
+	m_iBufW = m_iBufH = 0;
+	m_bBufShared = true;
+}
+
+void CGlow::Initialize()
+{
+	if (!m_pMatGlowColor)
+	{
+		m_pMatGlowColor = I::MaterialSystem->FindMaterial("dev/glow_color", TEXTURE_GROUP_OTHER);
+		m_pMatGlowColor->IncrementReferenceCount();
+		F::Materials.m_mMatList[m_pMatGlowColor];
+	}
+
+	EnsureScreenBuffers();
+}
+
 void CGlow::Unload()
 {
 	UnloadFlexBuffers();
+	FreeScreenBuffers();
 
 	if (m_pMatGlowColor)
 	{
 		m_pMatGlowColor->DecrementReferenceCount();
 		m_pMatGlowColor->DeleteIfUnreferenced();
 		m_pMatGlowColor = nullptr;
-	}
-
-	if (m_pMatBlurX)
-	{
-		m_pMatBlurX->DecrementReferenceCount();
-		m_pMatBlurX->DeleteIfUnreferenced();
-		m_pMatBlurX = nullptr;
-	}
-
-	if (m_pMatBlurY)
-	{
-		m_pMatBlurY->DecrementReferenceCount();
-		m_pMatBlurY->DeleteIfUnreferenced();
-		m_pMatBlurY = nullptr;
-	}
-
-	if (m_pMatHaloAddToScreen)
-	{
-		m_pMatHaloAddToScreen->DecrementReferenceCount();
-		m_pMatHaloAddToScreen->DeleteIfUnreferenced();
-		m_pMatHaloAddToScreen = nullptr;
-	}
-
-	if (m_pRenderBuffer1)
-	{
-		m_pRenderBuffer1->DecrementReferenceCount();
-		m_pRenderBuffer1->DeleteIfUnreferenced();
-		m_pRenderBuffer1 = nullptr;
-	}
-
-	if (m_pRenderBuffer2)
-	{
-		m_pRenderBuffer2->DecrementReferenceCount();
-		m_pRenderBuffer2->DeleteIfUnreferenced();
-		m_pRenderBuffer2 = nullptr;
 	}
 }

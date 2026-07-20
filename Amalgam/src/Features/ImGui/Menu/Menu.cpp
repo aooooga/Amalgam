@@ -1542,6 +1542,7 @@ void CMenu::MenuMisc(int iTab)
 					FToggle(Vars::Misc::Game::AntiCheatCompatibility, FToggleEnum::Right);
 					FToggle(Vars::Misc::Game::OriginalChamsOptimization, FToggleEnum::Left);
 					FSlider(Vars::Misc::Game::CosmeticCullDistance, FSliderEnum::Left, !Vars::Misc::Game::CosmeticCullDistance[DEFAULT_BIND] ? "off" : "%d");
+					FSlider(Vars::Misc::Game::GlowResolution, FSliderEnum::Right);
 				} EndSection();
 				if (Vars::Debug::Options.Value)
 				{

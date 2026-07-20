@@ -8,9 +8,14 @@ class CGlow
 private:
 	void Begin();
 	void End();
+	// The interior stamp's stencil state (mark every covered pixel, through
+	// walls); shared by FirstBegin and the inline-stamp silhouette pass.
+	void StampStencilBegin(IMatRenderContext* pRenderContext);
+	void StampStencilEnd(IMatRenderContext* pRenderContext);
+
 	void FirstBegin(IMatRenderContext* pRenderContext);
 	void FirstEnd(IMatRenderContext* pRenderContext);
-	void SecondBegin(IMatRenderContext* pRenderContext, int w, int h);
+	void SecondBegin(IMatRenderContext* pRenderContext);
 	void SecondEnd(Glow_t tGlow, IMatRenderContext* pRenderContext, int w, int h);
 
 	void DrawModel(CBaseEntity* pEntity);
@@ -18,13 +23,29 @@ private:
 	void RenderBacktrack(const DrawModelState_t& pState, const ModelRenderInfo_t& pInfo);
 	void RenderFakeAngle(const DrawModelState_t& pState, const ModelRenderInfo_t& pInfo);
 
-	IMaterial* m_pMatGlowColor;
-	ITexture* m_pRenderBuffer1;
-	ITexture* m_pRenderBuffer2;
-	IMaterial* m_pMatHaloAddToScreen;
-	IMaterial* m_pMatBlurX;
-	IMaterial* m_pMatBlurY;
-	IMaterialVar* m_pBloomAmount;
+	// (Re)creates the screen glow buffers + their materials at the current
+	// GlowResolution scale; early-outs when nothing changed. At exactly screen
+	// size the silhouette buffer shares the engine's depth-stencil (m_bBufShared,
+	// which enables the inline halo-mask stamping); scaled buffers get their own
+	// cleared depth, making the silhouettes through-walls by construction like
+	// the FlexFOV face path.
+	void EnsureScreenBuffers();
+	void FreeScreenBuffers();
+	// The single-batch fast path: the silhouette pass writes the halo's stencil
+	// mask through the shared depth-stencil, so RenderFirst's per-entity stamp
+	// draws are skipped entirely. Needs the shared (unscaled) buffer, and one
+	// glow batch so no halo blits before every interior is stamped.
+	bool UseInlineStamp() const { return m_bBufShared && m_mEntities.size() == 1; }
+
+	IMaterial* m_pMatGlowColor = nullptr;
+	ITexture* m_pRenderBuffer1 = nullptr;
+	ITexture* m_pRenderBuffer2 = nullptr;
+	IMaterial* m_pMatHaloAddToScreen = nullptr;
+	IMaterial* m_pMatBlurX = nullptr;
+	IMaterial* m_pMatBlurY = nullptr;
+	IMaterialVar* m_pBloomAmount = nullptr;
+	int m_iBufW = 0, m_iBufH = 0; // silhouette buffer content dims (screen * scale)
+	bool m_bBufShared = true;     // buffer depth-stencil is the engine's (scale == 1)
 
 	// Face-sized twins of the glow pipeline for the FlexFOV composite: the
 	// fidelity-scaled cube faces are larger than the screen, so the screen-sized
@@ -36,7 +57,8 @@ private:
 	IMaterial* m_pFlexBlurX = nullptr;
 	IMaterial* m_pFlexBlurY = nullptr;
 	IMaterialVar* m_pFlexBloomAmount = nullptr;
-	int m_iFlexW = 0, m_iFlexH = 0;
+	int m_iFlexW = 0, m_iFlexH = 0;         // created (scaled) buffer dims
+	int m_iFlexBaseW = 0, m_iFlexBaseH = 0; // dims the caller asked for, pre-GlowResolution
 
 
 

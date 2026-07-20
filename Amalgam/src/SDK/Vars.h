@@ -884,6 +884,14 @@ NAMESPACE_BEGIN(Vars)
 			// draw is kept (stencil-marked so occluded layers still mask against
 			// it), saving a full model draw per entity per render pass.
 			CVar(OriginalChamsOptimization, "Original chams optimization", true);
+			// Resolution of the glow silhouette/blur buffers as a fraction of the
+			// screen (and of the FlexFOV glow buffers). Below 1 trades outline
+			// crispness for fill rate - the halo is blurred anyway; above 1
+			// supersamples it. At exactly 1 the screen glow keeps the engine's
+			// shared depth-stencil, which lets a single-batch glow config stamp
+			// its halo mask during the silhouette pass and skip the whole
+			// stencil-stamp model pass (one draw per glowing entity per frame).
+			CVar(GlowResolution, "Glow resolution", 1.f, SLIDER_CLAMP | SLIDER_PRECISION, 0.3f, 1.5f, 0.1f);
 			CVar(AntiCheatCompatibility, "Anti-cheat compatibility", false);
 
 			CVar(AntiCheatCritHack, "Anti-cheat crit hack", false, NOSAVE | DEBUGVAR);

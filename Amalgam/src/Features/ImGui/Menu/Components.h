@@ -761,7 +761,11 @@ namespace ImGui
 			if (bCollapsed)
 				RenderBackground(F::Render.Background0, F::Render.Background2);
 			else if (bHeader)
-				RenderTwoToneBackground(H::Draw.Scale(28), F::Render.Background0, F::Render.Background0p5, F::Render.Background2);
+			{
+				RenderTwoToneBackground(H::Draw.Scale(28), F::Render.Background1, F::Render.Background0p5, F::Render.Background2);
+				ImVec2 vAccentPos = GetDrawPos();
+				GetWindowDrawList()->AddRectFilled(vAccentPos, vAccentPos + ImVec2(H::Draw.Scale(2), GetWindowSize().y), F::Render.Accent); // 3a accent left-edge
+			}
 			else
 				RenderBackground(F::Render.Background0p5, F::Render.Background2);
 		}

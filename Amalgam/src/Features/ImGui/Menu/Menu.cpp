@@ -2,6 +2,7 @@
 
 #include <mutex>
 #include "Components.h"
+#include "Menu3a_Widgets.h"
 #include "../Notifications/Notifications.h"
 #include "../../Configs/Configs.h"
 #include "../../Binds/Binds.h"
@@ -104,88 +105,103 @@ void CMenu::DrawMenu()
 		ImVec2 vWindowSize = GetWindowSize();
 		ImVec2 vDrawPos = GetDrawPos();
 		auto pDrawList = GetWindowDrawList();
-		float flSize = H::Draw.Scale(140);
+		// Top navigation bar: title/bind block on the left, the two tab rows stacked
+		// beneath it, search pinned to the right of the title band.
+		float flSize = H::Draw.Scale(72);        // total height of the nav band
+		float flTitleH = H::Draw.Scale(36);      // upper band (title + search)
 		float flInset = H::Draw.Scale();
-		float flOffset = 0.f;
+		float flTitleW = H::Draw.Scale(180);     // left title/bind block width
 
 		Bind_t tBind;
 		if (!F::Binds.GetBind(CurrentBind, &tBind))
 			CurrentBind = DEFAULT_BIND;
 
+		// nav band background + the divider under it
+		pDrawList->AddRectFilled(vDrawPos, vDrawPos + ImVec2(vWindowSize.x, flSize - flInset), F::Render.Background0, H::Draw.Scale(3), ImDrawFlags_RoundCornersTop);
+		pDrawList->AddRectFilled(vDrawPos + ImVec2(0, flSize - flInset), vDrawPos + ImVec2(vWindowSize.x, flSize), F::Render.Background2);
+		// divider between the title band and the tab row
+		pDrawList->AddRectFilled(vDrawPos + ImVec2(0, flTitleH - flInset), vDrawPos + ImVec2(vWindowSize.x, flTitleH), F::Render.Background2);
+
 		if (CurrentBind != DEFAULT_BIND) // bind
 		{
-			flOffset = H::Draw.Scale(60);
-			pDrawList->AddRectFilled(vDrawPos, vDrawPos + ImVec2(flSize - flInset, flOffset - flInset), F::Render.Background0, H::Draw.Scale(3), ImDrawFlags_RoundCornersTopLeft);
-			pDrawList->AddRectFilled(vDrawPos + ImVec2(0, flOffset - flInset), vDrawPos + ImVec2(flSize - flInset, flOffset), F::Render.Background2);
-			pDrawList->AddRectFilled(vDrawPos + ImVec2(0, flOffset), vDrawPos + ImVec2(flSize - flInset, vWindowSize.y), F::Render.Background0, H::Draw.Scale(3), ImDrawFlags_RoundCornersBottomLeft);
-
-			SetCursorPos({ H::Draw.Scale(12), H::Draw.Scale(11) });
-			FText("Editing bind", {}, 0, F::Render.FontRegular);
-			SetCursorPos({ H::Draw.Scale(12), H::Draw.Scale(35) });
+			SetCursorPos({ H::Draw.Scale(12), H::Draw.Scale(10) });
 			PushStyleColor(ImGuiCol_Text, F::Render.Accent.Value);
-			FText(TruncateText(tBind.m_sName, flSize - H::Draw.Scale(28)).c_str(), {}, 0, F::Render.FontRegular);
+			FText(TruncateText(std::format("Editing bind: {}", tBind.m_sName), flTitleW - H::Draw.Scale(40), F::Render.FontBold).c_str(), {}, 0, F::Render.FontBold);
 			PopStyleColor();
 
-			SetCursorPos({ flSize - H::Draw.Scale(31), H::Draw.Scale(6) });
+			SetCursorPos({ flTitleW - H::Draw.Scale(31), H::Draw.Scale(4) });
 			if (IconButton(ICON_MD_CANCEL))
 				CurrentBind = DEFAULT_BIND;
 		}
 		else if (!Vars::Menu::CheatTitle.Value.empty()) // title
 		{
-			flOffset = H::Draw.Scale(36);
-			pDrawList->AddRectFilled(vDrawPos, vDrawPos + ImVec2(flSize - flInset, flOffset - flInset), F::Render.Background0, H::Draw.Scale(3), ImDrawFlags_RoundCornersTopLeft);
-			pDrawList->AddRectFilled(vDrawPos + ImVec2(0, flOffset - flInset), vDrawPos + ImVec2(flSize - flInset, flOffset), F::Render.Background2);
-			pDrawList->AddRectFilled(vDrawPos + ImVec2(0, flOffset), vDrawPos + ImVec2(flSize - flInset, vWindowSize.y), F::Render.Background0, H::Draw.Scale(3), ImDrawFlags_RoundCornersBottomLeft);
-
-			SetCursorPos({ H::Draw.Scale(12), H::Draw.Scale(11) });
+			SetCursorPos({ H::Draw.Scale(12), H::Draw.Scale(10) });
 			PushStyleColor(ImGuiCol_Text, F::Render.Accent.Value);
-			FText(TruncateText(Vars::Menu::CheatTitle.Value, flSize - H::Draw.Scale(28), F::Render.FontBold).c_str(), {}, 0, F::Render.FontBold);
+			FText(TruncateText(Vars::Menu::CheatTitle.Value, flTitleW - H::Draw.Scale(24), F::Render.FontBold).c_str(), {}, 0, F::Render.FontBold);
 			PopStyleColor();
 		}
-		else
-			pDrawList->AddRectFilled(vDrawPos, vDrawPos + ImVec2(flSize - flInset, vWindowSize.y), F::Render.Background0, H::Draw.Scale(3), ImDrawFlags_RoundCornersLeft);
-
-		pDrawList->PushClipRect({ 0, 0 }, { GetIO().DisplaySize.x, GetIO().DisplaySize.y }, false);
-		RenderTwoToneBackground(flSize, {}, F::Render.Background1, F::Render.Background2, 0.f, false);
-		pDrawList->PopClipRect();
 
 		static int iTab = 0, iAimbotTab = 0, iVisualsTab = 0, iMiscTab = 0, iLogsTab = 0, iSettingsTab = 0;
-		PushFont(F::Render.FontBold);
-		FTabs(
-			{
-				{ "AIMBOT", "GENERAL", "DRAW" },
-				{ "HVH" },
-				{ "VISUALS", "ESP", "VIEW", "WORLD", "MENU" },
-				{ "MISC", "PLAYER", "GAME", "MISC##" },
-				{ "LOGS", "PLAYERLIST", "SETTINGS##", "OUTPUT" },
-				{ "SETTINGS", "CONFIG", "BINDS", "MATERIALS", "MISC##" }
-			},
-			{ &iTab, &iAimbotTab, nullptr, &iVisualsTab, &iMiscTab, &iLogsTab, &iSettingsTab },
-			{ flSize - H::Draw.Scale(16), H::Draw.Scale(36) },
-			{ H::Draw.Scale(8), H::Draw.Scale(8) + flOffset },
-			FTabsEnum::Vertical | FTabsEnum::HorizontalIcons | FTabsEnum::AlignLeft | FTabsEnum::BarLeft,
-			{ { ICON_MD_PERSON }, { ICON_MD_BOLT }, { ICON_MD_VISIBILITY }, { ICON_MD_ARTICLE }, { ICON_MD_IMPORT_CONTACTS }, { ICON_MD_SETTINGS } },
-			{ H::Draw.Scale(10), 0 }, {},
-			{}, { H::Draw.Scale(22), 0 }
-		);
-		PopFont();
 
+		// Search sits at the right end of the title band.
 		static std::string sSearch = "";
-		SetCursorPos({ H::Draw.Scale(8), vWindowSize.y - H::Draw.Scale(37) });
-		FInputText("Search...", sSearch, H::Draw.Scale(123), ImGuiInputTextFlags_None);
-		bool bSearch = /*IsItemFocused() ||*/ !sSearch.empty();
-		if (!bSearch || FCalcTextSize(sSearch.c_str()).x < 86.f)
+		float flSearchW = H::Draw.Scale(150);
+		SetCursorPos({ vWindowSize.x - flSearchW - H::Draw.Scale(8), H::Draw.Scale(6) });
+		FInputText("Search...", sSearch, flSearchW - H::Draw.Scale(17), ImGuiInputTextFlags_None);
+		bool bSearch = !sSearch.empty();
+		if (!bSearch || FCalcTextSize(sSearch.c_str()).x < flSearchW - H::Draw.Scale(37))
 		{
-			SetCursorPos({ H::Draw.Scale(109), vWindowSize.y - H::Draw.Scale(31) });
+			SetCursorPos({ vWindowSize.x - H::Draw.Scale(29), H::Draw.Scale(12) });
 			IconImage(ICON_MD_SEARCH);
 		}
-		if (bSearch && IsMouseReleased(ImGuiMouseButton_Left) && IsMouseWithin(vDrawPos.x, vDrawPos.y, H::Draw.Scale(140), vWindowSize.y - H::Draw.Scale(45)))
+
+		// Main tabs occupy the title band between the title block and the search box;
+		// sub-tabs get the lower band, full width.
+		float flMainX = flTitleW;
+		float flMainW = vWindowSize.x - flTitleW - flSearchW - H::Draw.Scale(16);
+		PushFont(F::Render.FontBold);
+		FTabs(
+			std::vector<const char*>{ "AIMBOT", "HVH", "VISUALS", "MISC", "LOGS", "SETTINGS" },
+			&iTab,
+			{ flMainW, flTitleH - H::Draw.Scale(6) },
+			{ flMainX, H::Draw.Scale(3) },
+			FTabsEnum::Horizontal | FTabsEnum::HorizontalIcons | FTabsEnum::AlignCenter | FTabsEnum::BarBottom | FTabsEnum::Fit,
+			std::vector<const char*>{ ICON_MD_PERSON, ICON_MD_BOLT, ICON_MD_VISIBILITY, ICON_MD_ARTICLE, ICON_MD_IMPORT_CONTACTS, ICON_MD_SETTINGS },
+			{ H::Draw.Scale(8), 0 }, {},
+			{}, { H::Draw.Scale(18), 0 }
+		);
+
+		// Sub-tabs for the active main tab (HVH has none).
+		static const std::vector<std::vector<const char*>> vSubTabs =
+		{
+			{ "GENERAL", "DRAW" },
+			{},
+			{ "ESP", "VIEW", "WORLD", "MENU" },
+			{ "PLAYER", "GAME", "MISC##" },
+			{ "PLAYERLIST", "SETTINGS##", "OUTPUT" },
+			{ "CONFIG", "BINDS", "MATERIALS", "MISC##" }
+		};
+		int* pSubTabs[] = { &iAimbotTab, nullptr, &iVisualsTab, &iMiscTab, &iLogsTab, &iSettingsTab };
+		if (iTab >= 0 && iTab < int(vSubTabs.size()) && !vSubTabs[iTab].empty())
+		{
+			FTabs(
+				vSubTabs[iTab],
+				pSubTabs[iTab],
+				{ vWindowSize.x - H::Draw.Scale(16), flSize - flTitleH - H::Draw.Scale(6) },
+				{ H::Draw.Scale(8), flTitleH + H::Draw.Scale(3) },
+				FTabsEnum::Horizontal | FTabsEnum::AlignLeft | FTabsEnum::BarBottom,
+				{}, { H::Draw.Scale(8), 0 }, {}, {}, {}
+			);
+		}
+		PopFont();
+
+		if (bSearch && IsMouseReleased(ImGuiMouseButton_Left) && IsMouseWithin(vDrawPos.x, vDrawPos.y, vWindowSize.x, flSize))
 			sSearch = "";
 
-		SetCursorPos({ flSize, 0 });
+		SetCursorPos({ 0, flSize });
 		PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0);
 		PushStyleVar(ImGuiStyleVar_WindowPadding, { H::Draw.Scale(8), H::Draw.Scale(8) });
-		if (BeginChild("Page", { vWindowSize.x - flSize, vWindowSize.y }, ImGuiChildFlags_AlwaysUseWindowPadding))
+		if (BeginChild("Page", { vWindowSize.x, vWindowSize.y - flSize }, ImGuiChildFlags_AlwaysUseWindowPadding))
 		{
 			if (!bSearch)
 			{
@@ -230,24 +246,24 @@ void CMenu::MenuAimbot(int iTab)
 					FDropdown(Vars::Aimbot::General::TargetSelection, FDropdownEnum::Right);
 					FDropdown(Vars::Aimbot::General::Target, FDropdownEnum::Left);
 					FDropdown(Vars::Aimbot::General::Ignore, FDropdownEnum::Right);
-					FSlider(Vars::Aimbot::General::AimFOV);
-					FSlider(Vars::Aimbot::General::MaxTargets, FSliderEnum::Left);
+					FSliderRow(Vars::Aimbot::General::AimFOV);
+					FSliderRow(Vars::Aimbot::General::MaxTargets, FSliderEnum::Left);
 					PushTransparent(!(Vars::Aimbot::General::Ignore.Value & Vars::Aimbot::General::IgnoreEnum::Invisible));
 					{
-						FSlider(Vars::Aimbot::General::IgnoreInvisible, FSliderEnum::Right);
+						FSliderRow(Vars::Aimbot::General::IgnoreInvisible, FSliderEnum::Right);
 					}
 					PopTransparent();
-					FSlider(Vars::Aimbot::General::AssistStrength, FSliderEnum::Left);
+					FSliderRow(Vars::Aimbot::General::AssistStrength, FSliderEnum::Left);
 					PushTransparent(!(Vars::Aimbot::General::Ignore.Value & Vars::Aimbot::General::IgnoreEnum::Unsimulated));
 					{
-						FSlider(Vars::Aimbot::General::TickTolerance, FSliderEnum::Right);
+						FSliderRow(Vars::Aimbot::General::TickTolerance, FSliderEnum::Right);
 					}
 					PopTransparent();
 					FColorPicker(Vars::Colors::FOVCircle);
-					FToggle(Vars::Aimbot::General::AutoShoot, FToggleEnum::Left);
-					FToggle(Vars::Aimbot::General::FOVCircle, FToggleEnum::Right);
-					FToggle(Vars::Aimbot::General::LeadAndRestrict, FToggleEnum::Left);
-					FToggle(Vars::Aimbot::General::NoSpread, FToggleEnum::Right);
+					FToggleRow(Vars::Aimbot::General::AutoShoot, FToggleEnum::Left);
+					FToggleRow(Vars::Aimbot::General::FOVCircle, FToggleEnum::Right);
+					FToggleRow(Vars::Aimbot::General::LeadAndRestrict, FToggleEnum::Left);
+					FToggleRow(Vars::Aimbot::General::NoSpread, FToggleEnum::Right);
 				} EndSection();
 				if (Vars::Debug::Options.Value)
 				{
@@ -257,10 +273,10 @@ void CMenu::MenuAimbot(int iTab)
 						if (FPopupButton("Debug", { 0, -5 }, -8))
 						{
 							FDropdown(Vars::Aimbot::General::AimHoldsFire);
-							FSlider(Vars::Aimbot::General::NoSpreadOffset);
-							FSlider(Vars::Aimbot::General::NoSpreadAverage);
-							FSlider(Vars::Aimbot::General::NoSpreadInterval);
-							FSlider(Vars::Aimbot::General::NoSpreadBackupInterval);
+							FSliderRow(Vars::Aimbot::General::NoSpreadOffset);
+							FSliderRow(Vars::Aimbot::General::NoSpreadAverage);
+							FSliderRow(Vars::Aimbot::General::NoSpreadInterval);
+							FSliderRow(Vars::Aimbot::General::NoSpreadBackupInterval);
 
 							EndPopup();
 						}
@@ -268,17 +284,17 @@ void CMenu::MenuAimbot(int iTab)
 				}
 				if (Section("Backtrack", 8))
 				{
-					FSlider(Vars::Backtrack::Latency);
-					FSlider(Vars::Backtrack::Interp);
-					FSlider(Vars::Backtrack::Window);
-					//FToggle(Vars::Backtrack::PreferOnShot);
+					FSliderRow(Vars::Backtrack::Latency);
+					FSliderRow(Vars::Backtrack::Interp);
+					FSliderRow(Vars::Backtrack::Window);
+					//FToggleRow(Vars::Backtrack::PreferOnShot);
 				} EndSection();
 				if (Section("Crit Hack", 8))
 				{
-					FToggle(Vars::CritHack::ForceCrits, FToggleEnum::Left);
-					FToggle(Vars::CritHack::AvoidRandomCrits, FToggleEnum::Right);
-					FToggle(Vars::CritHack::AlwaysMeleeCrit, FToggleEnum::Left);
-					FToggle(Vars::CritHack::CritEffects, FToggleEnum::Right);
+					FToggleRow(Vars::CritHack::ForceCrits, FToggleEnum::Left);
+					FToggleRow(Vars::CritHack::AvoidRandomCrits, FToggleEnum::Right);
+					FToggleRow(Vars::CritHack::AlwaysMeleeCrit, FToggleEnum::Left);
+					FToggleRow(Vars::CritHack::CritEffects, FToggleEnum::Right);
 				} EndSection();
 				if (Vars::Debug::Options.Value)
 				{
@@ -287,7 +303,7 @@ void CMenu::MenuAimbot(int iTab)
 						FText("Debug", { 5, 5 });
 						if (FPopupButton("Debug", { 0, -5 }))
 						{
-							FSlider(Vars::Backtrack::Offset);
+							FSliderRow(Vars::Backtrack::Offset);
 
 							EndPopup();
 						}
@@ -299,12 +315,12 @@ void CMenu::MenuAimbot(int iTab)
 					FDropdown(Vars::Aimbot::Healing::DangerIgnore, FDropdownEnum::Right);
 
 					SubGroup("Auto-use");
-					FToggle(Vars::Aimbot::Healing::AutoHeal, FToggleEnum::Left);
-					FToggle(Vars::Aimbot::Healing::AutoArrow, FToggleEnum::Right);
-					FToggle(Vars::Aimbot::Healing::AutoRepair, FToggleEnum::Left);
-					FToggle(Vars::Aimbot::Healing::AutoSandvich, FToggleEnum::Right);
-					FToggle(Vars::Aimbot::Healing::AutoVaccinator, FToggleEnum::Left);
-					FToggle(Vars::Aimbot::Healing::ActivateOnVoice, FToggleEnum::Right);
+					FToggleRow(Vars::Aimbot::Healing::AutoHeal, FToggleEnum::Left);
+					FToggleRow(Vars::Aimbot::Healing::AutoArrow, FToggleEnum::Right);
+					FToggleRow(Vars::Aimbot::Healing::AutoRepair, FToggleEnum::Left);
+					FToggleRow(Vars::Aimbot::Healing::AutoSandvich, FToggleEnum::Right);
+					FToggleRow(Vars::Aimbot::Healing::AutoVaccinator, FToggleEnum::Left);
+					FToggleRow(Vars::Aimbot::Healing::ActivateOnVoice, FToggleEnum::Right);
 				} EndSection();
 				if (Vars::Debug::Options.Value)
 				{
@@ -313,10 +329,10 @@ void CMenu::MenuAimbot(int iTab)
 						FText("Debug", { 5, 5 });
 						if (FPopupButton("Debug", { 0, -5 }))
 						{
-							FSlider(Vars::Aimbot::Healing::AutoVaccinatorBulletScale);
-							FSlider(Vars::Aimbot::Healing::AutoVaccinatorBlastScale);
-							FSlider(Vars::Aimbot::Healing::AutoVaccinatorFireScale);
-							FToggle(Vars::Aimbot::Healing::AutoVaccinatorFlamethrowerDamageOnly);
+							FSliderRow(Vars::Aimbot::Healing::AutoVaccinatorBulletScale);
+							FSliderRow(Vars::Aimbot::Healing::AutoVaccinatorBlastScale);
+							FSliderRow(Vars::Aimbot::Healing::AutoVaccinatorFireScale);
+							FToggleRow(Vars::Aimbot::Healing::AutoVaccinatorFlamethrowerDamageOnly);
 
 							EndPopup();
 						}
@@ -331,10 +347,10 @@ void CMenu::MenuAimbot(int iTab)
 					FDropdown(Vars::Aimbot::Hitscan::Hitboxes, FDropdownEnum::Left);
 					FDropdown(Vars::Aimbot::Hitscan::MultipointHitboxes, FDropdownEnum::Right);
 					FDropdown(Vars::Aimbot::Hitscan::Modifiers);
-					FSlider(Vars::Aimbot::Hitscan::MultipointScale);
+					FSliderRow(Vars::Aimbot::Hitscan::MultipointScale);
 					PushTransparent(!(Vars::Aimbot::Hitscan::Modifiers.Value & Vars::Aimbot::Hitscan::ModifiersEnum::Tapfire));
 					{
-						FSlider(Vars::Aimbot::Hitscan::TapfireDistance);
+						FSliderRow(Vars::Aimbot::Hitscan::TapfireDistance);
 					}
 					PopTransparent();
 				} EndSection();
@@ -346,9 +362,9 @@ void CMenu::MenuAimbot(int iTab)
 						if (FPopupButton("Debug", { 0, -5 }, -8))
 						{
 							FDropdown(Vars::Aimbot::Hitscan::PeekCheck, FDropdownEnum::None, 0, &Hovered); FTooltip("This should stay as doubletap only or off if you want to be able to target hitboxes other than the highest priority one", Hovered);
-							FSlider(Vars::Aimbot::Hitscan::PeekAmount);
-							FSlider(Vars::Aimbot::Hitscan::BoneSizeSubtract);
-							FSlider(Vars::Aimbot::Hitscan::BoneSizeMinimumScale);
+							FSliderRow(Vars::Aimbot::Hitscan::PeekAmount);
+							FSliderRow(Vars::Aimbot::Hitscan::BoneSizeSubtract);
+							FSliderRow(Vars::Aimbot::Hitscan::BoneSizeMinimumScale);
 
 							EndPopup();
 						}
@@ -364,22 +380,22 @@ void CMenu::MenuAimbot(int iTab)
 					FDropdown(Vars::Aimbot::Projectile::Modifiers, FDropdownEnum::Right);
 
 					SubGroup("Tuning");
-					FSlider(Vars::Aimbot::Projectile::MaxSimulationTime, FSliderEnum::Left);
+					FSliderRow(Vars::Aimbot::Projectile::MaxSimulationTime, FSliderEnum::Left);
 					PushTransparent(!Vars::Aimbot::Projectile::StrafePrediction.Value);
 					{
-						FSlider(Vars::Aimbot::Projectile::HitChance, FSliderEnum::Right);
+						FSliderRow(Vars::Aimbot::Projectile::HitChance, FSliderEnum::Right);
 					}
 					PopTransparent();
-					FSlider(Vars::Aimbot::Projectile::AutodetRadius, FSliderEnum::Left);
-					FSlider(Vars::Aimbot::Projectile::SplashRadius, FSliderEnum::Right);
+					FSliderRow(Vars::Aimbot::Projectile::AutodetRadius, FSliderEnum::Left);
+					FSliderRow(Vars::Aimbot::Projectile::SplashRadius, FSliderEnum::Right);
 					PushTransparent(!Vars::Aimbot::Projectile::AutoRelease.Value);
 					{
-						FSlider(Vars::Aimbot::Projectile::AutoRelease);
+						FSliderRow(Vars::Aimbot::Projectile::AutoRelease);
 					}
 					PopTransparent();
 
 					SubGroup("Stickies");
-					FToggle(Vars::Aimbot::Projectile::DoubleSticky, FToggleEnum::Left);
+					FToggleRow(Vars::Aimbot::Projectile::DoubleSticky, FToggleEnum::Left);
 					FColorPicker(Vars::Colors::DoubleStickyPath, FColorPickerEnum::SameLine);
 					FKeybind(Vars::Aimbot::Projectile::DoubleStickyKey, FButtonEnum::Right | FButtonEnum::SameLine, { Vars::Menu::PrimaryKey[DEFAULT_BIND], Vars::Menu::SecondaryKey[DEFAULT_BIND] });
 				} EndSection();
@@ -390,20 +406,20 @@ void CMenu::MenuAimbot(int iTab)
 						FText("General", { 5, 5 });
 						if (FPopupButton("General", { 0, -5 }))
 						{
-							FSlider(Vars::Aimbot::Projectile::VelocityAverageCount, FSliderEnum::Left);
-							FSlider(Vars::Aimbot::Projectile::VerticalShift, FSliderEnum::Right);
-							FSlider(Vars::Aimbot::Projectile::DragOverride, FSliderEnum::Left);
-							FSlider(Vars::Aimbot::Projectile::TimeOverride, FSliderEnum::Right);
-							FToggle(Vars::Aimbot::Projectile::LobAnglesUnderpredict);
+							FSliderRow(Vars::Aimbot::Projectile::VelocityAverageCount, FSliderEnum::Left);
+							FSliderRow(Vars::Aimbot::Projectile::VerticalShift, FSliderEnum::Right);
+							FSliderRow(Vars::Aimbot::Projectile::DragOverride, FSliderEnum::Left);
+							FSliderRow(Vars::Aimbot::Projectile::TimeOverride, FSliderEnum::Right);
+							FToggleRow(Vars::Aimbot::Projectile::LobAnglesUnderpredict);
 
 							Divider();
-							FSlider(Vars::Aimbot::Projectile::HuntsmanLerp, FSliderEnum::Left);
-							FSlider(Vars::Aimbot::Projectile::HuntsmanLerpLow, FSliderEnum::Right);
-							FSlider(Vars::Aimbot::Projectile::HuntsmanAdd, FSliderEnum::Left);
-							FSlider(Vars::Aimbot::Projectile::HuntsmanAddLow, FSliderEnum::Right);
-							FSlider(Vars::Aimbot::Projectile::HuntsmanClamp, FSliderEnum::Left);
-							FToggle(Vars::Aimbot::Projectile::HuntsmanPullPoint, FSliderEnum::Left);
-							FToggle(Vars::Aimbot::Projectile::HuntsmanPullNoZ, FToggleEnum::Right);
+							FSliderRow(Vars::Aimbot::Projectile::HuntsmanLerp, FSliderEnum::Left);
+							FSliderRow(Vars::Aimbot::Projectile::HuntsmanLerpLow, FSliderEnum::Right);
+							FSliderRow(Vars::Aimbot::Projectile::HuntsmanAdd, FSliderEnum::Left);
+							FSliderRow(Vars::Aimbot::Projectile::HuntsmanAddLow, FSliderEnum::Right);
+							FSliderRow(Vars::Aimbot::Projectile::HuntsmanClamp, FSliderEnum::Left);
+							FToggleRow(Vars::Aimbot::Projectile::HuntsmanPullPoint, FSliderEnum::Left);
+							FToggleRow(Vars::Aimbot::Projectile::HuntsmanPullNoZ, FToggleEnum::Right);
 
 							EndPopup();
 						}
@@ -414,31 +430,31 @@ void CMenu::MenuAimbot(int iTab)
 							FDropdown(Vars::Aimbot::Projectile::SplashMode);
 							PushTransparent(Vars::Aimbot::Projectile::SplashMode.Value != Vars::Aimbot::Projectile::SplashModeEnum::Trace);
 							{
-								FSlider(Vars::Aimbot::Projectile::SplashPointsDirect, FSliderEnum::Left);
-								FSlider(Vars::Aimbot::Projectile::SplashPointsArc, FSliderEnum::Right);
-								FSlider(Vars::Aimbot::Projectile::SplashRotateX, FSliderEnum::Left, Vars::Aimbot::Projectile::SplashRotateX[DEFAULT_BIND] < 0.f ? "random" : "%g");
-								FSlider(Vars::Aimbot::Projectile::SplashRotateY, FSliderEnum::Right, Vars::Aimbot::Projectile::SplashRotateY[DEFAULT_BIND] < 0.f ? "random" : "%g");
+								FSliderRow(Vars::Aimbot::Projectile::SplashPointsDirect, FSliderEnum::Left);
+								FSliderRow(Vars::Aimbot::Projectile::SplashPointsArc, FSliderEnum::Right);
+								FSliderRow(Vars::Aimbot::Projectile::SplashRotateX, FSliderEnum::Left, Vars::Aimbot::Projectile::SplashRotateX[DEFAULT_BIND] < 0.f ? "random" : "%g");
+								FSliderRow(Vars::Aimbot::Projectile::SplashRotateY, FSliderEnum::Right, Vars::Aimbot::Projectile::SplashRotateY[DEFAULT_BIND] < 0.f ? "random" : "%g");
 							}
 							PopTransparent();
 							PushTransparent(Vars::Aimbot::Projectile::SplashMode.Value != Vars::Aimbot::Projectile::SplashModeEnum::Face);
 							{
-								FSlider(Vars::Aimbot::Projectile::SplashDensityDirect, FSliderEnum::Left);
-								FSlider(Vars::Aimbot::Projectile::SplashDensityArc, FSliderEnum::Right);
-								FSlider(Vars::Aimbot::Projectile::SplashSamplesCutoff);
+								FSliderRow(Vars::Aimbot::Projectile::SplashDensityDirect, FSliderEnum::Left);
+								FSliderRow(Vars::Aimbot::Projectile::SplashDensityArc, FSliderEnum::Right);
+								FSliderRow(Vars::Aimbot::Projectile::SplashSamplesCutoff);
 							}
 							PopTransparent();
-							FSlider(Vars::Aimbot::Projectile::SplashAirCount, FSliderEnum::None, !Vars::Aimbot::Projectile::SplashAirCount[DEFAULT_BIND] ? "random" : "%i");
+							FSliderRow(Vars::Aimbot::Projectile::SplashAirCount, FSliderEnum::None, !Vars::Aimbot::Projectile::SplashAirCount[DEFAULT_BIND] ? "random" : "%i");
 
 							Divider();
-							FSlider(Vars::Aimbot::Projectile::SplashRestrictDirect);
-							FSlider(Vars::Aimbot::Projectile::SplashRestrictArc);
-							FSlider(Vars::Aimbot::Projectile::SplashRestrictFirst);
+							FSliderRow(Vars::Aimbot::Projectile::SplashRestrictDirect);
+							FSliderRow(Vars::Aimbot::Projectile::SplashRestrictArc);
+							FSliderRow(Vars::Aimbot::Projectile::SplashRestrictFirst);
 
 							Divider();
-							FSlider(Vars::Aimbot::Projectile::DirectTraceInterval);
-							FSlider(Vars::Aimbot::Projectile::SplashTraceInterval);
-							FSlider(Vars::Aimbot::Projectile::LobTraceInterval);
-							FToggle(Vars::Aimbot::Projectile::IntervalRetest);
+							FSliderRow(Vars::Aimbot::Projectile::DirectTraceInterval);
+							FSliderRow(Vars::Aimbot::Projectile::SplashTraceInterval);
+							FSliderRow(Vars::Aimbot::Projectile::LobTraceInterval);
+							FToggleRow(Vars::Aimbot::Projectile::IntervalRetest);
 
 							EndPopup();
 						}
@@ -446,14 +462,14 @@ void CMenu::MenuAimbot(int iTab)
 						FText("Ground", { 5, 5 });
 						if (FPopupButton("Ground", { 0, -5 }))
 						{
-							FSlider(Vars::Aimbot::Projectile::GroundSamples, FSliderEnum::Left);
-							FSlider(Vars::Aimbot::Projectile::GroundStraightFuzzyValue, FSliderEnum::Right);
-							FSlider(Vars::Aimbot::Projectile::GroundLowMinimumSamples, FSliderEnum::Left);
-							FSlider(Vars::Aimbot::Projectile::GroundHighMinimumSamples, FSliderEnum::Right);
-							FSlider(Vars::Aimbot::Projectile::GroundLowMinimumDistance, FSliderEnum::Left);
-							FSlider(Vars::Aimbot::Projectile::GroundHighMinimumDistance, FSliderEnum::Right);
-							FSlider(Vars::Aimbot::Projectile::GroundMaxChanges, FSliderEnum::Left);
-							FSlider(Vars::Aimbot::Projectile::GroundMaxChangeTime, FSliderEnum::Right);
+							FSliderRow(Vars::Aimbot::Projectile::GroundSamples, FSliderEnum::Left);
+							FSliderRow(Vars::Aimbot::Projectile::GroundStraightFuzzyValue, FSliderEnum::Right);
+							FSliderRow(Vars::Aimbot::Projectile::GroundLowMinimumSamples, FSliderEnum::Left);
+							FSliderRow(Vars::Aimbot::Projectile::GroundHighMinimumSamples, FSliderEnum::Right);
+							FSliderRow(Vars::Aimbot::Projectile::GroundLowMinimumDistance, FSliderEnum::Left);
+							FSliderRow(Vars::Aimbot::Projectile::GroundHighMinimumDistance, FSliderEnum::Right);
+							FSliderRow(Vars::Aimbot::Projectile::GroundMaxChanges, FSliderEnum::Left);
+							FSliderRow(Vars::Aimbot::Projectile::GroundMaxChangeTime, FSliderEnum::Right);
 
 							EndPopup();
 						}
@@ -461,14 +477,14 @@ void CMenu::MenuAimbot(int iTab)
 						FText("Air", { 5, 5 });
 						if (FPopupButton("Air", { 0, -5 }))
 						{
-							FSlider(Vars::Aimbot::Projectile::AirSamples, FSliderEnum::Left);
-							FSlider(Vars::Aimbot::Projectile::AirStraightFuzzyValue, FSliderEnum::Right);
-							FSlider(Vars::Aimbot::Projectile::AirLowMinimumSamples, FSliderEnum::Left);
-							FSlider(Vars::Aimbot::Projectile::AirHighMinimumSamples, FSliderEnum::Right);
-							FSlider(Vars::Aimbot::Projectile::AirLowMinimumDistance, FSliderEnum::Left);
-							FSlider(Vars::Aimbot::Projectile::AirHighMinimumDistance, FSliderEnum::Right);
-							FSlider(Vars::Aimbot::Projectile::AirMaxChanges, FSliderEnum::Left);
-							FSlider(Vars::Aimbot::Projectile::AirMaxChangeTime, FSliderEnum::Right);
+							FSliderRow(Vars::Aimbot::Projectile::AirSamples, FSliderEnum::Left);
+							FSliderRow(Vars::Aimbot::Projectile::AirStraightFuzzyValue, FSliderEnum::Right);
+							FSliderRow(Vars::Aimbot::Projectile::AirLowMinimumSamples, FSliderEnum::Left);
+							FSliderRow(Vars::Aimbot::Projectile::AirHighMinimumSamples, FSliderEnum::Right);
+							FSliderRow(Vars::Aimbot::Projectile::AirLowMinimumDistance, FSliderEnum::Left);
+							FSliderRow(Vars::Aimbot::Projectile::AirHighMinimumDistance, FSliderEnum::Right);
+							FSliderRow(Vars::Aimbot::Projectile::AirMaxChanges, FSliderEnum::Left);
+							FSliderRow(Vars::Aimbot::Projectile::AirMaxChangeTime, FSliderEnum::Right);
 
 							EndPopup();
 						}
@@ -476,7 +492,7 @@ void CMenu::MenuAimbot(int iTab)
 						FText("Misc", { 5, 5 });
 						if (FPopupButton("Misc", { 0, -5 }))
 						{
-							FSlider(Vars::Aimbot::Projectile::DeltaCount, FSliderEnum::Left);
+							FSliderRow(Vars::Aimbot::Projectile::DeltaCount, FSliderEnum::Left);
 							FDropdown(Vars::Aimbot::Projectile::DeltaMode, FDropdownEnum::Right);
 							FDropdown(Vars::Aimbot::Projectile::MovesimFrictionFlags);
 
@@ -486,10 +502,10 @@ void CMenu::MenuAimbot(int iTab)
 				}
 				if (Section("Melee", 8))
 				{
-					FToggle(Vars::Aimbot::Melee::AutoBackstab, FToggleEnum::Left);
-					FToggle(Vars::Aimbot::Melee::IgnoreRazorback, FToggleEnum::Right);
-					FToggle(Vars::Aimbot::Melee::SwingPrediction, FToggleEnum::Left);
-					FToggle(Vars::Aimbot::Melee::WhipTeam, FToggleEnum::Right);
+					FToggleRow(Vars::Aimbot::Melee::AutoBackstab, FToggleEnum::Left);
+					FToggleRow(Vars::Aimbot::Melee::IgnoreRazorback, FToggleEnum::Right);
+					FToggleRow(Vars::Aimbot::Melee::SwingPrediction, FToggleEnum::Left);
+					FToggleRow(Vars::Aimbot::Melee::WhipTeam, FToggleEnum::Right);
 				} EndSection();
 				if (Vars::Debug::Options.Value)
 				{
@@ -498,8 +514,8 @@ void CMenu::MenuAimbot(int iTab)
 						FText("Debug", { 5, 5 });
 						if (FPopupButton("Debug", { 0, -5 }))
 						{
-							FSlider(Vars::Aimbot::Melee::SwingTicks, FSliderEnum::Left);
-							FToggle(Vars::Aimbot::Melee::SwingPredictLag, FToggleEnum::Right);
+							FSliderRow(Vars::Aimbot::Melee::SwingTicks, FSliderEnum::Left);
+							FToggleRow(Vars::Aimbot::Melee::SwingPredictLag, FToggleEnum::Right);
 							FDropdown(Vars::Aimbot::Melee::SwingValidateMode, FDropdownEnum::Left);
 							FDropdown(Vars::Aimbot::Melee::BackstabFlags, FDropdownEnum::Right);
 
@@ -524,8 +540,8 @@ void CMenu::MenuAimbot(int iTab)
 				{
 					FColorPicker(Vars::Colors::LineIgnoreZ, FColorPickerEnum::None, { 0, H::Draw.Scale(6) }, { H::Draw.Scale(12), H::Draw.Scale(6) });
 					FColorPicker(Vars::Colors::Line, FColorPickerEnum::None, {}, { H::Draw.Scale(12), H::Draw.Scale(6) });
-					FToggle(Vars::Visuals::Line::TracersEnabled);
-					FSlider(Vars::Visuals::Line::DrawDuration);
+					FToggleRow(Vars::Visuals::Line::TracersEnabled);
+					FSliderRow(Vars::Visuals::Line::DrawDuration);
 				} EndSection();
 				if (Section("Hitbox"))
 				{
@@ -547,7 +563,7 @@ void CMenu::MenuAimbot(int iTab)
 					FColorPicker(Vars::Colors::BoundHitboxFace, FColorPickerEnum::SameLine, { H::Draw.Scale(-10), H::Draw.Scale(-20) }, { H::Draw.Scale(10), H::Draw.Scale(20) });
 					SameLine(); DebugDummy({ 0, H::Draw.Scale(48) });
 
-					FSlider(Vars::Visuals::Hitbox::DrawDuration);
+					FSliderRow(Vars::Visuals::Hitbox::DrawDuration);
 				} EndSection();
 			}
 			/* Column 2 */
@@ -563,9 +579,9 @@ void CMenu::MenuAimbot(int iTab)
 					FColorPicker(Vars::Colors::ProjectilePathIgnoreZ, FColorPickerEnum::SameLine, { 0, H::Draw.Scale(20) }, { H::Draw.Scale(10), H::Draw.Scale(20) });
 					FColorPicker(Vars::Colors::ProjectilePath, FColorPickerEnum::SameLine, { H::Draw.Scale(-10), H::Draw.Scale(-20) }, { H::Draw.Scale(10), H::Draw.Scale(20) });
 					SameLine(); DebugDummy({ 0, H::Draw.Scale(48) });
-					FToggle(Vars::Visuals::Prediction::SwingLines);
-					FSlider(Vars::Visuals::Prediction::PlayerDrawDuration, FSliderEnum::Left, !Vars::Visuals::Prediction::PlayerDrawDuration[DEFAULT_BIND] ? "timed" : "%g");
-					FSlider(Vars::Visuals::Prediction::ProjectileDrawDuration, FSliderEnum::Right, !Vars::Visuals::Prediction::ProjectileDrawDuration[DEFAULT_BIND] ? "timed" : "%g");
+					FToggleRow(Vars::Visuals::Prediction::SwingLines);
+					FSliderRow(Vars::Visuals::Prediction::PlayerDrawDuration, FSliderEnum::Left, !Vars::Visuals::Prediction::PlayerDrawDuration[DEFAULT_BIND] ? "timed" : "%g");
+					FSliderRow(Vars::Visuals::Prediction::ProjectileDrawDuration, FSliderEnum::Right, !Vars::Visuals::Prediction::ProjectileDrawDuration[DEFAULT_BIND] ? "timed" : "%g");
 				} EndSection();
 				if (Section("Simulation"))
 				{
@@ -587,8 +603,8 @@ void CMenu::MenuAimbot(int iTab)
 					FColorPicker(Vars::Colors::StickyRadiusIgnoreZ, FColorPickerEnum::SameLine, { H::Draw.Scale(-10), H::Draw.Scale(-10) }, { H::Draw.Scale(10), H::Draw.Scale(10) });
 					FColorPicker(Vars::Colors::StickyRadius, FColorPickerEnum::SameLine, { H::Draw.Scale(-10), H::Draw.Scale(-10) }, { H::Draw.Scale(10), H::Draw.Scale(10) });
 					SameLine(); DebugDummy({ 0, H::Draw.Scale(48) });
-					FToggle(Vars::Visuals::Simulation::ProjectileCamera, FToggleEnum::Left);
-					FToggle(Vars::Visuals::Simulation::Box, FToggleEnum::Right);
+					FToggleRow(Vars::Visuals::Simulation::ProjectileCamera, FToggleEnum::Left);
+					FToggleRow(Vars::Visuals::Simulation::Box, FToggleEnum::Right);
 				} EndSection();
 				if (Vars::Debug::Options.Value)
 				{
@@ -601,8 +617,8 @@ void CMenu::MenuAimbot(int iTab)
 							FColorPicker(Vars::Colors::RealPath, FColorPickerEnum::SameLine, {}, { H::Draw.Scale(10), H::Draw.Scale(20) });
 							FColorPicker(Vars::Colors::RealPathIgnoreZ, FColorPickerEnum::SameLine, { H::Draw.Scale(-10), H::Draw.Scale(20) }, { H::Draw.Scale(10), H::Draw.Scale(20) });
 
-							FSlider(Vars::Visuals::Path::SeparatorSpacing, FSliderEnum::Left);
-							FSlider(Vars::Visuals::Path::SeparatorLength, FSliderEnum::Right);
+							FSliderRow(Vars::Visuals::Path::SeparatorSpacing, FSliderEnum::Left);
+							FSliderRow(Vars::Visuals::Path::SeparatorLength, FSliderEnum::Right);
 
 							EndPopup();
 						}
@@ -610,31 +626,31 @@ void CMenu::MenuAimbot(int iTab)
 						FText("Simulation", { 5, 5 });
 						if (FPopupButton("Simulation", { 0, -5 }))
 						{
-							FToggle(Vars::Visuals::Trajectory::Override);
+							FToggleRow(Vars::Visuals::Trajectory::Override);
 							bool bApply = FButton("Apply current");
 							FSDropdown(Vars::Visuals::Trajectory::Type);
-							FSlider(Vars::Visuals::Trajectory::OffsetX);
-							FSlider(Vars::Visuals::Trajectory::OffsetY);
-							FSlider(Vars::Visuals::Trajectory::OffsetZ);
-							FSlider(Vars::Visuals::Trajectory::ForwardRedirect);
-							FSlider(Vars::Visuals::Trajectory::ForwardCutoff);
-							FSlider(Vars::Visuals::Trajectory::Hull);
-							FSlider(Vars::Visuals::Trajectory::Speed);
-							FSlider(Vars::Visuals::Trajectory::Gravity);
-							FSlider(Vars::Visuals::Trajectory::LifeTime);
-							FSlider(Vars::Visuals::Trajectory::UpVelocity);
-							FSlider(Vars::Visuals::Trajectory::AngularVelocityX);
-							FSlider(Vars::Visuals::Trajectory::AngularVelocityY);
-							FSlider(Vars::Visuals::Trajectory::AngularVelocityZ);
-							FSlider(Vars::Visuals::Trajectory::Drag);
-							FSlider(Vars::Visuals::Trajectory::DragX);
-							FSlider(Vars::Visuals::Trajectory::DragY);
-							FSlider(Vars::Visuals::Trajectory::DragZ);
-							FSlider(Vars::Visuals::Trajectory::AngularDragX);
-							FSlider(Vars::Visuals::Trajectory::AngularDragY);
-							FSlider(Vars::Visuals::Trajectory::AngularDragZ);
-							FSlider(Vars::Visuals::Trajectory::MaxVelocity);
-							FSlider(Vars::Visuals::Trajectory::MaxAngularVelocity);
+							FSliderRow(Vars::Visuals::Trajectory::OffsetX);
+							FSliderRow(Vars::Visuals::Trajectory::OffsetY);
+							FSliderRow(Vars::Visuals::Trajectory::OffsetZ);
+							FSliderRow(Vars::Visuals::Trajectory::ForwardRedirect);
+							FSliderRow(Vars::Visuals::Trajectory::ForwardCutoff);
+							FSliderRow(Vars::Visuals::Trajectory::Hull);
+							FSliderRow(Vars::Visuals::Trajectory::Speed);
+							FSliderRow(Vars::Visuals::Trajectory::Gravity);
+							FSliderRow(Vars::Visuals::Trajectory::LifeTime);
+							FSliderRow(Vars::Visuals::Trajectory::UpVelocity);
+							FSliderRow(Vars::Visuals::Trajectory::AngularVelocityX);
+							FSliderRow(Vars::Visuals::Trajectory::AngularVelocityY);
+							FSliderRow(Vars::Visuals::Trajectory::AngularVelocityZ);
+							FSliderRow(Vars::Visuals::Trajectory::Drag);
+							FSliderRow(Vars::Visuals::Trajectory::DragX);
+							FSliderRow(Vars::Visuals::Trajectory::DragY);
+							FSliderRow(Vars::Visuals::Trajectory::DragZ);
+							FSliderRow(Vars::Visuals::Trajectory::AngularDragX);
+							FSliderRow(Vars::Visuals::Trajectory::AngularDragY);
+							FSliderRow(Vars::Visuals::Trajectory::AngularDragZ);
+							FSliderRow(Vars::Visuals::Trajectory::MaxVelocity);
+							FSliderRow(Vars::Visuals::Trajectory::MaxAngularVelocity);
 
 							if (bApply)
 							{
@@ -724,7 +740,7 @@ void CMenu::MenuHVH(int iTab)
 				{
 					bool bAAOn = SectionToggle(Vars::AntiAim::Enabled);
 					PushTransparent(!bAAOn, true);
-					FToggle(Vars::AntiAim::HidePitchOnShot);
+					FToggleRow(Vars::AntiAim::HidePitchOnShot);
 					SubGroup("Pitch");
 					FDropdown(Vars::AntiAim::PitchReal, FDropdownEnum::Left);
 					FDropdown(Vars::AntiAim::PitchFake, FDropdownEnum::Right);
@@ -733,25 +749,25 @@ void CMenu::MenuHVH(int iTab)
 					FDropdown(Vars::AntiAim::YawFake, FDropdownEnum::Right);
 					FDropdown(Vars::AntiAim::RealYawBase, FDropdownEnum::Left);
 					FDropdown(Vars::AntiAim::FakeYawBase, FDropdownEnum::Right);
-					FSlider(Vars::AntiAim::RealYawOffset, FSliderEnum::Left);
-					FSlider(Vars::AntiAim::FakeYawOffset, FSliderEnum::Right);
+					FSliderRow(Vars::AntiAim::RealYawOffset, FSliderEnum::Left);
+					FSliderRow(Vars::AntiAim::FakeYawOffset, FSliderEnum::Right);
 					PushTransparent(Vars::AntiAim::YawReal.Value != Vars::AntiAim::YawEnum::Edge && Vars::AntiAim::YawReal.Value != Vars::AntiAim::YawEnum::Jitter);
 					{
-						FSlider(Vars::AntiAim::RealYawValue, FSliderEnum::Left);
+						FSliderRow(Vars::AntiAim::RealYawValue, FSliderEnum::Left);
 					}
 					PopTransparent();
 					PushTransparent(Vars::AntiAim::YawFake.Value != Vars::AntiAim::YawEnum::Edge && Vars::AntiAim::YawFake.Value != Vars::AntiAim::YawEnum::Jitter);
 					{
-						FSlider(Vars::AntiAim::FakeYawValue, FSliderEnum::Right);
+						FSliderRow(Vars::AntiAim::FakeYawValue, FSliderEnum::Right);
 					}
 					PopTransparent();
 					PushTransparent(Vars::AntiAim::YawFake.Value != Vars::AntiAim::YawEnum::Spin && Vars::AntiAim::YawReal.Value != Vars::AntiAim::YawEnum::Spin);
 					{
-						FSlider(Vars::AntiAim::SpinSpeed, FSliderEnum::Left);
+						FSliderRow(Vars::AntiAim::SpinSpeed, FSliderEnum::Left);
 					}
 					PopTransparent();
 					SetCursorPos({ GetWindowWidth() / 2 + GetStyle().WindowPadding.x / 2, GetRowPos() + H::Draw.Scale(8) });
-					FToggle(Vars::AntiAim::MinWalk, FToggleEnum::Left);
+					FToggleRow(Vars::AntiAim::MinWalk, FToggleEnum::Left);
 					PopTransparent(1, 1);
 				} EndSection();
 				if (Vars::Debug::Options.Value)
@@ -761,7 +777,7 @@ void CMenu::MenuHVH(int iTab)
 						FText("Debug", { 5, 5 });
 						if (FPopupButton("Debug", { 0, -5 }))
 						{
-							FToggle(Vars::AntiAim::AntiAimLines);
+							FToggleRow(Vars::AntiAim::AntiAimLines);
 
 							EndPopup();
 						}
@@ -772,30 +788,30 @@ void CMenu::MenuHVH(int iTab)
 					bool bResolverOn = SectionToggle(Vars::Resolver::Enabled);
 					PushTransparent(!bResolverOn, true);
 					{
-						FToggle(Vars::Resolver::AutoResolve);
+						FToggleRow(Vars::Resolver::AutoResolve);
 						PushTransparent(Transparent || !Vars::Resolver::AutoResolve.Value);
 						{
 							SubGroup("Auto-resolve");
-							FToggle(Vars::Resolver::AutoResolveCheatersOnly, FToggleEnum::Left);
-							FToggle(Vars::Resolver::AutoResolveHeadshotOnly, FToggleEnum::Right);
+							FToggleRow(Vars::Resolver::AutoResolveCheatersOnly, FToggleEnum::Left);
+							FToggleRow(Vars::Resolver::AutoResolveHeadshotOnly, FToggleEnum::Right);
 							PushTransparent(Transparent || !Vars::Resolver::AutoResolveYawAmount.Value);
 							{
-								FSlider(Vars::Resolver::AutoResolveYawAmount, FSliderEnum::Left);
+								FSliderRow(Vars::Resolver::AutoResolveYawAmount, FSliderEnum::Left);
 							}
 							PopTransparent();
 							PushTransparent(Transparent || !Vars::Resolver::AutoResolvePitchAmount.Value);
 							{
-								FSlider(Vars::Resolver::AutoResolvePitchAmount, FSliderEnum::Right);
+								FSliderRow(Vars::Resolver::AutoResolvePitchAmount, FSliderEnum::Right);
 							}
 							PopTransparent();
 						}
 						PopTransparent();
 
 						SubGroup("Cycle");
-						FSlider(Vars::Resolver::CycleYaw, FSliderEnum::Left);
-						FSlider(Vars::Resolver::CyclePitch, FSliderEnum::Right);
-						FToggle(Vars::Resolver::CycleView, FToggleEnum::Left);
-						FToggle(Vars::Resolver::CycleMinwalk, FToggleEnum::Right);
+						FSliderRow(Vars::Resolver::CycleYaw, FSliderEnum::Left);
+						FSliderRow(Vars::Resolver::CyclePitch, FSliderEnum::Right);
+						FToggleRow(Vars::Resolver::CycleView, FToggleEnum::Left);
+						FToggleRow(Vars::Resolver::CycleMinwalk, FToggleEnum::Right);
 					}
 					PopTransparent(1, 1);
 				} EndSection();
@@ -805,16 +821,16 @@ void CMenu::MenuHVH(int iTab)
 			{
 				if (Section("Doubletap", 8))
 				{
-					FToggle(Vars::Doubletap::Doubletap, FToggleEnum::Left);
-					FToggle(Vars::Doubletap::Warp, FToggleEnum::Right);
-					FToggle(Vars::Doubletap::RechargeTicks, FToggleEnum::Left);
-					FToggle(Vars::Doubletap::AntiWarp, FToggleEnum::Right);
+					FToggleRow(Vars::Doubletap::Doubletap, FToggleEnum::Left);
+					FToggleRow(Vars::Doubletap::Warp, FToggleEnum::Right);
+					FToggleRow(Vars::Doubletap::RechargeTicks, FToggleEnum::Left);
+					FToggleRow(Vars::Doubletap::AntiWarp, FToggleEnum::Right);
 
 					SubGroup("Tuning");
-					FSlider(Vars::Doubletap::TickLimit, FSliderEnum::Left);
-					FSlider(Vars::Doubletap::WarpRate, FSliderEnum::Right);
-					FSlider(Vars::Doubletap::RechargeLimit, FSliderEnum::Left);
-					FSlider(Vars::Doubletap::PassiveRecharge, FSliderEnum::Right);
+					FSliderRow(Vars::Doubletap::TickLimit, FSliderEnum::Left);
+					FSliderRow(Vars::Doubletap::WarpRate, FSliderEnum::Right);
+					FSliderRow(Vars::Doubletap::RechargeLimit, FSliderEnum::Left);
+					FSliderRow(Vars::Doubletap::PassiveRecharge, FSliderEnum::Right);
 				} EndSection();
 				if (Section("Fakelag"))
 				{
@@ -822,7 +838,7 @@ void CMenu::MenuHVH(int iTab)
 					FDropdown(Vars::Fakelag::Options, FDropdownEnum::Right);
 					PushTransparent(Vars::Fakelag::Fakelag.Value != Vars::Fakelag::FakelagEnum::Plain);
 					{
-						FSlider(Vars::Fakelag::PlainTicks, FSliderEnum::Left);
+						FSliderRow(Vars::Fakelag::PlainTicks, FSliderEnum::Left);
 					}
 					PopTransparent();
 					PushTransparent(Vars::Fakelag::Fakelag.Value != Vars::Fakelag::FakelagEnum::Random);
@@ -830,8 +846,8 @@ void CMenu::MenuHVH(int iTab)
 						FSlider(Vars::Fakelag::RandomTicks, FSliderEnum::Right);
 					}
 					PopTransparent();
-					FToggle(Vars::Fakelag::UnchokeOnAttack, FToggleEnum::Left);
-					FToggle(Vars::Fakelag::RetainBlastJump, FToggleEnum::Right);
+					FToggleRow(Vars::Fakelag::UnchokeOnAttack, FToggleEnum::Left);
+					FToggleRow(Vars::Fakelag::RetainBlastJump, FToggleEnum::Right);
 				} EndSection();
 				if (Vars::Debug::Options.Value)
 				{
@@ -840,7 +856,7 @@ void CMenu::MenuHVH(int iTab)
 						FText("Debug", { 5, 5 });
 						if (FPopupButton("Debug", { 0, -5 }))
 						{
-							FToggle(Vars::Fakelag::RetainSoldierOnly);
+							FToggleRow(Vars::Fakelag::RetainSoldierOnly);
 
 							EndPopup();
 						}
@@ -848,13 +864,13 @@ void CMenu::MenuHVH(int iTab)
 				}
 				if (Section("Auto Peek", 8))
 				{
-					FToggle(Vars::AutoPeek::Enabled);
+					FToggleRow(Vars::AutoPeek::Enabled);
 				} EndSection();
 				if (Section("Speedhack", 8))
 				{
 					PushTransparent(Vars::Speedhack::Scale.Value == 1);
 					{
-						FSlider(Vars::Speedhack::Scale);
+						FSliderRow(Vars::Speedhack::Scale);
 					}
 					PopTransparent();
 				} EndSection();
@@ -1216,6 +1232,26 @@ void CMenu::MenuVisuals(int iTab)
 	// View
 	case 1:
 	{
+		// 3a: "Field of view" is promoted out of the table as a full-width feature card.
+		if (Section("Field of view", 8))
+		{
+			PushTransparent(!Vars::Visuals::UI::FieldOfView.Value);
+			{
+				FSliderRow(Vars::Visuals::UI::FieldOfView);
+			}
+			PopTransparent();
+			PushTransparent(!Vars::Visuals::UI::ZoomFieldOfView.Value);
+			{
+				FSliderRow(Vars::Visuals::UI::ZoomFieldOfView);
+			}
+			PopTransparent();
+			PushTransparent(!Vars::Visuals::UI::ViewmodelFOV.Value);
+			{
+				FSliderRow(Vars::Visuals::UI::ViewmodelFOV);
+			}
+			PopTransparent();
+		} EndSection();
+
 		if (BeginTable("VisualsViewTable", 2))
 		{
 			/* Column 1 */
@@ -1227,48 +1263,30 @@ void CMenu::MenuVisuals(int iTab)
 					FDropdown(Vars::Visuals::UI::ChatTags, FDropdownEnum::Right, -10);
 					FColorPicker(Vars::Colors::Local, FColorPickerEnum::SameLine, {}, { H::Draw.Scale(10), H::Draw.Scale(40) });
 				} EndSection();
-				if (Section("Field of view", 8))
-				{
-					PushTransparent(!Vars::Visuals::UI::FieldOfView.Value);
-					{
-						FSlider(Vars::Visuals::UI::FieldOfView);
-					}
-					PopTransparent();
-					PushTransparent(!Vars::Visuals::UI::ZoomFieldOfView.Value);
-					{
-						FSlider(Vars::Visuals::UI::ZoomFieldOfView);
-					}
-					PopTransparent();
-					PushTransparent(!Vars::Visuals::UI::ViewmodelFOV.Value);
-					{
-						FSlider(Vars::Visuals::UI::ViewmodelFOV);
-					}
-					PopTransparent();
-				} EndSection();
 				if (Section("Flex FOV", 8))
 				{
 					// FlexFOVComposite gates the whole cluster, so it becomes the header master toggle.
 					bool bFlex = SectionToggle(Vars::Visuals::UI::FlexFOVComposite);
 					PushTransparent(!bFlex, true);
 					{
-						FSlider(Vars::Visuals::UI::FlexFOVStrength);
-						FSlider(Vars::Visuals::UI::FlexFOVTransition);
-						FSlider(Vars::Visuals::UI::FlexFOVQuality);
+						FSliderRow(Vars::Visuals::UI::FlexFOVStrength);
+						FSlider(Vars::Visuals::UI::FlexFOVTransition); // FloatRange_t: two-handle range, no 3a row form
+						FSliderRow(Vars::Visuals::UI::FlexFOVQuality);
 
 						SubGroup("Performance");
-						FSlider(Vars::Visuals::UI::FlexFOVStagger);
-						FToggle(Vars::Visuals::UI::FlexFOVStaggerFront, FToggleEnum::Left);
-						FToggle(Vars::Visuals::UI::FlexFOVCheapPeriphery, FToggleEnum::Right);
-						PushTransparent(!Vars::Visuals::UI::FlexFOVCheapPeriphery.Value);
-						{
-							FToggle(Vars::Visuals::UI::FlexFOVCheapSky);
-						}
-						PopTransparent();
+						FSliderRow(Vars::Visuals::UI::FlexFOVStagger);
+						FToggleGrid({
+							&Vars::Visuals::UI::FlexFOVStaggerFront,
+							&Vars::Visuals::UI::FlexFOVCheapPeriphery,
+							&Vars::Visuals::UI::FlexFOVCheapSky,
+						});
 
 						SubGroup("Projection");
-						FToggle(Vars::Visuals::UI::FlexFOVTightFaces, FToggleEnum::Left);
-						FToggle(Vars::Visuals::UI::FlexFOVStereographic, FToggleEnum::Right);
-						FToggle(Vars::Visuals::UI::FlexFOVVertStereo);
+						FToggleGrid({
+							&Vars::Visuals::UI::FlexFOVTightFaces,
+							&Vars::Visuals::UI::FlexFOVStereographic,
+							&Vars::Visuals::UI::FlexFOVVertStereo,
+						});
 					}
 					PopTransparent(1, 1);
 				} EndSection();
@@ -1277,10 +1295,10 @@ void CMenu::MenuVisuals(int iTab)
 					bool bOn = SectionToggle(Vars::Visuals::Thirdperson::Enabled);
 					PushTransparent(!bOn, true);
 					{
-						FToggle(Vars::Visuals::Thirdperson::Crosshair);
-						FSlider(Vars::Visuals::Thirdperson::Distance);
-						FSlider(Vars::Visuals::Thirdperson::Right);
-						FSlider(Vars::Visuals::Thirdperson::Up);
+						FToggleRow(Vars::Visuals::Thirdperson::Crosshair);
+						FSliderRow(Vars::Visuals::Thirdperson::Distance);
+						FSliderRow(Vars::Visuals::Thirdperson::Right);
+						FSliderRow(Vars::Visuals::Thirdperson::Up);
 					}
 					PopTransparent(1, 1);
 				} EndSection();
@@ -1291,8 +1309,8 @@ void CMenu::MenuVisuals(int iTab)
 						FText("Debug", { 5, 5 });
 						if (FPopupButton("Debug", { 0, -5 }))
 						{
-							FToggle(Vars::Visuals::Thirdperson::Scale, FToggleEnum::Left);
-							FToggle(Vars::Visuals::Thirdperson::Collide, FToggleEnum::Right);
+							FToggleRow(Vars::Visuals::Thirdperson::Scale, FToggleEnum::Left);
+							FToggleRow(Vars::Visuals::Thirdperson::Collide, FToggleEnum::Right);
 
 							EndPopup();
 						}
@@ -1303,16 +1321,16 @@ void CMenu::MenuVisuals(int iTab)
 					bool bRearViewOn = SectionToggle(Vars::Visuals::UI::RearView);
 					PushTransparent(!bRearViewOn, true);
 					{
-						FSlider(Vars::Visuals::UI::RearViewCameras, FSliderEnum::Left);
-						FSlider(Vars::Visuals::UI::RearViewFOVOffset, FSliderEnum::Right);
-						FToggle(Vars::Visuals::UI::RearViewFlipPitch, FToggleEnum::Left);
-						FSlider(Vars::Visuals::UI::RearViewAlpha, FSliderEnum::Right);
-						FToggle(Vars::Visuals::UI::RearViewHalfRate, FToggleEnum::Left);
+						FSliderRow(Vars::Visuals::UI::RearViewCameras);
+						FSliderRow(Vars::Visuals::UI::RearViewFOVOffset);
+						FToggleRow(Vars::Visuals::UI::RearViewFlipPitch);
+						FSliderRow(Vars::Visuals::UI::RearViewAlpha);
+						FToggleRow(Vars::Visuals::UI::RearViewHalfRate);
 						FMDropdown(Vars::Visuals::UI::RearViewMaterial);
 
 						SubGroup("Glow");
-						FSlider(Vars::Visuals::UI::RearViewGlowStencil, FSliderEnum::Left | FSliderEnum::Min);
-						FSlider(Vars::Visuals::UI::RearViewGlowBlur, FSliderEnum::Right | FSliderEnum::Min | FSliderEnum::Precision);
+						FSliderRow(Vars::Visuals::UI::RearViewGlowStencil);
+						FSliderRow(Vars::Visuals::UI::RearViewGlowBlur);
 						PushTransparent(!(Vars::Visuals::UI::RearViewGlowStencil.Value || Vars::Visuals::UI::RearViewGlowBlur.Value));
 						{
 							FColorPicker(Vars::Visuals::UI::RearViewGlowColor);
@@ -1327,27 +1345,31 @@ void CMenu::MenuVisuals(int iTab)
 			{
 				if (Section("Scoreboard"))
 				{
-					FToggle(Vars::Visuals::UI::RevealScoreboard, FToggleEnum::Left);
-					FToggle(Vars::Visuals::UI::ScoreboardUtility, FToggleEnum::Right);
-					FToggle(Vars::Visuals::UI::ScoreboardColors, FToggleEnum::Left);
-					FToggle(Vars::Visuals::UI::CleanScreenshots, FToggleEnum::Right);
+					FToggleGrid({
+						&Vars::Visuals::UI::RevealScoreboard,
+						&Vars::Visuals::UI::ScoreboardUtility,
+						&Vars::Visuals::UI::ScoreboardColors,
+						&Vars::Visuals::UI::CleanScreenshots,
+					});
 				} EndSection();
 				if (Section("Viewmodel", 8))
 				{
-					FToggle(Vars::Visuals::Viewmodel::CrosshairAim, FToggleEnum::Left);
-					FToggle(Vars::Visuals::Viewmodel::ViewmodelAim, FToggleEnum::Right);
-					FSlider(Vars::Visuals::Viewmodel::OffsetX, FSliderEnum::Left);
-					FSlider(Vars::Visuals::Viewmodel::Pitch, FSliderEnum::Right);
-					FSlider(Vars::Visuals::Viewmodel::OffsetY, FSliderEnum::Left);
-					FSlider(Vars::Visuals::Viewmodel::Yaw, FSliderEnum::Right);
-					FSlider(Vars::Visuals::Viewmodel::OffsetZ, FSliderEnum::Left);
-					FSlider(Vars::Visuals::Viewmodel::Roll, FSliderEnum::Right);
+					FToggleGrid({
+						&Vars::Visuals::Viewmodel::CrosshairAim,
+						&Vars::Visuals::Viewmodel::ViewmodelAim,
+					});
+					FSliderRow(Vars::Visuals::Viewmodel::OffsetX);
+					FSliderRow(Vars::Visuals::Viewmodel::Pitch);
+					FSliderRow(Vars::Visuals::Viewmodel::OffsetY);
+					FSliderRow(Vars::Visuals::Viewmodel::Yaw);
+					FSliderRow(Vars::Visuals::Viewmodel::OffsetZ);
+					FSliderRow(Vars::Visuals::Viewmodel::Roll);
 
 					SubGroup("Sway");
 					PushTransparent(!Vars::Visuals::Viewmodel::SwayScale.Value || !Vars::Visuals::Viewmodel::SwayInterp.Value);
 					{
-						FSlider(Vars::Visuals::Viewmodel::SwayScale, FSliderEnum::Left);
-						FSlider(Vars::Visuals::Viewmodel::SwayInterp, FSliderEnum::Right);
+						FSliderRow(Vars::Visuals::Viewmodel::SwayScale);
+						FSliderRow(Vars::Visuals::Viewmodel::SwayInterp);
 					}
 					PopTransparent();
 				} EndSection();
@@ -1396,8 +1418,8 @@ void CMenu::MenuVisuals(int iTab)
 					PopTransparent();
 
 					SubGroup("Prop fade");
-					FToggle(Vars::Visuals::World::NearPropFade, FToggleEnum::Left);
-					FToggle(Vars::Visuals::World::NoPropFade, FToggleEnum::Right);
+					FToggleRow(Vars::Visuals::World::NearPropFade, FToggleEnum::Left);
+					FToggleRow(Vars::Visuals::World::NoPropFade, FToggleEnum::Right);
 				} EndSection();
 				if (Section("Effects"))
 				{
@@ -1413,8 +1435,8 @@ void CMenu::MenuVisuals(int iTab)
 					FDropdown(Vars::Visuals::Effects::RagdollEffects);
 
 					SubGroup("Through walls");
-					FToggle(Vars::Visuals::Effects::DrawIconsThroughWalls, FToggleEnum::Left);
-					FToggle(Vars::Visuals::Effects::DrawDamageNumbersThroughWalls, FToggleEnum::Right);
+					FToggleRow(Vars::Visuals::Effects::DrawIconsThroughWalls, FToggleEnum::Left);
+					FToggleRow(Vars::Visuals::Effects::DrawDamageNumbersThroughWalls, FToggleEnum::Right);
 				} EndSection();
 			}
 			/* Column 2 */
@@ -1449,12 +1471,12 @@ void CMenu::MenuVisuals(int iTab)
 						Vars::Colors::SentryRangePlayerInside, Vars::Colors::SentryRangePlayerInsideIgnoreZ);
 
 					SubGroup("Sampling");
-					FSlider(Vars::Visuals::SentryRange::GridStep, FSliderEnum::Left);
-					FSlider(Vars::Visuals::SentryRange::Smoothing, FSliderEnum::Right, !Vars::Visuals::SentryRange::Smoothing[DEFAULT_BIND] ? "off" : "%g%%");
-					FSlider(Vars::Visuals::SentryRange::GroundOffset, FSliderEnum::Left);
-					FSlider(Vars::Visuals::SentryRange::MaxDistance, FSliderEnum::Right, !Vars::Visuals::SentryRange::MaxDistance[DEFAULT_BIND] ? "off" : "%g");
-					FSlider(Vars::Visuals::SentryRange::RefreshInterval, FSliderEnum::Left);
-					FSlider(Vars::Visuals::SentryRange::DisabledAlpha, FSliderEnum::Right);
+					FSliderRow(Vars::Visuals::SentryRange::GridStep, FSliderEnum::Left);
+					FSliderRow(Vars::Visuals::SentryRange::Smoothing, FSliderEnum::Right, !Vars::Visuals::SentryRange::Smoothing[DEFAULT_BIND] ? "off" : "%g%%");
+					FSliderRow(Vars::Visuals::SentryRange::GroundOffset, FSliderEnum::Left);
+					FSliderRow(Vars::Visuals::SentryRange::MaxDistance, FSliderEnum::Right, !Vars::Visuals::SentryRange::MaxDistance[DEFAULT_BIND] ? "off" : "%g");
+					FSliderRow(Vars::Visuals::SentryRange::RefreshInterval, FSliderEnum::Left);
+					FSliderRow(Vars::Visuals::SentryRange::DisabledAlpha, FSliderEnum::Right);
 				} EndSection();
 				if (Vars::Debug::Options.Value)
 				{
@@ -1463,8 +1485,8 @@ void CMenu::MenuVisuals(int iTab)
 						FText("Extra", { 5, 5 });
 						if (FPopupButton("Extra", { 0, -5 }, -8))
 						{
-							FSlider(Vars::Visuals::SentryRange::TraceBudget, FSliderEnum::Left);
-							FSlider(Vars::Visuals::SentryRange::TargetHeight, FSliderEnum::Right);
+							FSliderRow(Vars::Visuals::SentryRange::TraceBudget, FSliderEnum::Left);
+							FSliderRow(Vars::Visuals::SentryRange::TargetHeight, FSliderEnum::Right);
 
 							EndPopup();
 						}
@@ -1490,6 +1512,19 @@ void CMenu::MenuVisuals(int iTab)
 					FColorPicker(Vars::Menu::Theme::Active, FColorPickerEnum::Left);
 					FColorPicker(Vars::Menu::Theme::Inactive, FColorPickerEnum::Right);
 
+					SubGroup("Panel colors");
+					FToggleRow(Vars::Menu::Theme::BackgroundOverride);
+					PushTransparent(!Vars::Menu::Theme::BackgroundOverride.Value);
+					{
+						// Alpha 0 on any of these falls back to the shade derived from Background.
+						FColorPicker(Vars::Menu::Theme::Background0, FColorPickerEnum::Left);
+						FColorPicker(Vars::Menu::Theme::Background0p5, FColorPickerEnum::Right);
+						FColorPicker(Vars::Menu::Theme::Background1, FColorPickerEnum::Left);
+						FColorPicker(Vars::Menu::Theme::Background1p5, FColorPickerEnum::Right);
+						FColorPicker(Vars::Menu::Theme::Background2, FColorPickerEnum::Left);
+					}
+					PopTransparent();
+
 					FSDropdown(Vars::Menu::CheatTitle, FDropdownEnum::Left);
 					FSDropdown(Vars::Menu::CheatTag, FDropdownEnum::Right);
 					FKeybind(Vars::Menu::PrimaryKey, FButtonEnum::Left, { Vars::Menu::SecondaryKey[DEFAULT_BIND], VK_LBUTTON, VK_RBUTTON });
@@ -1502,19 +1537,21 @@ void CMenu::MenuVisuals(int iTab)
 				if (Section("Indicators"))
 				{
 					FDropdown(Vars::Menu::Indicators);
-					if (FSlider(Vars::Menu::Scale))
+					if (FSliderRow(Vars::Menu::Scale))
 						H::Fonts.Reload();
-					if (FToggle(Vars::Menu::CheapText))
+					if (FToggleRow(Vars::Menu::CheapText))
 						H::Fonts.Reload();
+					FToggleRow(Vars::Menu::CompactColumns, FToggleEnum::Left);
+					FToggleRow(Vars::Menu::DescriptionsOnHover, FToggleEnum::Right);
 				} EndSection();
 				if (Section("Crit Bar"))
 				{
 					bool bCritBarOn = SectionToggle(Vars::Visuals::CritBar::Enabled);
 					PushTransparent(!bCritBarOn, true);
-					FToggle(Vars::Visuals::CritBar::Text);
-					FSlider(Vars::Visuals::CritBar::Width, FSliderEnum::Left);
-					FSlider(Vars::Visuals::CritBar::Height, FSliderEnum::Right);
-					FSlider(Vars::Visuals::CritBar::Border, FSliderEnum::Left);
+					FToggleRow(Vars::Visuals::CritBar::Text);
+					FSliderRow(Vars::Visuals::CritBar::Width, FSliderEnum::Left);
+					FSliderRow(Vars::Visuals::CritBar::Height, FSliderEnum::Right);
+					FSliderRow(Vars::Visuals::CritBar::Border, FSliderEnum::Left);
 
 					SubGroup("Colors");
 					FColorPicker(Vars::Visuals::CritBar::CellColor, FColorPickerEnum::Left);
@@ -1574,31 +1611,31 @@ void CMenu::MenuMisc(int iTab)
 					FDropdown(Vars::Misc::Movement::AutoStrafe);
 					PushTransparent(Vars::Misc::Movement::AutoStrafe.Value != Vars::Misc::Movement::AutoStrafeEnum::Directional);
 					{
-						FSlider(Vars::Misc::Movement::AutoStrafeTurnScale, FSliderEnum::Left);
-						FSlider(Vars::Misc::Movement::AutoStrafeMaxDelta, FSliderEnum::Right);
+						FSliderRow(Vars::Misc::Movement::AutoStrafeTurnScale, FSliderEnum::Left);
+						FSliderRow(Vars::Misc::Movement::AutoStrafeMaxDelta, FSliderEnum::Right);
 					}
 					PopTransparent();
 
 					SubGroup("Jumps");
-					FToggle(Vars::Misc::Movement::Bunnyhop, FToggleEnum::Left);
-					FToggle(Vars::Misc::Movement::EdgeJump, FToggleEnum::Right);
-					FToggle(Vars::Misc::Movement::AutoJumpbug, FToggleEnum::Left); // this is unreliable without setups, do not depend on it!
-					FToggle(Vars::Misc::Movement::BreakJump, FToggleEnum::Right);
-					FToggle(Vars::Misc::Movement::AutoRocketJump, FToggleEnum::Left);
-					FToggle(Vars::Misc::Movement::AutoFaNJump, FToggleEnum::Right);
-					FToggle(Vars::Misc::Movement::AutoRevJump, FToggleEnum::Left);
-					FToggle(Vars::Misc::Movement::AutoCTap, FToggleEnum::Right);
+					FToggleRow(Vars::Misc::Movement::Bunnyhop, FToggleEnum::Left);
+					FToggleRow(Vars::Misc::Movement::EdgeJump, FToggleEnum::Right);
+					FToggleRow(Vars::Misc::Movement::AutoJumpbug, FToggleEnum::Left); // this is unreliable without setups, do not depend on it!
+					FToggleRow(Vars::Misc::Movement::BreakJump, FToggleEnum::Right);
+					FToggleRow(Vars::Misc::Movement::AutoRocketJump, FToggleEnum::Left);
+					FToggleRow(Vars::Misc::Movement::AutoFaNJump, FToggleEnum::Right);
+					FToggleRow(Vars::Misc::Movement::AutoRevJump, FToggleEnum::Left);
+					FToggleRow(Vars::Misc::Movement::AutoCTap, FToggleEnum::Right);
 
 					SubGroup("Speed");
-					FToggle(Vars::Misc::Movement::FastStop, FToggleEnum::Left);
-					FToggle(Vars::Misc::Movement::FastAccelerate, FToggleEnum::Right);
-					FToggle(Vars::Misc::Movement::DuckSpeed, FToggleEnum::Left);
-					FToggle(Vars::Misc::Movement::AirCrouch, FToggleEnum::Right);
+					FToggleRow(Vars::Misc::Movement::FastStop, FToggleEnum::Left);
+					FToggleRow(Vars::Misc::Movement::FastAccelerate, FToggleEnum::Right);
+					FToggleRow(Vars::Misc::Movement::DuckSpeed, FToggleEnum::Left);
+					FToggleRow(Vars::Misc::Movement::AirCrouch, FToggleEnum::Right);
 
 					SubGroup("Misc");
-					FToggle(Vars::Misc::Movement::ShieldTurnRate, FToggleEnum::Left);
-					FToggle(Vars::Misc::Movement::NoPush, FToggleEnum::Right);
-					FToggle(Vars::Misc::Movement::MovementLock, FToggleEnum::Left);
+					FToggleRow(Vars::Misc::Movement::ShieldTurnRate, FToggleEnum::Left);
+					FToggleRow(Vars::Misc::Movement::NoPush, FToggleEnum::Right);
+					FToggleRow(Vars::Misc::Movement::MovementLock, FToggleEnum::Left);
 				} EndSection();
 				if (Vars::Debug::Options.Value)
 				{
@@ -1607,12 +1644,12 @@ void CMenu::MenuMisc(int iTab)
 						FText("Debug", { 5, 5 });
 						if (FPopupButton("Debug", { 0, -5 }))
 						{
-							FSlider(Vars::Misc::Movement::AutoRocketJumpChokeGrounded, FToggleEnum::Left);
-							FSlider(Vars::Misc::Movement::AutoRocketJumpChokeAir, FToggleEnum::Right);
-							FSlider(Vars::Misc::Movement::AutoRocketJumpSkipGround, FToggleEnum::Left);
-							FSlider(Vars::Misc::Movement::AutoRocketJumpSkipAir, FToggleEnum::Right);
-							FSlider(Vars::Misc::Movement::AutoRocketJumpTimingOffset, FToggleEnum::Left);
-							FSlider(Vars::Misc::Movement::AutoRocketJumpApplyAbove, FToggleEnum::Right);
+							FSliderRow(Vars::Misc::Movement::AutoRocketJumpChokeGrounded, FToggleEnum::Left);
+							FSliderRow(Vars::Misc::Movement::AutoRocketJumpChokeAir, FToggleEnum::Right);
+							FSliderRow(Vars::Misc::Movement::AutoRocketJumpSkipGround, FToggleEnum::Left);
+							FSliderRow(Vars::Misc::Movement::AutoRocketJumpSkipAir, FToggleEnum::Right);
+							FSliderRow(Vars::Misc::Movement::AutoRocketJumpTimingOffset, FToggleEnum::Left);
+							FSliderRow(Vars::Misc::Movement::AutoRocketJumpApplyAbove, FToggleEnum::Right);
 
 							EndPopup();
 						}
@@ -1626,21 +1663,21 @@ void CMenu::MenuMisc(int iTab)
 				{
 					SubGroup("Protection", true);
 					FDropdown(Vars::Misc::Automation::AntiBackstab); // pitch/fake _might_ slip up some auto backstabs
-					FToggle(Vars::Misc::Automation::AntiAutobalance, FToggleEnum::Left);
-					FToggle(Vars::Misc::Automation::AntiAFK, FToggleEnum::Right);
+					FToggleRow(Vars::Misc::Automation::AntiAutobalance, FToggleEnum::Left);
+					FToggleRow(Vars::Misc::Automation::AntiAFK, FToggleEnum::Right);
 
 					SubGroup("Auto actions");
-					FToggle(Vars::Misc::Automation::TauntControl, FToggleEnum::Left);
-					FToggle(Vars::Misc::Automation::KartControl, FToggleEnum::Right);
-					FToggle(Vars::Misc::Automation::AutoF2Ignored, FToggleEnum::Left);
-					FToggle(Vars::Misc::Automation::AutoF1Priority, FToggleEnum::Right);
-					FToggle(Vars::Misc::Automation::AcceptItemDrops);
+					FToggleRow(Vars::Misc::Automation::TauntControl, FToggleEnum::Left);
+					FToggleRow(Vars::Misc::Automation::KartControl, FToggleEnum::Right);
+					FToggleRow(Vars::Misc::Automation::AutoF2Ignored, FToggleEnum::Left);
+					FToggleRow(Vars::Misc::Automation::AutoF1Priority, FToggleEnum::Right);
+					FToggleRow(Vars::Misc::Automation::AcceptItemDrops);
 				} EndSection();
 				if (Section("Mann vs. Machine", 8))
 				{
-					FToggle(Vars::Misc::MannVsMachine::InstantRespawn, FToggleEnum::Left);
-					FToggle(Vars::Misc::MannVsMachine::InstantRevive, FToggleEnum::Right);
-					FToggle(Vars::Misc::MannVsMachine::AllowInspect);
+					FToggleRow(Vars::Misc::MannVsMachine::InstantRespawn, FToggleEnum::Left);
+					FToggleRow(Vars::Misc::MannVsMachine::InstantRevive, FToggleEnum::Right);
+					FToggleRow(Vars::Misc::MannVsMachine::AllowInspect);
 				} EndSection();
 			}
 			EndTable();
@@ -1657,16 +1694,16 @@ void CMenu::MenuMisc(int iTab)
 			{
 				if (Section("Performance"))
 				{
-					FToggle(Vars::Misc::Game::SetupBonesOptimization, FToggleEnum::Left);
-					FToggle(Vars::Misc::Game::AttributeCacheOptimization, FToggleEnum::Right);
-					FToggle(Vars::Misc::Game::OriginalChamsOptimization, FToggleEnum::Left);
-					FSlider(Vars::Misc::Game::CosmeticCullDistance, FSliderEnum::Right, !Vars::Misc::Game::CosmeticCullDistance[DEFAULT_BIND] ? "off" : "%d");
-					FSlider(Vars::Misc::Game::GlowResolution);
+					FToggleRow(Vars::Misc::Game::SetupBonesOptimization, FToggleEnum::Left);
+					FToggleRow(Vars::Misc::Game::AttributeCacheOptimization, FToggleEnum::Right);
+					FToggleRow(Vars::Misc::Game::OriginalChamsOptimization, FToggleEnum::Left);
+					FSliderRow(Vars::Misc::Game::CosmeticCullDistance, FSliderEnum::Right, !Vars::Misc::Game::CosmeticCullDistance[DEFAULT_BIND] ? "off" : "%d");
+					FSliderRow(Vars::Misc::Game::GlowResolution);
 				} EndSection();
 				if (Section("Network", 8))
 				{
-					FToggle(Vars::Misc::Game::NetworkFix, FToggleEnum::Left);
-					FToggle(Vars::Misc::Game::AntiCheatCompatibility, FToggleEnum::Right);
+					FToggleRow(Vars::Misc::Game::NetworkFix, FToggleEnum::Left);
+					FToggleRow(Vars::Misc::Game::AntiCheatCompatibility, FToggleEnum::Right);
 				} EndSection();
 				if (Vars::Debug::Options.Value)
 				{
@@ -1675,7 +1712,7 @@ void CMenu::MenuMisc(int iTab)
 						FText("Debug", { 5, 5 });
 						if (FPopupButton("Debug", { 0, -5 }))
 						{
-							FToggle(Vars::Misc::Game::AntiCheatCritHack);
+							FToggleRow(Vars::Misc::Game::AntiCheatCritHack);
 
 							EndPopup();
 						}
@@ -1687,16 +1724,16 @@ void CMenu::MenuMisc(int iTab)
 			{
 				if (Section("Exploits", 8))
 				{
-					FToggle(Vars::Misc::Exploits::PureBypass, FToggleEnum::Left);
-					FToggle(Vars::Misc::Exploits::CheatsBypass, FToggleEnum::Right);
-					FToggle(Vars::Misc::Exploits::UnlockCVars, FToggleEnum::Left);
-					FToggle(Vars::Misc::Exploits::EquipRegionUnlock, FToggleEnum::Right);
-					FToggle(Vars::Misc::Exploits::BackpackExpander, FToggleEnum::Left);
-					FToggle(Vars::Misc::Exploits::NoisemakerSpam, FToggleEnum::Right);
-					FToggle(Vars::Misc::Exploits::PingReducer, FToggleEnum::Left);
+					FToggleRow(Vars::Misc::Exploits::PureBypass, FToggleEnum::Left);
+					FToggleRow(Vars::Misc::Exploits::CheatsBypass, FToggleEnum::Right);
+					FToggleRow(Vars::Misc::Exploits::UnlockCVars, FToggleEnum::Left);
+					FToggleRow(Vars::Misc::Exploits::EquipRegionUnlock, FToggleEnum::Right);
+					FToggleRow(Vars::Misc::Exploits::BackpackExpander, FToggleEnum::Left);
+					FToggleRow(Vars::Misc::Exploits::NoisemakerSpam, FToggleEnum::Right);
+					FToggleRow(Vars::Misc::Exploits::PingReducer, FToggleEnum::Left);
 					PushTransparent(!Vars::Misc::Exploits::PingReducer.Value);
 					{
-						FSlider(Vars::Misc::Exploits::PingTarget, FSliderEnum::Right);
+						FSliderRow(Vars::Misc::Exploits::PingTarget, FSliderEnum::Right);
 					}
 					PopTransparent();
 				} EndSection();
@@ -1716,8 +1753,8 @@ void CMenu::MenuMisc(int iTab)
 				if (Section("Queueing"))
 				{
 					FDropdown(Vars::Misc::Queueing::ForceRegions);
-					FToggle(Vars::Misc::Queueing::ExtendQueue, FToggleEnum::Left);
-					FToggle(Vars::Misc::Queueing::AutoCasualQueue, FToggleEnum::Right);
+					FToggleRow(Vars::Misc::Queueing::ExtendQueue, FToggleEnum::Left);
+					FToggleRow(Vars::Misc::Queueing::AutoCasualQueue, FToggleEnum::Right);
 				} EndSection();
 			}
 			/* Column 2 */
@@ -1726,9 +1763,9 @@ void CMenu::MenuMisc(int iTab)
 				if (Section("Sound"))
 				{
 					FDropdown(Vars::Misc::Sound::Block);
-					FToggle(Vars::Misc::Sound::HitsoundAlways, FToggleEnum::Left);
-					FToggle(Vars::Misc::Sound::RemoveDSP, FToggleEnum::Right);
-					FToggle(Vars::Misc::Sound::GiantWeaponSounds);
+					FToggleRow(Vars::Misc::Sound::HitsoundAlways, FToggleEnum::Left);
+					FToggleRow(Vars::Misc::Sound::RemoveDSP, FToggleEnum::Right);
+					FToggleRow(Vars::Misc::Sound::GiantWeaponSounds);
 				} EndSection();
 			}
 			EndTable();
@@ -2647,26 +2684,26 @@ void CMenu::MenuLogs(int iTab)
 				{
 					FDropdown(Vars::Logging::Logs);
 					FDropdown(Vars::Logging::NotificationPosition);
-					FSlider(Vars::Logging::NotificationTime);
-					FSlider(Vars::Logging::MaxNotifications);
+					FSliderRow(Vars::Logging::NotificationTime);
+					FSliderRow(Vars::Logging::MaxNotifications);
 				} EndSection();
 				if (Section("Cheat Detection"))
 				{
 					FDropdown(Vars::CheatDetection::Methods);
 					PushTransparent(!Vars::CheatDetection::DetectionsRequired.Value);
 					{
-						FSlider(Vars::CheatDetection::DetectionsRequired);
+						FSliderRow(Vars::CheatDetection::DetectionsRequired);
 					}
 					PopTransparent();
 					PushTransparent(!(Vars::CheatDetection::Methods.Value & Vars::CheatDetection::MethodsEnum::PacketChoking));
 					{
-						FSlider(Vars::CheatDetection::MinChoking);
+						FSliderRow(Vars::CheatDetection::MinChoking);
 					}
 					PopTransparent();
 					PushTransparent(!(Vars::CheatDetection::Methods.Value & Vars::CheatDetection::MethodsEnum::AimFlicking));
 					{
-						FSlider(Vars::CheatDetection::MinFlick, FSliderEnum::Left);
-						FSlider(Vars::CheatDetection::MaxNoise, FSliderEnum::Right);
+						FSliderRow(Vars::CheatDetection::MinFlick, FSliderEnum::Left);
+						FSliderRow(Vars::CheatDetection::MaxNoise, FSliderEnum::Right);
 					}
 					PopTransparent();
 				} EndSection();
@@ -3009,17 +3046,17 @@ void CMenu::MenuSettings(int iTab)
 
 			if (BeginWidgetTable(0, vTable))
 			{
-				FToggle(Vars::Menu::BindWindow);
+				FToggleRow(Vars::Menu::BindWindow);
 			} EndChild();
 
 			if (BeginWidgetTable(1, vTable))
 			{
-				FToggle(Vars::Menu::BindWindowTitle);
+				FToggleRow(Vars::Menu::BindWindowTitle);
 			} EndChild();
 
 			if (BeginWidgetTable(2, vTable))
 			{
-				FToggle(Vars::Menu::MenuShowsBinds);
+				FToggleRow(Vars::Menu::MenuShowsBinds);
 			} EndChild();
 		} EndSection();
 		if (Section("Binds"))
@@ -3642,17 +3679,17 @@ void CMenu::MenuSettings(int iTab)
 		} EndSection();
 		if (Section("Debug", 8))
 		{
-			FToggle(Vars::Debug::Info, FToggleEnum::Left);
-			FToggle(Vars::Debug::Logging, FToggleEnum::Right);
-			FToggle(Vars::Debug::Options, FToggleEnum::Left);
-			FToggle(Vars::Debug::CrashLogging, FToggleEnum::Right);
+			FToggleRow(Vars::Debug::Info, FToggleEnum::Left);
+			FToggleRow(Vars::Debug::Logging, FToggleEnum::Right);
+			FToggleRow(Vars::Debug::Options, FToggleEnum::Left);
+			FToggleRow(Vars::Debug::CrashLogging, FToggleEnum::Right);
 
 #ifdef DEBUG_TRACES
-			FToggle(Vars::Debug::VisualizeTraces, FToggleEnum::Left);
-			FToggle(Vars::Debug::VisualizeTraceHits, FToggleEnum::Right);
+			FToggleRow(Vars::Debug::VisualizeTraces, FToggleEnum::Left);
+			FToggleRow(Vars::Debug::VisualizeTraceHits, FToggleEnum::Right);
 #endif
 
-			FToggle(Vars::Debug::AutoVprof);
+			FToggleRow(Vars::Debug::AutoVprof);
 			if (Vars::Debug::AutoVprof.Value)
 				FText(std::format("Reports -> Amalgam/vprof/  |  build {}", F::AutoVprof.GetBuildID()).c_str());
 		} EndSection();
@@ -3660,7 +3697,7 @@ void CMenu::MenuSettings(int iTab)
 		{
 			if (Section("##Debug"))
 			{
-				FToggle(Vars::Debug::DrawHitboxes);
+				FToggleRow(Vars::Debug::DrawHitboxes);
 
 				if (FButton("Restore visuals", FButtonEnum::Left))
 				{
@@ -3776,8 +3813,8 @@ void CMenu::MenuSettings(int iTab)
 		{
 			FDropdown(Vars::World::Faces, FDropdownEnum::Left);
 			FDropdown(Vars::World::Draw, FDropdownEnum::Right);
-			FSlider(Vars::World::Offset, FSliderEnum::Left);
-			FSlider(Vars::World::Resize, FSliderEnum::Right);
+			FSliderRow(Vars::World::Offset, FSliderEnum::Left);
+			FSliderRow(Vars::World::Resize, FSliderEnum::Right);
 			FColorPicker(Vars::World::BoxBrush, FColorPickerEnum::Left);
 			FColorPicker(Vars::World::PlaneBrush, FColorPickerEnum::Right);
 			FColorPicker(Vars::World::Displacement, FColorPickerEnum::Left);

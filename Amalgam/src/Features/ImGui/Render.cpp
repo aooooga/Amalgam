@@ -66,6 +66,13 @@ void CRender::LoadColors()
 					  ^ uPack(Vars::Menu::Theme::Background.Value) * 40503u
 					  ^ uPack(Vars::Menu::Theme::Inactive.Value) * 131u
 					  ^ uPack(Vars::Menu::Theme::Active.Value);
+		// the per-step panel overrides feed the same derived table, so they must
+		// invalidate this cache too or edits won't take until another colour moves
+		uNew = uNew * 16777619u ^ uint32_t(Vars::Menu::Theme::BackgroundOverride.Value);
+		for (auto* pOverride : { &Vars::Menu::Theme::Background0, &Vars::Menu::Theme::Background0p5,
+								 &Vars::Menu::Theme::Background1, &Vars::Menu::Theme::Background1p5,
+								 &Vars::Menu::Theme::Background2 })
+			uNew = uNew * 16777619u ^ uPack(pOverride->Value);
 		static uint32_t uCache = 0;
 		static bool bFirst = true;
 		if (!bFirst && uNew == uCache)
@@ -75,12 +82,22 @@ void CRender::LoadColors()
 	}
 
 	Accent = ColorByteToFloat(Vars::Menu::Theme::Accent.Value);
-	Background0 = ColorByteToFloat(Vars::Menu::Theme::Background.Value);
-	Background0p5 = ColorByteToFloat(Vars::Menu::Theme::Background.Value.Lerp({ 127, 127, 127 }, 0.5f / 9, LerpEnum::NoAlpha));
-	Background1 = ColorByteToFloat(Vars::Menu::Theme::Background.Value.Lerp({ 127, 127, 127 }, 1.f / 9, LerpEnum::NoAlpha));
-	Background1p5 = ColorByteToFloat(Vars::Menu::Theme::Background.Value.Lerp({ 127, 127, 127 }, 1.5f / 9, LerpEnum::NoAlpha));
+	// Each ramp step is the Lerp-derived shade off Background unless the user has
+	// enabled overrides and given that step a non-zero alpha.
+	auto Ramp = [](ConfigVar<Color_t>& tOverride, float flStep) -> ImColor
+	{
+		if (Vars::Menu::Theme::BackgroundOverride.Value && tOverride.Value.a)
+			return ColorByteToFloat(tOverride.Value);
+		return ColorByteToFloat(flStep == 0.f
+			? Vars::Menu::Theme::Background.Value
+			: Vars::Menu::Theme::Background.Value.Lerp({ 127, 127, 127 }, flStep / 9, LerpEnum::NoAlpha));
+	};
+	Background0 = Ramp(Vars::Menu::Theme::Background0, 0.f);
+	Background0p5 = Ramp(Vars::Menu::Theme::Background0p5, 0.5f);
+	Background1 = Ramp(Vars::Menu::Theme::Background1, 1.f);
+	Background1p5 = Ramp(Vars::Menu::Theme::Background1p5, 1.5f);
 	Background1p5L = { Background1p5.Value.x * 1.1f, Background1p5.Value.y * 1.1f, Background1p5.Value.z * 1.1f, Background1p5.Value.w };
-	Background2 = ColorByteToFloat(Vars::Menu::Theme::Background.Value.Lerp({ 127, 127, 127 }, 2.f / 9, LerpEnum::NoAlpha));
+	Background2 = Ramp(Vars::Menu::Theme::Background2, 2.f);
 	Inactive = ColorByteToFloat(Vars::Menu::Theme::Inactive.Value);
 	Active = ColorByteToFloat(Vars::Menu::Theme::Active.Value);
 

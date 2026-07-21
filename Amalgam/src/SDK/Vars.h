@@ -191,9 +191,21 @@ NAMESPACE_BEGIN(Vars)
 		CVar(Scale, "Scale", 1.f, NOBIND | SLIDER_MIN | SLIDER_PRECISION | SLIDER_NOAUTOUPDATE, 0.75f, 2.f, 0.25f);
 		CVar(CheapText, "Cheap text", false, NOBIND);
 
+		// Design 3a — menu content-layout tweaks (UI only)
+		CVar(CompactColumns, "Compact columns", true, NOBIND);
+		CVar(DescriptionsOnHover, "Descriptions on hover", true, NOBIND);
+
 		NAMESPACE_BEGIN(Theme)
 			CVar(Accent, "Accent color", Color_t(175, 150, 255, 255), VISUAL);
 			CVar(Background, "Background color", Color_t(0, 0, 0, 250), VISUAL);
+			// Per-step overrides for the derived background ramp. Alpha 0 = "unset",
+			// fall back to the Lerp-derived shade off Background.
+			CVar(BackgroundOverride, "Override panel colors", false, NOBIND);
+			CVar(Background0, "Window background", Color_t(0, 0, 0, 0), VISUAL);
+			CVar(Background0p5, "Panel background", Color_t(0, 0, 0, 0), VISUAL);
+			CVar(Background1, "Panel header", Color_t(0, 0, 0, 0), VISUAL);
+			CVar(Background1p5, "Control background", Color_t(0, 0, 0, 0), VISUAL);
+			CVar(Background2, "Border / divider", Color_t(0, 0, 0, 0), VISUAL);
 			CVar(Active, "Active color", Color_t(255, 255, 255, 255), VISUAL);
 			CVar(Inactive, "Inactive color", Color_t(150, 150, 150, 255), VISUAL);
 		NAMESPACE_END(Theme)

@@ -110,17 +110,25 @@ void CMenu::DrawMenu()
 		float flSize = H::Draw.Scale(72);        // total height of the nav band
 		float flTitleH = H::Draw.Scale(36);      // upper band (title + search)
 		float flInset = H::Draw.Scale();
-		float flTitleW = H::Draw.Scale(180);     // left title/bind block width
+		// Title block and search box shrink as the window narrows so the tab row keeps
+		// usable width; both are clamped so they stay legible. Recomputed every frame,
+		// so resizing the menu reflows the bar instead of pushing tabs off the edge.
+		float flTitleW = std::clamp(vWindowSize.x * 0.20f, H::Draw.Scale(96), H::Draw.Scale(200));
+		float flSearchW = std::clamp(vWindowSize.x * 0.18f, H::Draw.Scale(90), H::Draw.Scale(170));
 
 		Bind_t tBind;
 		if (!F::Binds.GetBind(CurrentBind, &tBind))
 			CurrentBind = DEFAULT_BIND;
 
-		// nav band background + the divider under it
-		pDrawList->AddRectFilled(vDrawPos, vDrawPos + ImVec2(vWindowSize.x, flSize - flInset), F::Render.Background0, H::Draw.Scale(3), ImDrawFlags_RoundCornersTop);
-		pDrawList->AddRectFilled(vDrawPos + ImVec2(0, flSize - flInset), vDrawPos + ImVec2(vWindowSize.x, flSize), F::Render.Background2);
+		// Whole-window background: nav band on top, page body below, with the border
+		// tone between them. This paints the page area too -- without it every panel
+		// renders over nothing and the menu reads as transparent.
+		pDrawList->PushClipRect({ 0, 0 }, { GetIO().DisplaySize.x, GetIO().DisplaySize.y }, false);
+		RenderTwoToneBackground(flSize, F::Render.NavBackground, F::Render.WindowBackground, F::Render.NavDivider);
+		pDrawList->PopClipRect();
+
 		// divider between the title band and the tab row
-		pDrawList->AddRectFilled(vDrawPos + ImVec2(0, flTitleH - flInset), vDrawPos + ImVec2(vWindowSize.x, flTitleH), F::Render.Background2);
+		pDrawList->AddRectFilled(vDrawPos + ImVec2(flInset, flTitleH - flInset), vDrawPos + ImVec2(vWindowSize.x - flInset, flTitleH), F::Render.NavDivider);
 
 		if (CurrentBind != DEFAULT_BIND) // bind
 		{
@@ -145,7 +153,6 @@ void CMenu::DrawMenu()
 
 		// Search sits at the right end of the title band.
 		static std::string sSearch = "";
-		float flSearchW = H::Draw.Scale(150);
 		SetCursorPos({ vWindowSize.x - flSearchW - H::Draw.Scale(8), H::Draw.Scale(6) });
 		FInputText("Search...", sSearch, flSearchW - H::Draw.Scale(17), ImGuiInputTextFlags_None);
 		bool bSearch = !sSearch.empty();
@@ -157,14 +164,15 @@ void CMenu::DrawMenu()
 
 		// Main tabs occupy the title band between the title block and the search box;
 		// sub-tabs get the lower band, full width.
-		float flMainX = flTitleW;
-		float flMainW = vWindowSize.x - flTitleW - flSearchW - H::Draw.Scale(16);
+		// NOTE: with FTabsEnum::Fit, vSize.x is per-tab PADDING added to the measured
+		// text width -- not the width of the whole row. Passing the row width here
+		// makes every tab that wide and pushes all but the first off screen.
 		PushFont(F::Render.FontBold);
 		FTabs(
 			std::vector<const char*>{ "AIMBOT", "HVH", "VISUALS", "MISC", "LOGS", "SETTINGS" },
 			&iTab,
-			{ flMainW, flTitleH - H::Draw.Scale(6) },
-			{ flMainX, H::Draw.Scale(3) },
+			{ H::Draw.Scale(26), flTitleH - H::Draw.Scale(6) },
+			{ flTitleW, H::Draw.Scale(3) },
 			FTabsEnum::Horizontal | FTabsEnum::HorizontalIcons | FTabsEnum::AlignCenter | FTabsEnum::BarBottom | FTabsEnum::Fit,
 			std::vector<const char*>{ ICON_MD_PERSON, ICON_MD_BOLT, ICON_MD_VISIBILITY, ICON_MD_ARTICLE, ICON_MD_IMPORT_CONTACTS, ICON_MD_SETTINGS },
 			{ H::Draw.Scale(8), 0 }, {},
@@ -187,10 +195,10 @@ void CMenu::DrawMenu()
 			FTabs(
 				vSubTabs[iTab],
 				pSubTabs[iTab],
-				{ vWindowSize.x - H::Draw.Scale(16), flSize - flTitleH - H::Draw.Scale(6) },
-				{ H::Draw.Scale(8), flTitleH + H::Draw.Scale(3) },
-				FTabsEnum::Horizontal | FTabsEnum::AlignLeft | FTabsEnum::BarBottom,
-				{}, { H::Draw.Scale(8), 0 }, {}, {}, {}
+				{ H::Draw.Scale(20), flSize - flTitleH - H::Draw.Scale(6) },
+				{ flTitleW, flTitleH + H::Draw.Scale(3) },
+				FTabsEnum::Horizontal | FTabsEnum::AlignCenter | FTabsEnum::BarBottom | FTabsEnum::Fit,
+				{}, {}, {}, {}, {}
 			);
 		}
 		PopFont();
@@ -1358,12 +1366,20 @@ void CMenu::MenuVisuals(int iTab)
 						&Vars::Visuals::Viewmodel::CrosshairAim,
 						&Vars::Visuals::Viewmodel::ViewmodelAim,
 					});
-					FSliderRow(Vars::Visuals::Viewmodel::OffsetX);
-					FSliderRow(Vars::Visuals::Viewmodel::Pitch);
-					FSliderRow(Vars::Visuals::Viewmodel::OffsetY);
-					FSliderRow(Vars::Visuals::Viewmodel::Yaw);
-					FSliderRow(Vars::Visuals::Viewmodel::OffsetZ);
-					FSliderRow(Vars::Visuals::Viewmodel::Roll);
+					// Offsets and rotations each read as a vertical X/Y/Z run; auto-pairing
+					// would interleave them (OffsetX beside Pitch) and break the grouping.
+					{
+						StackedSliders tStacked;
+						SubGroup("Offset");
+						FSliderRow(Vars::Visuals::Viewmodel::OffsetX);
+						FSliderRow(Vars::Visuals::Viewmodel::OffsetY);
+						FSliderRow(Vars::Visuals::Viewmodel::OffsetZ);
+
+						SubGroup("Rotation");
+						FSliderRow(Vars::Visuals::Viewmodel::Pitch);
+						FSliderRow(Vars::Visuals::Viewmodel::Yaw);
+						FSliderRow(Vars::Visuals::Viewmodel::Roll);
+					}
 
 					SubGroup("Sway");
 					PushTransparent(!Vars::Visuals::Viewmodel::SwayScale.Value || !Vars::Visuals::Viewmodel::SwayInterp.Value);
@@ -1450,9 +1466,26 @@ void CMenu::MenuVisuals(int iTab)
 					FDropdown(Vars::Visuals::SentryRange::Style, FDropdownEnum::Right, -10);
 
 					SubGroup("Colors", true);
-					// one labeled row per category; per row: fill, fill through-wall,
-					// edge, edge through-wall (hover a swatch for its exact name)
+					// A 4-column swatch grid: rows are the target category, columns are
+					// fill / fill-through-wall / edge / edge-through-wall. The column
+					// header row is what makes the swatches self-describing -- without it
+					// they're four anonymous squares.
 					const auto vSwatch = ImVec2{ H::Draw.Scale(13), H::Draw.Scale(13) };
+					const float flLabelW = H::Draw.Scale(52);
+					const float flCol = H::Draw.Scale(23);
+					{
+						ImVec2 vHdr = GetDrawPos() + GetCursorPos();
+						PushFont(F::Render.FontSmall);
+						const char* szCols[] = { "FILL", "FILL Z", "EDGE", "EDGE Z" };
+						for (int i = 0; i < 4; i++)
+						{
+							// centre each caption over its swatch column
+							float flX = vHdr.x + flLabelW + flCol * i + (vSwatch.x - CalcTextSize(szCols[i]).x) / 2.f;
+							GetWindowDrawList()->AddText({ flX, vHdr.y }, F::Render.TextDim, szCols[i]);
+						}
+						PopFont();
+						DebugDummy({ 0, H::Draw.Scale(14) });
+					}
 					auto ColorRow = [&](const char* sLabel, auto& tFill, auto& tFillIgnoreZ, auto& tEdge, auto& tEdgeIgnoreZ)
 					{
 						FText(sLabel, { 5, 4 });
@@ -1500,10 +1533,9 @@ void CMenu::MenuVisuals(int iTab)
 	// Menu
 	case 3:
 	{
-		if (BeginTable("MenuTable", 2))
+		// Settings is promoted out of the table: it carries the full theme colour list,
+		// which needs the whole window width to lay its pickers out two-up.
 		{
-			/* Column 1 */
-			TableNextColumn();
 			{
 				if (Section("Settings", 8))
 				{
@@ -1512,11 +1544,12 @@ void CMenu::MenuVisuals(int iTab)
 					FColorPicker(Vars::Menu::Theme::Active, FColorPickerEnum::Left);
 					FColorPicker(Vars::Menu::Theme::Inactive, FColorPickerEnum::Right);
 
-					SubGroup("Panel colors");
+					// Every picker below drives exactly one surface; leaving one at alpha 0
+					// keeps its derived value.
+					SubGroup("Base ramp");
 					FToggleRow(Vars::Menu::Theme::BackgroundOverride);
 					PushTransparent(!Vars::Menu::Theme::BackgroundOverride.Value);
 					{
-						// Alpha 0 on any of these falls back to the shade derived from Background.
 						FColorPicker(Vars::Menu::Theme::Background0, FColorPickerEnum::Left);
 						FColorPicker(Vars::Menu::Theme::Background0p5, FColorPickerEnum::Right);
 						FColorPicker(Vars::Menu::Theme::Background1, FColorPickerEnum::Left);
@@ -1525,13 +1558,72 @@ void CMenu::MenuVisuals(int iTab)
 					}
 					PopTransparent();
 
+					SubGroup("Window");
+					FColorPicker(Vars::Menu::Theme::WindowBackground, FColorPickerEnum::Left);
+					FColorPicker(Vars::Menu::Theme::NavBackground, FColorPickerEnum::Right);
+					FColorPicker(Vars::Menu::Theme::NavDivider, FColorPickerEnum::Left);
+
+					SubGroup("Panels");
+					FColorPicker(Vars::Menu::Theme::PanelBackground, FColorPickerEnum::Left);
+					FColorPicker(Vars::Menu::Theme::PanelHeader, FColorPickerEnum::Right);
+					FColorPicker(Vars::Menu::Theme::PanelBorder, FColorPickerEnum::Left);
+					FColorPicker(Vars::Menu::Theme::PanelAccent, FColorPickerEnum::Right);
+					FColorPicker(Vars::Menu::Theme::PanelTitle, FColorPickerEnum::Left);
+					FColorPicker(Vars::Menu::Theme::RowDivider, FColorPickerEnum::Right);
+					FColorPicker(Vars::Menu::Theme::SubGroupText, FColorPickerEnum::Left);
+					FColorPicker(Vars::Menu::Theme::SubGroupRule, FColorPickerEnum::Right);
+
+					SubGroup("Collapsed panels");
+					FColorPicker(Vars::Menu::Theme::PanelCollapsedHeader, FColorPickerEnum::Left);
+					FColorPicker(Vars::Menu::Theme::PanelCollapsedBackground, FColorPickerEnum::Right);
+					FColorPicker(Vars::Menu::Theme::PanelCollapsedTitle, FColorPickerEnum::Left);
+
+					SubGroup("Text");
+					FColorPicker(Vars::Menu::Theme::TextDim, FColorPickerEnum::Left);
+					FColorPicker(Vars::Menu::Theme::TextDisabled, FColorPickerEnum::Right);
+
+					SubGroup("Accent variants");
+					FToggleRow(Vars::Menu::Theme::AccentOverride);
+					PushTransparent(!Vars::Menu::Theme::AccentOverride.Value);
+					{
+						FColorPicker(Vars::Menu::Theme::AccentMuted, FColorPickerEnum::Left);
+						FColorPicker(Vars::Menu::Theme::AccentWashed, FColorPickerEnum::Right);
+					}
+					PopTransparent();
+
+					SubGroup("Controls");
+					FColorPicker(Vars::Menu::Theme::ControlBackground, FColorPickerEnum::Left);
+					FColorPicker(Vars::Menu::Theme::ControlHovered, FColorPickerEnum::Right);
+					FColorPicker(Vars::Menu::Theme::SwitchOn, FColorPickerEnum::Left);
+					FColorPicker(Vars::Menu::Theme::SwitchOff, FColorPickerEnum::Right);
+					FColorPicker(Vars::Menu::Theme::SwitchKnobOn, FColorPickerEnum::Left);
+					FColorPicker(Vars::Menu::Theme::SwitchKnobOff, FColorPickerEnum::Right);
+					FColorPicker(Vars::Menu::Theme::SliderFill, FColorPickerEnum::Left);
+					FColorPicker(Vars::Menu::Theme::SliderTrack, FColorPickerEnum::Right);
+					FColorPicker(Vars::Menu::Theme::SliderKnob, FColorPickerEnum::Left);
+					FColorPicker(Vars::Menu::Theme::SliderValueText, FColorPickerEnum::Right);
+
+					SubGroup("Tabs");
+					FColorPicker(Vars::Menu::Theme::TabActive, FColorPickerEnum::Left);
+					FColorPicker(Vars::Menu::Theme::TabInactive, FColorPickerEnum::Right);
+					FColorPicker(Vars::Menu::Theme::TabBar, FColorPickerEnum::Left);
+
+					SubGroup("Popups");
+					FColorPicker(Vars::Menu::Theme::PopupBackground, FColorPickerEnum::Left);
+					FColorPicker(Vars::Menu::Theme::TooltipBackground, FColorPickerEnum::Right);
+					FColorPicker(Vars::Menu::Theme::TooltipText, FColorPickerEnum::Left);
+
 					FSDropdown(Vars::Menu::CheatTitle, FDropdownEnum::Left);
 					FSDropdown(Vars::Menu::CheatTag, FDropdownEnum::Right);
 					FKeybind(Vars::Menu::PrimaryKey, FButtonEnum::Left, { Vars::Menu::SecondaryKey[DEFAULT_BIND], VK_LBUTTON, VK_RBUTTON });
 					FKeybind(Vars::Menu::SecondaryKey, FButtonEnum::Right | FButtonEnum::SameLine, { Vars::Menu::PrimaryKey[DEFAULT_BIND], VK_LBUTTON, VK_RBUTTON });
 				} EndSection();
 			}
-			/* Column 2 */
+		}
+
+		if (BeginTable("MenuTable", 2))
+		{
+			/* Column 1 */
 			TableNextColumn();
 			{
 				if (Section("Indicators"))
@@ -1544,6 +1636,10 @@ void CMenu::MenuVisuals(int iTab)
 					FToggleRow(Vars::Menu::CompactColumns, FToggleEnum::Left);
 					FToggleRow(Vars::Menu::DescriptionsOnHover, FToggleEnum::Right);
 				} EndSection();
+			}
+			/* Column 2 */
+			TableNextColumn();
+			{
 				if (Section("Crit Bar"))
 				{
 					bool bCritBarOn = SectionToggle(Vars::Visuals::CritBar::Enabled);

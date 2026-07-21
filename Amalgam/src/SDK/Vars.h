@@ -198,14 +198,68 @@ NAMESPACE_BEGIN(Vars)
 		NAMESPACE_BEGIN(Theme)
 			CVar(Accent, "Accent color", Color_t(175, 150, 255, 255), VISUAL);
 			CVar(Background, "Background color", Color_t(0, 0, 0, 250), VISUAL);
-			// Per-step overrides for the derived background ramp. Alpha 0 = "unset",
-			// fall back to the Lerp-derived shade off Background.
-			CVar(BackgroundOverride, "Override panel colors", false, NOBIND);
-			CVar(Background0, "Window background", Color_t(0, 0, 0, 0), VISUAL);
-			CVar(Background0p5, "Panel background", Color_t(0, 0, 0, 0), VISUAL);
-			CVar(Background1, "Panel header", Color_t(0, 0, 0, 0), VISUAL);
-			CVar(Background1p5, "Control background", Color_t(0, 0, 0, 0), VISUAL);
-			CVar(Background2, "Border / divider", Color_t(0, 0, 0, 0), VISUAL);
+			// ---- Per-surface overrides -------------------------------------------
+			// Every entry below is alpha-0 = "unset" -> use the derived value, EXCEPT
+			// the ramp steps, which are gated by BackgroundOverride and seeded on first
+			// use (see CRender::LoadColors). Each var drives exactly ONE surface so
+			// editing one never moves another.
+
+			// Base ramp (the shades everything else derives from).
+			CVar(BackgroundOverride, "Override base ramp", false, NOBIND);
+			CVar(Background0, "Base: darkest", Color_t(0, 0, 0, 0), VISUAL);
+			CVar(Background0p5, "Base: dark", Color_t(0, 0, 0, 0), VISUAL);
+			CVar(Background1, "Base: mid", Color_t(0, 0, 0, 0), VISUAL);
+			CVar(Background1p5, "Base: light", Color_t(0, 0, 0, 0), VISUAL);
+			CVar(Background2, "Base: lightest", Color_t(0, 0, 0, 0), VISUAL);
+
+			// Window chrome.
+			CVar(WindowBackground, "Window background", Color_t(0, 0, 0, 0), VISUAL);
+			CVar(NavBackground, "Nav bar background", Color_t(0, 0, 0, 0), VISUAL);
+			CVar(NavDivider, "Nav bar divider", Color_t(0, 0, 0, 0), VISUAL);
+
+			// Panels.
+			CVar(PanelBackground, "Panel background", Color_t(0, 0, 0, 0), VISUAL);
+			CVar(PanelHeader, "Panel header band", Color_t(0, 0, 0, 0), VISUAL);
+			CVar(PanelBorder, "Panel border", Color_t(0, 0, 0, 0), VISUAL);
+			CVar(PanelAccent, "Panel accent edge", Color_t(0, 0, 0, 0), VISUAL);
+			CVar(PanelTitle, "Panel title text", Color_t(0, 0, 0, 0), VISUAL);
+			CVar(PanelCollapsedBackground, "Collapsed panel background", Color_t(0, 0, 0, 0), VISUAL);
+			CVar(PanelCollapsedHeader, "Collapsed panel header", Color_t(0, 0, 0, 0), VISUAL);
+			CVar(PanelCollapsedTitle, "Collapsed panel title", Color_t(0, 0, 0, 0), VISUAL);
+			CVar(RowDivider, "Row divider", Color_t(0, 0, 0, 0), VISUAL);
+			CVar(SubGroupText, "Subgroup label", Color_t(0, 0, 0, 0), VISUAL);
+			CVar(SubGroupRule, "Subgroup rule", Color_t(0, 0, 0, 0), VISUAL);
+
+			// Text tiers.
+			CVar(TextDim, "Dim text", Color_t(0, 0, 0, 0), VISUAL);
+			CVar(TextDisabled, "Disabled text", Color_t(0, 0, 0, 0), VISUAL);
+
+			// Accent variants, normally derived from Accent by alpha.
+			CVar(AccentOverride, "Override accent variants", false, NOBIND);
+			CVar(AccentMuted, "Accent muted", Color_t(0, 0, 0, 0), VISUAL);
+			CVar(AccentWashed, "Accent washed", Color_t(0, 0, 0, 0), VISUAL);
+
+			// Controls.
+			CVar(ControlBackground, "Control background", Color_t(0, 0, 0, 0), VISUAL);
+			CVar(ControlHovered, "Control hovered", Color_t(0, 0, 0, 0), VISUAL);
+			CVar(SwitchOn, "Switch on", Color_t(0, 0, 0, 0), VISUAL);
+			CVar(SwitchOff, "Switch off", Color_t(0, 0, 0, 0), VISUAL);
+			CVar(SwitchKnobOn, "Switch knob (on)", Color_t(0, 0, 0, 0), VISUAL);
+			CVar(SwitchKnobOff, "Switch knob (off)", Color_t(0, 0, 0, 0), VISUAL);
+			CVar(SliderTrack, "Slider track", Color_t(0, 0, 0, 0), VISUAL);
+			CVar(SliderFill, "Slider fill", Color_t(0, 0, 0, 0), VISUAL);
+			CVar(SliderKnob, "Slider knob", Color_t(0, 0, 0, 0), VISUAL);
+			CVar(SliderValueText, "Slider value text", Color_t(0, 0, 0, 0), VISUAL);
+
+			// Tabs.
+			CVar(TabActive, "Tab active text", Color_t(0, 0, 0, 0), VISUAL);
+			CVar(TabInactive, "Tab inactive text", Color_t(0, 0, 0, 0), VISUAL);
+			CVar(TabBar, "Tab indicator bar", Color_t(0, 0, 0, 0), VISUAL);
+
+			// Popups / tooltips.
+			CVar(PopupBackground, "Popup background", Color_t(0, 0, 0, 0), VISUAL);
+			CVar(TooltipBackground, "Tooltip background", Color_t(0, 0, 0, 0), VISUAL);
+			CVar(TooltipText, "Tooltip text", Color_t(0, 0, 0, 0), VISUAL);
 			CVar(Active, "Active color", Color_t(255, 255, 255, 255), VISUAL);
 			CVar(Inactive, "Inactive color", Color_t(150, 150, 150, 255), VISUAL);
 		NAMESPACE_END(Theme)

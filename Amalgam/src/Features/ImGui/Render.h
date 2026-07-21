@@ -27,6 +27,51 @@ public:
 	ImColor Inactive = {};
 	ImColor Active = {};
 	ImColor TextDim = {}; // Phase 1: mid tier between Inactive and Active for subgroup labels
+	ImColor TextDisabled = {};
+
+	// Accent variants (derived from Accent unless overridden)
+	ImColor AccentMuted = {};
+	ImColor AccentWashed = {};
+
+	// Window chrome
+	ImColor WindowBackground = {};
+	ImColor NavBackground = {};
+	ImColor NavDivider = {};
+
+	// Panels
+	ImColor PanelBackground = {};
+	ImColor PanelHeader = {};
+	ImColor PanelBorder = {};
+	ImColor PanelAccent = {};
+	ImColor PanelTitle = {};
+	ImColor PanelCollapsedBackground = {};
+	ImColor PanelCollapsedHeader = {};
+	ImColor PanelCollapsedTitle = {};
+	ImColor RowDivider = {};
+	ImColor SubGroupText = {};
+	ImColor SubGroupRule = {};
+
+	// Controls
+	ImColor ControlBackground = {};
+	ImColor ControlHovered = {};
+	ImColor SwitchOn = {};
+	ImColor SwitchOff = {};
+	ImColor SwitchKnobOn = {};
+	ImColor SwitchKnobOff = {};
+	ImColor SliderTrack = {};
+	ImColor SliderFill = {};
+	ImColor SliderKnob = {};
+	ImColor SliderValueText = {};
+
+	// Tabs
+	ImColor TabActive = {};
+	ImColor TabInactive = {};
+	ImColor TabBar = {};
+
+	// Popups / tooltips
+	ImColor PopupBackground = {};
+	ImColor TooltipBackground = {};
+	ImColor TooltipText = {};
 
 	// Fonts
 	ImFont* FontSmall = nullptr;

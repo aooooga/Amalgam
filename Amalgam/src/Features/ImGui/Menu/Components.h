@@ -66,6 +66,13 @@ namespace ImGui
 	inline std::unordered_map<uint32_t, int> ActiveMap = {};
 
 	inline bool Disabled = false, Transparent = false;
+
+	// 3a auto-column sliders: which column the next paired slider lands in, and an
+	// override that forces full-width stacking. Section()/SubGroup() reset the run
+	// so each group starts on a fresh row. Consumed by FSliderRow (Menu3a_Widgets.h).
+	inline int g_SliderColumn = 0;
+	inline bool SliderPairOverride = false;
+	inline void ResetSliderColumns() { g_SliderColumn = 0; }
 	inline int CurrentBind = DEFAULT_BIND;
 	inline bool Hovered = false;
 
@@ -504,8 +511,8 @@ namespace ImGui
 			pDrawList->AddTriangleFilled(vP1 + ImVec2(flInset / 2, 0), vP2 + ImVec2(-flInset / 2, 0), vP3 + ImVec2(0, flInset / 2), F::Render.Background1p5);
 			*/
 
-			pDrawList->AddRectFilled(vPos, { vPos.x + vText.x, vPos.y + vText.y }, F::Render.Background2, H::Draw.Scale(3));
-			pDrawList->AddTriangleFilled(vP1, vP2, vP3, F::Render.Background2);
+			pDrawList->AddRectFilled(vPos, { vPos.x + vText.x, vPos.y + vText.y }, F::Render.TooltipBackground, H::Draw.Scale(3));
+			pDrawList->AddTriangleFilled(vP1, vP2, vP3, F::Render.TooltipBackground);
 
 			vPos.x += vText.x / 2;
 			vPos.x += GetStyle().WindowPadding.x;
@@ -513,7 +520,7 @@ namespace ImGui
 			{
 				auto& sText = vWraps[i];
 				//vTextSize.x = CalcTextSize(sText.c_str()).x;
-				pDrawList->AddText(vPos + ImVec2(-vText.x / 2, H::Draw.Scale(6) + H::Draw.Scale(16) * i), F::Render.Active, sText.c_str());
+				pDrawList->AddText(vPos + ImVec2(-vText.x / 2, H::Draw.Scale(6) + H::Draw.Scale(16) * i), F::Render.TooltipText, sText.c_str());
 			}
 
 			PopFont();
@@ -738,6 +745,7 @@ namespace ImGui
 	{
 		uint32_t uHash = FNV1A::Hash32(sLabel);
 		vStoredLabels.push_back(uHash);
+		ResetSliderColumns(); // each panel starts a fresh slider row
 
 		bool bHeader = sLabel[0] != '#';
 		bool bCollapsed = bHeader && !bForceHeight && mCollapsed.contains(uHash) && mCollapsed[uHash];
@@ -759,15 +767,25 @@ namespace ImGui
 		if (bReturn)
 		{
 			if (bCollapsed)
-				RenderBackground(F::Render.Background0, F::Render.Background2);
+				// A collapsed panel is only its header band, so the band colour is what
+				// shows; PanelCollapsedBackground is the strip behind it.
+				RenderTwoToneBackground(H::Draw.Scale(28), F::Render.PanelCollapsedHeader,
+					F::Render.PanelCollapsedBackground, F::Render.PanelBorder);
 			else if (bHeader)
 			{
-				RenderTwoToneBackground(H::Draw.Scale(28), F::Render.Background1, F::Render.Background0p5, F::Render.Background2);
-				ImVec2 vAccentPos = GetDrawPos();
-				GetWindowDrawList()->AddRectFilled(vAccentPos, vAccentPos + ImVec2(H::Draw.Scale(2), GetWindowSize().y), F::Render.Accent); // 3a accent left-edge
+				RenderTwoToneBackground(H::Draw.Scale(28), F::Render.PanelHeader, F::Render.PanelBackground, F::Render.PanelBorder);
+				// 3a accent left-edge. Must sit inside the same inset the panel body
+				// uses and carry the same corner radius, or it overhangs the card and
+				// squares off against the rounded border.
+				float flInset = H::Draw.Scale();
+				float flRound = H::Draw.Scale(3);
+				ImVec2 vAccentPos = GetDrawPos() + ImVec2(flInset, flInset);
+				GetWindowDrawList()->AddRectFilled(vAccentPos,
+					vAccentPos + ImVec2(H::Draw.Scale(2), GetWindowSize().y - flInset * 2),
+					F::Render.PanelAccent, flRound, ImDrawFlags_RoundCornersLeft);
 			}
 			else
-				RenderBackground(F::Render.Background0p5, F::Render.Background2);
+				RenderBackground(F::Render.PanelBackground, F::Render.PanelBorder);
 		}
 
 		PushStyleVar(ImGuiStyleVar_ItemSpacing, { H::Draw.Scale(8), 0 });
@@ -777,12 +795,15 @@ namespace ImGui
 			ImVec2 vDrawPos = GetDrawPos();
 			ImDrawList* pDrawList = GetWindowDrawList();
 
-			// accent tick anchoring the section header
-			pDrawList->AddRectFilled(vDrawPos + ImVec2(0, H::Draw.Scale(8)), vDrawPos + ImVec2(H::Draw.Scale(3), H::Draw.Scale(20)), F::Render.Accent, H::Draw.Scale(2), ImDrawFlags_RoundCornersRight);
+			// (the old accent tick is gone -- the panel's accent left-edge replaces it)
 
 			PushFont(F::Render.FontTitle); // larger bold section titles
-			SetCursorPosY(vOriginalPos.y - H::Draw.Scale(1));
-			TextColored(F::Render.Accent, StripDoubleHash(sLabel).c_str());
+			// Centre the title in the 28px header band. The band starts at the panel's
+			// top edge, but the cursor starts inset by WindowPadding.y -- so centring
+			// has to be measured from the band, then converted back into cursor space,
+			// not applied as an offset from wherever the cursor happens to sit.
+			SetCursorPosY((H::Draw.Scale(28) - GetFontSize()) / 2.f);
+			TextColored(bCollapsed ? F::Render.PanelCollapsedTitle : F::Render.PanelTitle, StripDoubleHash(sLabel).c_str());
 			PopFont();
 
 			// collapse chevron + header click-to-collapse (session persistent).
@@ -808,9 +829,12 @@ namespace ImGui
 		vStoredCollapsed.pop_back();
 		if (!bCollapsed)
 		{
+			// Bottom padding should mirror the top inset, no more. The original added a
+			// full WindowPadding.y on top of what AutoResizeY already appends (double),
+			// and dropping it entirely left the last row flush against the edge.
 			float flHeight = GetItemRectMax().y - GetWindowPos().y;
 			if (flHeight > 0.f)
-				mLastHeights[uHash] = flHeight + GetStyle().WindowPadding.y;
+				mLastHeights[uHash] = flHeight + GetStyle().WindowPadding.y / 2.f;
 		}
 
 		PopStyleVar();
@@ -824,6 +848,7 @@ namespace ImGui
 	// Left and its Right widget) to keep AddRowSize packing intact.
 	inline void SubGroup(const char* sLabel, bool bFirst = false)
 	{
+		ResetSliderColumns(); // a subgroup heading always starts a fresh slider row
 		if (!bFirst)
 			DebugDummy({ 0, H::Draw.Scale(Tokens::SubGroupTop) });
 
@@ -834,13 +859,13 @@ namespace ImGui
 		std::string sText = StripDoubleHash(sLabel);
 		std::transform(sText.begin(), sText.end(), sText.begin(), ::toupper); // uppercase = scannable pattern tier
 		ImVec2 vText = CalcTextSize(sText.c_str());
-		pDrawList->AddText(vDrawPos, F::Render.TextDim, sText.c_str());
+		pDrawList->AddText(vDrawPos, F::Render.SubGroupText, sText.c_str());
 
 		float flLineY = roundf(vDrawPos.y + vText.y / 2.f);
 		float flLeft = vDrawPos.x + vText.x + H::Draw.Scale(Tokens::SubGroupRuleGap);
 		float flRight = GetDrawPosX() + GetWindowWidth() - GetStyle().WindowPadding.x;
 		if (flRight > flLeft)
-			pDrawList->AddRectFilled({ flLeft, flLineY }, { flRight, flLineY + H::Draw.Scale(1) }, F::Render.Background2);
+			pDrawList->AddRectFilled({ flLeft, flLineY }, { flRight, flLineY + H::Draw.Scale(1) }, F::Render.SubGroupRule);
 		PopFont();
 
 		DebugDummy({ 0, vText.y + H::Draw.Scale(Tokens::SubGroupBottom) });
@@ -974,9 +999,9 @@ namespace ImGui
 				ImVec2 vCurTextOffset = vAllTextOffset + (j ? vSubTextOffset : ImVec2());
 				ImVec2 vCurBarOffset = vAllBarOffset + (j ? vSubBarOffset : ImVec2());
 
-				if (!iTabState)
-					PushStyleColor(ImGuiCol_Text, F::Render.Inactive.Value);
-				else if (iTabState == 2)
+				// inactive vs active tab label colours are separately themeable
+				PushStyleColor(ImGuiCol_Text, (!iTabState ? F::Render.TabInactive : F::Render.TabActive).Value);
+				if (iTabState == 2)
 				{
 					switch (iBar)
 					{
@@ -984,28 +1009,28 @@ namespace ImGui
 						pDrawList->AddRectFilled(
 							vDrawPos + vCurBarOffset + ImVec2(0, flBarSizeMod),
 							vDrawPos + vCurBarOffset + ImVec2(H::Draw.Scale(flBarThickness), vNewSize.y - flBarSizeMod),
-							F::Render.Accent
+							F::Render.TabBar
 						);
 						break;
 					case 2: // right
 						pDrawList->AddRectFilled(
 							vDrawPos + vCurBarOffset + ImVec2(vNewSize.x - H::Draw.Scale(flBarThickness), flBarSizeMod),
 							vDrawPos + vCurBarOffset + ImVec2(vNewSize.x, vNewSize.y - flBarSizeMod),
-							F::Render.Accent
+							F::Render.TabBar
 						);
 						break;
 					case 3: // top
 						pDrawList->AddRectFilled(
 							vDrawPos + vCurBarOffset + ImVec2(flBarSizeMod, 0),
 							vDrawPos + vCurBarOffset + ImVec2(vNewSize.x - flBarSizeMod, H::Draw.Scale(flBarThickness)),
-							F::Render.Accent
+							F::Render.TabBar
 						);
 						break;
 					case 4: // bottom
 						pDrawList->AddRectFilled(
 							vDrawPos + vCurBarOffset + ImVec2(flBarSizeMod, vNewSize.y - H::Draw.Scale(flBarThickness)),
 							vDrawPos + vCurBarOffset + ImVec2(vNewSize.x - flBarSizeMod, vNewSize.y),
-							F::Render.Accent
+							F::Render.TabBar
 						);
 						break;
 					}
@@ -1117,8 +1142,7 @@ namespace ImGui
 
 				SetCursorPos(vOriginalPos);
 
-				if (!iTabState)
-					PopStyleColor();
+				PopStyleColor();
 
 				if (!bReverse)
 				{

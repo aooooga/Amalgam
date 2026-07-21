@@ -25,13 +25,25 @@ namespace ImGui
 	{
 		ImDrawList* dl = GetWindowDrawList();
 		float w = H::Draw.Scale(34), h = H::Draw.Scale(18), r = h / 2.f;
-		ImColor tTrack = bOn ? F::Render.Accent : F::Render.Background2;
-		ImColor tKnob  = bOn ? F::Render.Background0 : F::Render.Active;
+		ImColor tTrack = bOn ? F::Render.SwitchOn : F::Render.SwitchOff;
+		ImColor tKnob  = bOn ? F::Render.SwitchKnobOn : F::Render.SwitchKnobOff;
 		tTrack.Value.w *= flAlpha; tKnob.Value.w *= flAlpha;
 		dl->AddRectFilled(vPos, vPos + ImVec2(w, h), tTrack, r);
 		float kx = bOn ? w - r : r;
 		dl->AddCircleFilled(vPos + ImVec2(kx, r), r - H::Draw.Scale(2), tKnob);
 	}
+
+	// g_SliderColumn / SliderPairOverride live in Components.h so Section() and
+	// SubGroup() -- which are defined there, before this header -- can reset the
+	// column run at each group boundary.
+
+	// RAII: force full-width sliders for a block, then restore.
+	struct StackedSliders
+	{
+		bool m_bPrev;
+		StackedSliders() : m_bPrev(SliderPairOverride) { SliderPairOverride = true; ResetSliderColumns(); }
+		~StackedSliders() { SliderPairOverride = m_bPrev; ResetSliderColumns(); }
+	};
 
 	// How many columns a toggle-heavy card should use right now.
 	// CompactColumns OFF -> 1 (classic divided list). ON -> as many ~158px cells as fit.
@@ -82,6 +94,7 @@ namespace ImGui
 	// Removals (13 toggles) is the acceptance test: CompactColumns ON -> ~3 rows.
 	inline void FToggleGrid(std::vector<ConfigVar<bool>*> vVars)
 	{
+		ResetSliderColumns(); // close any half-open slider row before this block
 		int iCols = Toggle3aColumns();
 		float flInner = GetWindowWidth() - GetStyle().WindowPadding.x * 2;
 		float flCell  = flInner / iCols;
@@ -107,8 +120,9 @@ namespace ImGui
 		std::string sText = StripDoubleHash(sLabel);
 		bool bVal = FGet(tVar, true);
 
-		const char* sDesc = nullptr;
-		if (auto it = g_Descriptions.find(&tVar); it != g_Descriptions.end()) sDesc = it->second;
+		// A toggle ends any half-open slider row, so it never lands beside a stranded
+		// left-hand slider.
+		ResetSliderColumns();
 
 		bool bFull = !(iFlags & (FToggleEnum::Left | FToggleEnum::Right));
 		float flW = GetWindowWidth();
@@ -119,16 +133,17 @@ namespace ImGui
 		if (iFlags & FToggleEnum::Right)
 			SameLine(flW + GetStyle().WindowPadding.x * 2);
 
+		// Fixed row height: the description is a real hover tooltip now, so the row
+		// never grows and the list stops shifting under the cursor.
+		float flRowH = H::Draw.Scale(30);
+
 		ImVec2 vStart = GetCursorPos();
 		ImVec2 vDraw  = GetDrawPos() + vStart;
-		bool bHovered = !Disabled && IsWindowHovered() && IsMouseWithin(vDraw.x, vDraw.y, flW, H::Draw.Scale(34));
-
-		bool bReveal = sDesc && (!Vars::Menu::DescriptionsOnHover.Value || bHovered);
-		float flRowH = H::Draw.Scale(bReveal ? 40 : 30);
+		bool bHovered = !Disabled && IsWindowHovered() && IsMouseWithin(vDraw.x, vDraw.y, flW, flRowH);
 
 		ImDrawList* dl = GetWindowDrawList();
 		if (vStart.y > GetStyle().WindowPadding.y + H::Draw.Scale(1)) // divider, not on first row
-			dl->AddRectFilled(vDraw, vDraw + ImVec2(flW, H::Draw.Scale(1)), F::Render.Background1p5);
+			dl->AddRectFilled(vDraw, vDraw + ImVec2(flW, H::Draw.Scale(1)), F::Render.RowDivider);
 
 		if (InvisibleButton(std::format("##{}", tVar.Name()).c_str(), { flW, flRowH }))
 		{
@@ -140,28 +155,41 @@ namespace ImGui
 
 		PushFont(F::Render.FontRegular);
 		ImColor tCol = bVal ? F::Render.Active : F::Render.Inactive; tCol.Value.w *= flAlpha;
-		float flLabelY = bReveal ? vDraw.y + H::Draw.Scale(6) : vDraw.y + (flRowH - GetFontSize()) / 2.f;
 		// leave room for the right-pinned switch (34px + gutter)
 		float flTextW = flW - H::Draw.Scale(34 + 14);
-		dl->AddText({ vDraw.x + H::Draw.Scale(4), flLabelY }, tCol,
+		dl->AddText({ vDraw.x + H::Draw.Scale(4), vDraw.y + (flRowH - GetFontSize()) / 2.f }, tCol,
 			TruncateText(sText, flTextW, F::Render.FontRegular).c_str());
 		PopFont();
 
-		if (bReveal)
-		{
-			PushFont(F::Render.FontSmall);
-			dl->AddText({ vDraw.x + H::Draw.Scale(4), vDraw.y + H::Draw.Scale(21) }, F::Render.Inactive,
-				TruncateText(sDesc, flTextW, F::Render.FontSmall).c_str());
-			PopFont();
-		}
-
 		float swH = H::Draw.Scale(18);
 		DrawSwitch(vDraw + ImVec2(flW - H::Draw.Scale(34), (flRowH - swH) / 2.f), bVal, flAlpha);
+
+		DescTooltip(&tVar, bHovered, sText.c_str());
 
 		SetCursorPos(vStart);
 		DebugDummy({ flW, flRowH });
 		if (pHovered) *pHovered = bHovered;
 		return false;
+	}
+
+	// Widest string this slider can ever show, measured in the font the value is
+	// actually drawn in. Sampling the endpoints (plus a mid value, which can be the
+	// longest for "%g"-style formats) keeps the label's budget stable while dragging
+	// -- budgeting off the *current* value would make the layout shift as it changes.
+	template <class T>
+	inline float SliderValueWidth(T tMin, T tMax, const char* fmt)
+	{
+		auto Measure = [&](T tVal) -> float
+		{
+			char szBuf[32];
+			if constexpr (std::is_integral_v<T>)
+				snprintf(szBuf, sizeof(szBuf), fmt ? fmt : "%i", int(tVal));
+			else
+				snprintf(szBuf, sizeof(szBuf), fmt ? fmt : "%g", double(tVal));
+			return FCalcTextSize(szBuf, F::Render.FontBold).x;
+		};
+		T tMid = T(double(tMin) + (double(tMax) - double(tMin)) * 0.5);
+		return std::max({ Measure(tMin), Measure(tMax), Measure(tMid) });
 	}
 
 	// A labeled slider row: label left, right-pinned track + bold value.
@@ -175,18 +203,44 @@ namespace ImGui
 		std::string sText = StripDoubleHash(sLabel);
 		T tVal = FGet(tVar, true);
 
-		const char* sDesc = nullptr;
-		if (auto it = g_Descriptions.find(&tVar); it != g_Descriptions.end()) sDesc = it->second;
+		// Auto two-column packing. Two rules matter here, and getting either wrong
+		// produces the "sometimes one column, sometimes two" flapping:
+		//
+		//  1. The decision must be made for the PAIR, not per slider. If the left
+		//     slider pairs and the right one then decides it needs full width, the
+		//     left is stranded as a half-width orphan with a gap beside it. So once
+		//     a row is opened as paired, its partner is committed to the same row.
+		//  2. The value column must be measured, not guessed. It is drawn right-
+		//     aligned at its true text width; budgeting a fixed fraction here let a
+		//     wide value ("-180.00") overrun the space the label was promised.
+		float flAvail = GetWindowWidth() - GetStyle().WindowPadding.x * 2;
+		float flHalf = GetWindowWidth() / 2 - GetStyle().WindowPadding.x * 1.5f;
+		float flLabelPx = FCalcTextSize(sText.c_str(), F::Render.FontRegular).x;
+		float flValPx = SliderValueWidth<T>(tMin, tMax, fmt);
 
-		// half-width pairing: Left takes the first half, Right sames-line onto the second
-		bool bFull = !(iFlags & (FSliderEnum::Left | FSliderEnum::Right));
-		float flW = GetWindowWidth();
-		if (bFull)
-			flW -= GetStyle().WindowPadding.x * 2;
+		// what this row needs to show its label in full, unpaired-clipping free
+		float flNeeds = flLabelPx + flValPx + H::Draw.Scale(30) + H::Draw.Scale(50);
+
+		bool bFull;
+		if (g_SliderColumn)
+		{
+			// committed: we are the right half of a row already opened as paired
+			bFull = false;
+		}
 		else
-			flW = flW / 2 - GetStyle().WindowPadding.x * 1.5f;
-		if (iFlags & FSliderEnum::Right)
-			SameLine(flW + GetStyle().WindowPadding.x * 2);
+		{
+			bFull = SliderPairOverride || flHalf < flNeeds;
+		}
+
+		float flW = bFull ? flAvail : flHalf;
+		if (!bFull)
+		{
+			if (g_SliderColumn)
+				SameLine(flW + GetStyle().WindowPadding.x * 2);
+			g_SliderColumn ^= 1;
+		}
+		else
+			g_SliderColumn = 0;
 
 		ImVec2 vStart = GetCursorPos();
 		ImVec2 vDraw  = GetDrawPos() + vStart;
@@ -196,15 +250,17 @@ namespace ImGui
 
 		ImDrawList* dl = GetWindowDrawList();
 		if (vStart.y > GetStyle().WindowPadding.y + H::Draw.Scale(1))
-			dl->AddRectFilled(vDraw, vDraw + ImVec2(flW, H::Draw.Scale(1)), F::Render.Background1p5);
+			dl->AddRectFilled(vDraw, vDraw + ImVec2(flW, H::Draw.Scale(1)), F::Render.RowDivider);
 
 		float flAlpha = (Transparent || Disabled) ? 0.5f : 1.f;
 
-		// geometry: [label ...][track][value] — track/value scale with the row, clamped so
-		// the label keeps room on narrow cards and the track stays grabbable on wide ones.
-		float flValW = std::clamp(flW * 0.16f, H::Draw.Scale(34), H::Draw.Scale(70));
-		float flTrkW = std::clamp(flW * 0.42f, H::Draw.Scale(60), H::Draw.Scale(190));
-		float flTrkX = vDraw.x + flW - flValW - H::Draw.Scale(10) - flTrkW;
+		// geometry: [label ...][track][value]. Uses the SAME measured value width as
+		// the pairing test above, so the space the label was promised is the space it
+		// actually gets. The track absorbs the slack and never claims a minimum that
+		// would push its left edge back over the label.
+		float flTrkMax = flW - flValPx - H::Draw.Scale(30) - flLabelPx;
+		float flTrkW = std::min(std::max(flTrkMax, H::Draw.Scale(50)), H::Draw.Scale(190));
+		float flTrkX = vDraw.x + flW - flValPx - H::Draw.Scale(10) - flTrkW;
 		float flMidY = vDraw.y + flRowH / 2.f;
 
 		// drag hitbox over the track
@@ -227,16 +283,26 @@ namespace ImGui
 			TruncateText(sText, flTrkX - vDraw.x - H::Draw.Scale(12), F::Render.FontRegular).c_str());
 		PopFont();
 
-		// track + fill + knob
+		// track + fill + knob. AddSteppedRect draws the track broken by a gap at each
+		// increment (the same stroke the classic FSlider uses), so the step size stays
+		// legible; it falls back to a solid bar when the steps get too dense to show.
 		float flTrkH = H::Draw.Scale(4);
-		ImVec2 t0 = { flTrkX, flMidY - flTrkH / 2.f };
 		float pct = float((double(tVal) - double(tMin)) / std::max(1e-6, double(tMax - tMin)));
 		pct = std::clamp(pct, 0.f, 1.f);
-		ImColor tFill = F::Render.Accent; tFill.Value.w *= flAlpha;
-		dl->AddRectFilled(t0, t0 + ImVec2(flTrkW, flTrkH), F::Render.Background2, flTrkH / 2.f);
-		dl->AddRectFilled(t0, t0 + ImVec2(flTrkW * pct, flTrkH), tFill, flTrkH / 2.f);
-		dl->AddRectFilled({ flTrkX + flTrkW * pct - H::Draw.Scale(1), flMidY - H::Draw.Scale(6) },
-						  { flTrkX + flTrkW * pct + H::Draw.Scale(1), flMidY + H::Draw.Scale(6) }, tFill);
+		ImColor tFill = F::Render.SliderFill; tFill.Value.w *= flAlpha;
+		ImColor tRest = F::Render.SliderTrack; tRest.Value.w *= flAlpha;
+
+		ImVec2 vMins = { flTrkX, flMidY - flTrkH / 2.f };
+		ImVec2 vMaxs = { flTrkX + flTrkW, flMidY + flTrkH / 2.f };
+		float flFillX = flTrkX + flTrkW * pct;
+		// filled portion, then the remainder, each clipped to its own span
+		AddSteppedRect({ 0, 0 }, vMins, vMaxs, vMins, { flFillX, vMaxs.y },
+			float(tMin), float(tMax), float(tStep) != 0.f ? float(tStep) : 1.f, tFill, tRest, H::Draw.Scale(2));
+		AddSteppedRect({ 0, 0 }, vMins, vMaxs, { flFillX, vMins.y }, vMaxs,
+			float(tMin), float(tMax), float(tStep) != 0.f ? float(tStep) : 1.f, tRest, tRest, H::Draw.Scale(2));
+
+		dl->AddRectFilled({ flFillX - H::Draw.Scale(1), flMidY - H::Draw.Scale(6) },
+						  { flFillX + H::Draw.Scale(1), flMidY + H::Draw.Scale(6) }, F::Render.SliderKnob);
 
 		// value (right-aligned in its fixed column)
 		// The var's stored format string is written for the native type ("%i" for int,
@@ -248,11 +314,11 @@ namespace ImGui
 			snprintf(szVal, sizeof(szVal), fmt ? fmt : "%g", double(tVal));
 		PushFont(F::Render.FontBold);
 		float flvw = CalcTextSize(szVal).x;
-		ImColor tValCol = F::Render.Active; tValCol.Value.w *= flAlpha;
+		ImColor tValCol = F::Render.SliderValueText; tValCol.Value.w *= flAlpha;
 		dl->AddText({ vDraw.x + flW - flvw, flMidY - GetFontSize() / 2.f }, tValCol, szVal);
 		PopFont();
 
-		if (sDesc) DescTooltip(&tVar, bRowHover, sText.c_str());
+		DescTooltip(&tVar, bRowHover, sText.c_str());
 
 		SetCursorPos(vStart);
 		DebugDummy({ flW, flRowH });

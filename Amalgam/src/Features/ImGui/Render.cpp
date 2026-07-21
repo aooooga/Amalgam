@@ -69,9 +69,31 @@ void CRender::LoadColors()
 		// the per-step panel overrides feed the same derived table, so they must
 		// invalidate this cache too or edits won't take until another colour moves
 		uNew = uNew * 16777619u ^ uint32_t(Vars::Menu::Theme::BackgroundOverride.Value);
+		uNew = uNew * 16777619u ^ uint32_t(Vars::Menu::Theme::AccentOverride.Value) * 3u;
 		for (auto* pOverride : { &Vars::Menu::Theme::Background0, &Vars::Menu::Theme::Background0p5,
 								 &Vars::Menu::Theme::Background1, &Vars::Menu::Theme::Background1p5,
-								 &Vars::Menu::Theme::Background2 })
+								 &Vars::Menu::Theme::Background2,
+								 &Vars::Menu::Theme::TextDim, &Vars::Menu::Theme::TextDisabled,
+								 &Vars::Menu::Theme::AccentMuted, &Vars::Menu::Theme::AccentWashed,
+								 &Vars::Menu::Theme::WindowBackground, &Vars::Menu::Theme::NavBackground,
+								 &Vars::Menu::Theme::NavDivider,
+								 &Vars::Menu::Theme::PanelBackground, &Vars::Menu::Theme::PanelHeader,
+								 &Vars::Menu::Theme::PanelBorder, &Vars::Menu::Theme::PanelAccent,
+								 &Vars::Menu::Theme::PanelTitle,
+								 &Vars::Menu::Theme::PanelCollapsedBackground,
+								 &Vars::Menu::Theme::PanelCollapsedHeader,
+								 &Vars::Menu::Theme::PanelCollapsedTitle,
+								 &Vars::Menu::Theme::RowDivider, &Vars::Menu::Theme::SubGroupText,
+								 &Vars::Menu::Theme::SubGroupRule,
+								 &Vars::Menu::Theme::ControlBackground, &Vars::Menu::Theme::ControlHovered,
+								 &Vars::Menu::Theme::SwitchOn, &Vars::Menu::Theme::SwitchOff,
+								 &Vars::Menu::Theme::SwitchKnobOn, &Vars::Menu::Theme::SwitchKnobOff,
+								 &Vars::Menu::Theme::SliderTrack, &Vars::Menu::Theme::SliderFill,
+								 &Vars::Menu::Theme::SliderKnob, &Vars::Menu::Theme::SliderValueText,
+								 &Vars::Menu::Theme::TabActive, &Vars::Menu::Theme::TabInactive,
+								 &Vars::Menu::Theme::TabBar,
+								 &Vars::Menu::Theme::PopupBackground,
+								 &Vars::Menu::Theme::TooltipBackground, &Vars::Menu::Theme::TooltipText })
 			uNew = uNew * 16777619u ^ uPack(pOverride->Value);
 		static uint32_t uCache = 0;
 		static bool bFirst = true;
@@ -83,15 +105,35 @@ void CRender::LoadColors()
 
 	Accent = ColorByteToFloat(Vars::Menu::Theme::Accent.Value);
 	// Each ramp step is the Lerp-derived shade off Background unless the user has
-	// enabled overrides and given that step a non-zero alpha.
-	auto Ramp = [](ConfigVar<Color_t>& tOverride, float flStep) -> ImColor
+	// enabled overrides, in which case the per-step colour is used verbatim.
+	// The override colour is NOT alpha-gated: a user who deliberately sets a step
+	// fully transparent must get a transparent panel, and an alpha-0 default is
+	// indistinguishable from "unset" in the picker. Unset steps are instead seeded
+	// with the derived shade below, so enabling overrides changes nothing at first.
+	auto Derived = [](float flStep) -> Color_t
 	{
-		if (Vars::Menu::Theme::BackgroundOverride.Value && tOverride.Value.a)
-			return ColorByteToFloat(tOverride.Value);
-		return ColorByteToFloat(flStep == 0.f
+		return flStep == 0.f
 			? Vars::Menu::Theme::Background.Value
-			: Vars::Menu::Theme::Background.Value.Lerp({ 127, 127, 127 }, flStep / 9, LerpEnum::NoAlpha));
+			: Vars::Menu::Theme::Background.Value.Lerp({ 127, 127, 127 }, flStep / 9, LerpEnum::NoAlpha);
 	};
+	auto Ramp = [&](ConfigVar<Color_t>& tOverride, float flStep) -> ImColor
+	{
+		if (!Vars::Menu::Theme::BackgroundOverride.Value)
+			return ColorByteToFloat(Derived(flStep));
+		return ColorByteToFloat(tOverride.Value);
+	};
+
+	// Seed any still-unset (all-zero) override with its derived shade, so the
+	// pickers open showing the current colours instead of transparent black.
+	for (auto& [pVar, flStep] : std::initializer_list<std::pair<ConfigVar<Color_t>*, float>>{
+			{ &Vars::Menu::Theme::Background0,   0.f }, { &Vars::Menu::Theme::Background0p5, 0.5f },
+			{ &Vars::Menu::Theme::Background1,   1.f }, { &Vars::Menu::Theme::Background1p5, 1.5f },
+			{ &Vars::Menu::Theme::Background2,   2.f } })
+	{
+		auto& tVal = pVar->Value;
+		if (!tVal.r && !tVal.g && !tVal.b && !tVal.a)
+			tVal = Derived(flStep);
+	}
 	Background0 = Ramp(Vars::Menu::Theme::Background0, 0.f);
 	Background0p5 = Ramp(Vars::Menu::Theme::Background0p5, 0.5f);
 	Background1 = Ramp(Vars::Menu::Theme::Background1, 1.f);
@@ -114,19 +156,78 @@ void CRender::LoadColors()
 	Inactive = Mix(Inactive, Active, 0.22f);
 	TextDim = Mix(Inactive, Active, 0.55f);
 
+	// Optional per-element overrides. Alpha 0 means "unset" -> keep the derived
+	// value, so an untouched theme behaves exactly as before.
+	auto Override = [](ConfigVar<Color_t>& tVar, const ImColor& tDerived) -> ImColor
+	{
+		return tVar.Value.a ? ColorByteToFloat(tVar.Value) : tDerived;
+	};
+	TextDim = Override(Vars::Menu::Theme::TextDim, TextDim);
+	TextDisabled = Override(Vars::Menu::Theme::TextDisabled, Mix(Inactive, Background2, 0.4f));
+
+	// Accent variants: the muted/washed alpha steps the widgets use.
+	ImColor tMuted = Accent, tWashed = Accent;
+	tMuted.Value.w *= 0.8f, tWashed.Value.w *= 0.4f;
+	bool bAccentOverride = Vars::Menu::Theme::AccentOverride.Value;
+	AccentMuted = bAccentOverride ? Override(Vars::Menu::Theme::AccentMuted, tMuted) : tMuted;
+	AccentWashed = bAccentOverride ? Override(Vars::Menu::Theme::AccentWashed, tWashed) : tWashed;
+
+	// Window chrome. WindowBackground and PanelHeader used to both resolve to
+	// Background1, which is why editing the panel header moved the page background
+	// too -- they are independent surfaces now.
+	WindowBackground = Override(Vars::Menu::Theme::WindowBackground, Background1);
+	NavBackground = Override(Vars::Menu::Theme::NavBackground, Background0);
+	NavDivider = Override(Vars::Menu::Theme::NavDivider, Background2);
+
+	// Panels.
+	PanelBackground = Override(Vars::Menu::Theme::PanelBackground, Background0p5);
+	PanelHeader = Override(Vars::Menu::Theme::PanelHeader, Background1);
+	PanelBorder = Override(Vars::Menu::Theme::PanelBorder, Background2);
+	PanelAccent = Override(Vars::Menu::Theme::PanelAccent, Accent);
+	PanelTitle = Override(Vars::Menu::Theme::PanelTitle, Accent);
+	PanelCollapsedBackground = Override(Vars::Menu::Theme::PanelCollapsedBackground, Background0);
+	PanelCollapsedHeader = Override(Vars::Menu::Theme::PanelCollapsedHeader, Background0);
+	PanelCollapsedTitle = Override(Vars::Menu::Theme::PanelCollapsedTitle, Accent);
+	// Row dividers were pinned to Background1p5, the same var as control fills.
+	RowDivider = Override(Vars::Menu::Theme::RowDivider, Background1p5);
+	SubGroupText = Override(Vars::Menu::Theme::SubGroupText, TextDim);
+	SubGroupRule = Override(Vars::Menu::Theme::SubGroupRule, Background2);
+
+	// Controls.
+	ControlBackground = Override(Vars::Menu::Theme::ControlBackground, Background1p5);
+	ControlHovered = Override(Vars::Menu::Theme::ControlHovered, Background1p5L);
+	SwitchOn = Override(Vars::Menu::Theme::SwitchOn, Accent);
+	SwitchOff = Override(Vars::Menu::Theme::SwitchOff, Background2);
+	SwitchKnobOn = Override(Vars::Menu::Theme::SwitchKnobOn, Background0);
+	SwitchKnobOff = Override(Vars::Menu::Theme::SwitchKnobOff, Active);
+	SliderTrack = Override(Vars::Menu::Theme::SliderTrack, Background2);
+	SliderFill = Override(Vars::Menu::Theme::SliderFill, Accent);
+	SliderKnob = Override(Vars::Menu::Theme::SliderKnob, SliderFill);
+	SliderValueText = Override(Vars::Menu::Theme::SliderValueText, Active);
+
+	// Tabs.
+	TabActive = Override(Vars::Menu::Theme::TabActive, Active);
+	TabInactive = Override(Vars::Menu::Theme::TabInactive, Inactive);
+	TabBar = Override(Vars::Menu::Theme::TabBar, Accent);
+
+	// Popups / tooltips.
+	PopupBackground = Override(Vars::Menu::Theme::PopupBackground, Background1p5L);
+	TooltipBackground = Override(Vars::Menu::Theme::TooltipBackground, Background1p5);
+	TooltipText = Override(Vars::Menu::Theme::TooltipText, Active);
+
 	ImVec4* colors = GetStyle().Colors;
-	colors[ImGuiCol_Border] = Background2;
+	colors[ImGuiCol_Border] = PanelBorder;
 	colors[ImGuiCol_Button] = {};
 	colors[ImGuiCol_ButtonHovered] = {};
 	colors[ImGuiCol_ButtonActive] = {};
-	colors[ImGuiCol_FrameBg] = Background1p5;
-	colors[ImGuiCol_FrameBgHovered] = Background1p5L;
-	colors[ImGuiCol_FrameBgActive] = Background1p5;
+	colors[ImGuiCol_FrameBg] = ControlBackground;
+	colors[ImGuiCol_FrameBgHovered] = ControlHovered;
+	colors[ImGuiCol_FrameBgActive] = ControlBackground;
 	colors[ImGuiCol_Header] = {};
 	colors[ImGuiCol_HeaderHovered] = { Background1p5L.Value.x * 1.1f, Background1p5L.Value.y * 1.1f, Background1p5L.Value.z * 1.1f, Background1p5.Value.w }; // divd by 1.1
 	colors[ImGuiCol_HeaderActive] = Background1p5;
 	colors[ImGuiCol_ModalWindowDimBg] = { Background0.Value.x, Background0.Value.y, Background0.Value.z, 0.4f };
-	colors[ImGuiCol_PopupBg] = Background1p5L;
+	colors[ImGuiCol_PopupBg] = PopupBackground;
 	colors[ImGuiCol_ResizeGrip] = {};
 	colors[ImGuiCol_ResizeGripActive] = {};
 	colors[ImGuiCol_ResizeGripHovered] = {};

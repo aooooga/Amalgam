@@ -29,16 +29,30 @@ static std::vector<Vec3> SplashTrace(Vec3 vOrigin, float flRadius, Vec3 vNormal 
 	Vec3 vAngles = Math::VectorAngles(vNormal);
 	Vec3 vRight, vUp; Math::AngleVectors(vAngles, nullptr, &vRight, &vUp);
 
+	// Surface conform: every vertex keeps its full-radius position in the circle's own
+	// plane and is only moved along vNormal until it meets the surface, so the ring
+	// drapes over ramps, stairs and crates instead of being pulled inwards by a
+	// blocking trace. The search window is clamped to the radius so a vertex over a
+	// pit dangles at most one radius below the plane rather than falling forever.
+	const float flConform = flRadius;
+
 	std::vector<Vec3> vPoints = {};
-	for (float i = 0.f; i < iSegments; i++)
+	vPoints.reserve(size_t(iSegments) + 1);
+	for (int i = 0; i < iSegments; i++)
 	{
-		Vec3 vPoint = vOrigin + (vRight * cos(2 * Math::PI * i / iSegments) + vUp * sin(2 * Math::PI * i / iSegments)) * flRadius;
+		const float flAngle = 2 * Math::PI * i / iSegments;
+		Vec3 vPoint = vOrigin + (vRight * cos(flAngle) + vUp * sin(flAngle)) * flRadius;
 		if (bTrace)
 		{
 			CGameTrace trace = {};
 			CTraceFilterWorldAndPropsOnly filter = {};
-			SDK::Trace(vOrigin, vPoint, MASK_SHOT, &filter, &trace);
-			vPoint = trace.endpos;
+			SDK::Trace(vPoint + vNormal * flConform, vPoint - vNormal * flConform, MASK_SHOT, &filter, &trace);
+			if (trace.startsolid)
+				; // buried that far up - leave the vertex on the ideal plane
+			else if (trace.fraction < 1.f)
+				vPoint = trace.endpos + vNormal; // nudge off the surface to avoid z-fighting
+			else
+				vPoint -= vNormal * flConform; // nothing beneath it, hang at the window's edge
 		}
 		vPoints.push_back(vPoint);
 	}
@@ -167,8 +181,8 @@ void CVisuals::DrawStickyRadius()
 	}
 }
 
-// Local player's Medigun connect/disconnect radius, a flat circle at the
-// player's feet - same shape and caching approach as DrawStickyRadius.
+// Local player's Medigun connect/disconnect radius, a surface-conforming circle
+// around the player's feet - same shape and caching approach as DrawStickyRadius.
 void CVisuals::DrawHealRadius()
 {
 	if (!Vars::Aimbot::Healing::HealRadius.Value)
@@ -195,7 +209,7 @@ void CVisuals::DrawHealRadius()
 		{
 			vLastOrigin = vOrigin;
 			flLastRange = flRange;
-			vPoints = SplashTrace(vOrigin, flRange, { 0, 0, 1 }, false);
+			vPoints = SplashTrace(vOrigin, flRange, { 0, 0, 1 }, true);
 		}
 	}
 

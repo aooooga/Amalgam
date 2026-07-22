@@ -843,11 +843,11 @@ NAMESPACE_BEGIN(Vars)
 			CVarValues(ShotPath, "Shot path", 0, VISUAL, nullptr,
 				"Off", "Line", "Separators", "Spaced", "Arrows", "Boxes");
 			CVarEnum(SplashRadius, "Splash radius", 0b0, VISUAL | DROPDOWN_MULTI, "Off",
-				VA_LIST("Rockets", "Stickies", "Pipes", "Flares", "##Divider", "Trace", "Sphere"),
+				VA_LIST("Rockets", "Stickies", "Pipes", "Flares", "##Divider", "Conform", "Sphere"),
 				Rockets = 1 << 0, Stickies = 1 << 1, Pipes = 1 << 2, Flares = 1 << 3, Trace = 1 << 4, Sphere = 1 << 5,
 				Enabled = Rockets | Stickies | Pipes | Flares);
 			CVarEnum(StickyRadius, "Sticky radius", 0b0, VISUAL | DROPDOWN_MULTI, "Off",
-				VA_LIST("Local", "All", "##Divider", "Trace", "Sphere"),
+				VA_LIST("Local", "All", "##Divider", "Conform", "Sphere"),
 				Local = 1 << 0, All = 1 << 1, Trace = 1 << 2, Sphere = 1 << 3,
 				Enabled = Local | All);
 			CVar(ProjectileCamera, "Projectile camera", false, VISUAL);

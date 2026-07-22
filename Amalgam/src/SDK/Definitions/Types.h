@@ -1,5 +1,6 @@
 #pragma once
 #include "../../Utils/Math/BaseMath.h"
+#include "../../Utils/Hash/FNV1A.h"
 #include <numbers>
 #include <string>
 #include <format>
@@ -1219,6 +1220,13 @@ struct MaterialColor_t
 	// lighting suppressed (fullbright).
 	bool Fullbright = false;
 
+	// Lazily-cached FNV1A of the owning layer's material name. The name is stored
+	// alongside this in the layer pair and never changes for a given layer, so the
+	// per-frame-per-pass-per-entity hash in the chams/glow draw loops is computed
+	// once and reused. 0 = not yet computed (a real name never hashes to 0). Not
+	// part of identity — deliberately excluded from operator==.
+	mutable uint32_t m_uNameHash = 0;
+
 	MaterialColor_t() = default;
 	MaterialColor_t(const Color_t& tColor) : Color(tColor) {}
 
@@ -1236,6 +1244,14 @@ struct MaterialColor_t
 	inline Color_t GetColor(float flDistance = -1.f) const
 	{
 		return Distance.GetColor(Color, flDistance);
+	}
+
+	// Hash of the material name this layer refers to, computed once and cached.
+	inline uint32_t NameHash(const std::string& sName) const
+	{
+		if (!m_uNameHash)
+			m_uNameHash = FNV1A::Hash32(sName.c_str());
+		return m_uNameHash;
 	}
 };
 

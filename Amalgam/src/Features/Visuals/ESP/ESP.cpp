@@ -21,6 +21,7 @@ static inline void StorePlayer(CTFPlayer* pPlayer, CTFPlayer* pLocal, Group_t* p
 	int iClassNum = pPlayer->m_iClass();
 
 	PlayerCache_t& tCache = mCache[pPlayer];
+	tCache.m_vText.reserve(8); // typical name/distance/health/class/weapon + a few buffs
 	tCache.m_flAlpha = pGroup->m_tColor.a / 255.f;
 	tCache.m_tColor = F::Groups.GetColor(pPlayer, pGroup).Alpha(255);
 	tCache.m_bBox = pGroup->m_iESP & ESPEnum::Box;
@@ -50,6 +51,7 @@ static inline void StorePlayer(CTFPlayer* pPlayer, CTFPlayer* pLocal, Group_t* p
 			if (pGroup->m_iESP & ESPEnum::Labels)
 			{
 				std::vector<std::tuple<std::string, Color_t, int>> vTags = {};
+				vTags.reserve(F::PlayerUtils.GetPlayerTags(uAccountID).size() + 3); // +friend/party/f2p
 				for (auto& iID : F::PlayerUtils.GetPlayerTags(uAccountID))
 				{
 					auto pTag = F::PlayerUtils.GetTag(iID);
@@ -157,24 +159,41 @@ static inline void StorePlayer(CTFPlayer* pPlayer, CTFPlayer* pLocal, Group_t* p
 		}
 	}
 
+	// The Buffs/Debuffs/state sections below issue dozens of InCond() queries per
+	// player, each re-reading the same condition dwords through the netvar
+	// accessors. Snapshot the five dwords once and test bits locally, mirroring
+	// CTFPlayer::InCond exactly (word 0 folds in _condition_bits like InCond does).
+	const int aCond[5] = {
+		pPlayer->m_nPlayerCond() | pPlayer->_condition_bits(),
+		pPlayer->m_nPlayerCondEx(),
+		pPlayer->m_nPlayerCondEx2(),
+		pPlayer->m_nPlayerCondEx3(),
+		pPlayer->m_nPlayerCondEx4(),
+	};
+	const auto bInCond = [&](ETFCond eCond) -> bool
+	{
+		const int iWord = eCond / 32;
+		return iWord >= 0 && iWord < 5 && (aCond[iWord] & (1 << (eCond - iWord * 32)));
+	};
+
 	// Buffs
 	if (pGroup->m_iESP & ESPEnum::Buffs)
 	{
-		if (pPlayer->InCond(TF_COND_INVULNERABLE) ||
-			pPlayer->InCond(TF_COND_INVULNERABLE_HIDE_UNLESS_DAMAGED) ||
-			pPlayer->InCond(TF_COND_INVULNERABLE_USER_BUFF) ||
-			pPlayer->InCond(TF_COND_INVULNERABLE_CARD_EFFECT))
+		if (bInCond(TF_COND_INVULNERABLE) ||
+			bInCond(TF_COND_INVULNERABLE_HIDE_UNLESS_DAMAGED) ||
+			bInCond(TF_COND_INVULNERABLE_USER_BUFF) ||
+			bInCond(TF_COND_INVULNERABLE_CARD_EFFECT))
 			tCache.m_vText.emplace_back(ALIGN_TOPRIGHT, "Uber", Vars::Colors::IndicatorTextBad.Value, Vars::Menu::Theme::Background.Value);
-		else if (pPlayer->InCond(TF_COND_MEGAHEAL))
+		else if (bInCond(TF_COND_MEGAHEAL))
 			tCache.m_vText.emplace_back(ALIGN_TOPRIGHT, "Megaheal", Vars::Colors::IndicatorTextBad.Value, Vars::Menu::Theme::Background.Value);
-		else if (pPlayer->InCond(TF_COND_PHASE))
+		else if (bInCond(TF_COND_PHASE))
 			tCache.m_vText.emplace_back(ALIGN_TOPRIGHT, "Bonk", Vars::Colors::IndicatorTextMid.Value, Vars::Menu::Theme::Background.Value);
 
 		bool bCrits = pPlayer->IsCritBoosted(), bMiniCrits = pPlayer->IsMiniCritBoosted();
 		if (pWeapon)
 		{
 			if (bMiniCrits && SDK::AttribHookValue(0, "minicrits_become_crits", pWeapon)
-				|| pPlayer->InCond(TF_COND_BLASTJUMPING) && SDK::AttribHookValue(0, "crit_while_airborne", pWeapon))
+				|| bInCond(TF_COND_BLASTJUMPING) && SDK::AttribHookValue(0, "crit_while_airborne", pWeapon))
 				bCrits = true, bMiniCrits = false;
 			if (bCrits && SDK::AttribHookValue(0, "crits_become_minicrits", pWeapon))
 				bCrits = false, bMiniCrits = true;
@@ -185,51 +204,51 @@ static inline void StorePlayer(CTFPlayer* pPlayer, CTFPlayer* pLocal, Group_t* p
 			tCache.m_vText.emplace_back(ALIGN_TOPRIGHT, "Mini-crits", Vars::Colors::IndicatorTextBad.Value, Vars::Menu::Theme::Background.Value);
 
 		/* vaccinator effects */
-		if (pPlayer->InCond(TF_COND_MEDIGUN_UBER_BULLET_RESIST) || pPlayer->InCond(TF_COND_BULLET_IMMUNE))
+		if (bInCond(TF_COND_MEDIGUN_UBER_BULLET_RESIST) || bInCond(TF_COND_BULLET_IMMUNE))
 			tCache.m_vText.emplace_back(ALIGN_TOPRIGHT, "Bullet+", Vars::Colors::IndicatorTextBad.Value, Vars::Menu::Theme::Background.Value);
-		else if (pPlayer->InCond(TF_COND_MEDIGUN_SMALL_BULLET_RESIST))
+		else if (bInCond(TF_COND_MEDIGUN_SMALL_BULLET_RESIST))
 			tCache.m_vText.emplace_back(ALIGN_TOPRIGHT, "Bullet", Vars::Menu::Theme::Active.Value, Vars::Menu::Theme::Background.Value);
-		if (pPlayer->InCond(TF_COND_MEDIGUN_UBER_BLAST_RESIST) || pPlayer->InCond(TF_COND_BLAST_IMMUNE))
+		if (bInCond(TF_COND_MEDIGUN_UBER_BLAST_RESIST) || bInCond(TF_COND_BLAST_IMMUNE))
 			tCache.m_vText.emplace_back(ALIGN_TOPRIGHT, "Blast+", Vars::Colors::IndicatorTextBad.Value, Vars::Menu::Theme::Background.Value);
-		else if (pPlayer->InCond(TF_COND_MEDIGUN_SMALL_BLAST_RESIST))
+		else if (bInCond(TF_COND_MEDIGUN_SMALL_BLAST_RESIST))
 			tCache.m_vText.emplace_back(ALIGN_TOPRIGHT, "Blast", Vars::Menu::Theme::Active.Value, Vars::Menu::Theme::Background.Value);
-		if (pPlayer->InCond(TF_COND_MEDIGUN_UBER_FIRE_RESIST) || pPlayer->InCond(TF_COND_FIRE_IMMUNE))
+		if (bInCond(TF_COND_MEDIGUN_UBER_FIRE_RESIST) || bInCond(TF_COND_FIRE_IMMUNE))
 			tCache.m_vText.emplace_back(ALIGN_TOPRIGHT, "Fire+", Vars::Colors::IndicatorTextBad.Value, Vars::Menu::Theme::Background.Value);
-		else if (pPlayer->InCond(TF_COND_MEDIGUN_SMALL_FIRE_RESIST))
+		else if (bInCond(TF_COND_MEDIGUN_SMALL_FIRE_RESIST))
 			tCache.m_vText.emplace_back(ALIGN_TOPRIGHT, "Fire", Vars::Menu::Theme::Active.Value, Vars::Menu::Theme::Background.Value);
 
-		if (pPlayer->InCond(TF_COND_OFFENSEBUFF))
+		if (bInCond(TF_COND_OFFENSEBUFF))
 			tCache.m_vText.emplace_back(ALIGN_TOPRIGHT, "Banner", Vars::Colors::IndicatorTextBad.Value, Vars::Menu::Theme::Background.Value);
-		if (pPlayer->InCond(TF_COND_DEFENSEBUFF))
+		if (bInCond(TF_COND_DEFENSEBUFF))
 			tCache.m_vText.emplace_back(ALIGN_TOPRIGHT, "Battalions", Vars::Colors::IndicatorTextBad.Value, Vars::Menu::Theme::Background.Value);
-		if (pPlayer->InCond(TF_COND_REGENONDAMAGEBUFF))
+		if (bInCond(TF_COND_REGENONDAMAGEBUFF))
 			tCache.m_vText.emplace_back(ALIGN_TOPRIGHT, "Conch", Vars::Colors::IndicatorTextBad.Value, Vars::Menu::Theme::Background.Value);
 
-		if (pPlayer->InCond(TF_COND_RUNE_STRENGTH))
+		if (bInCond(TF_COND_RUNE_STRENGTH))
 			tCache.m_vText.emplace_back(ALIGN_TOPRIGHT, "Strength", Vars::Menu::Theme::Active.Value, Vars::Menu::Theme::Background.Value);
-		if (pPlayer->InCond(TF_COND_RUNE_HASTE))
+		if (bInCond(TF_COND_RUNE_HASTE))
 			tCache.m_vText.emplace_back(ALIGN_TOPRIGHT, "Haste", Vars::Menu::Theme::Active.Value, Vars::Menu::Theme::Background.Value);
-		if (pPlayer->InCond(TF_COND_RUNE_REGEN))
+		if (bInCond(TF_COND_RUNE_REGEN))
 			tCache.m_vText.emplace_back(ALIGN_TOPRIGHT, "Regen", Vars::Menu::Theme::Active.Value, Vars::Menu::Theme::Background.Value);
-		if (pPlayer->InCond(TF_COND_RUNE_RESIST))
+		if (bInCond(TF_COND_RUNE_RESIST))
 			tCache.m_vText.emplace_back(ALIGN_TOPRIGHT, "Resistance", Vars::Menu::Theme::Active.Value, Vars::Menu::Theme::Background.Value);
-		if (pPlayer->InCond(TF_COND_RUNE_VAMPIRE))
+		if (bInCond(TF_COND_RUNE_VAMPIRE))
 			tCache.m_vText.emplace_back(ALIGN_TOPRIGHT, "Vampire", Vars::Menu::Theme::Active.Value, Vars::Menu::Theme::Background.Value);
-		if (pPlayer->InCond(TF_COND_RUNE_REFLECT))
+		if (bInCond(TF_COND_RUNE_REFLECT))
 			tCache.m_vText.emplace_back(ALIGN_TOPRIGHT, "Reflect", Vars::Menu::Theme::Active.Value, Vars::Menu::Theme::Background.Value);
-		if (pPlayer->InCond(TF_COND_RUNE_PRECISION))
+		if (bInCond(TF_COND_RUNE_PRECISION))
 			tCache.m_vText.emplace_back(ALIGN_TOPRIGHT, "Precision", Vars::Menu::Theme::Active.Value, Vars::Menu::Theme::Background.Value);
-		if (pPlayer->InCond(TF_COND_RUNE_AGILITY))
+		if (bInCond(TF_COND_RUNE_AGILITY))
 			tCache.m_vText.emplace_back(ALIGN_TOPRIGHT, "Agility", Vars::Menu::Theme::Active.Value, Vars::Menu::Theme::Background.Value);
-		if (pPlayer->InCond(TF_COND_RUNE_KNOCKOUT))
+		if (bInCond(TF_COND_RUNE_KNOCKOUT))
 			tCache.m_vText.emplace_back(ALIGN_TOPRIGHT, "Knockout", Vars::Menu::Theme::Active.Value, Vars::Menu::Theme::Background.Value);
-		if (pPlayer->InCond(TF_COND_RUNE_KING))
+		if (bInCond(TF_COND_RUNE_KING))
 			tCache.m_vText.emplace_back(ALIGN_TOPRIGHT, "King", Vars::Menu::Theme::Active.Value, Vars::Menu::Theme::Background.Value);
-		if (pPlayer->InCond(TF_COND_RUNE_PLAGUE))
+		if (bInCond(TF_COND_RUNE_PLAGUE))
 			tCache.m_vText.emplace_back(ALIGN_TOPRIGHT, "Plague", Vars::Menu::Theme::Active.Value, Vars::Menu::Theme::Background.Value);
-		if (pPlayer->InCond(TF_COND_RUNE_SUPERNOVA))
+		if (bInCond(TF_COND_RUNE_SUPERNOVA))
 			tCache.m_vText.emplace_back(ALIGN_TOPRIGHT, "Supernova", Vars::Menu::Theme::Active.Value, Vars::Menu::Theme::Background.Value);
-		if (pPlayer->InCond(TF_COND_POWERUPMODE_DOMINANT))
+		if (bInCond(TF_COND_POWERUPMODE_DOMINANT))
 			tCache.m_vText.emplace_back(ALIGN_TOPRIGHT, "Dominant", Vars::Menu::Theme::Active.Value, Vars::Menu::Theme::Background.Value);
 
 		for (int i = 0; i < MAX_WEAPONS; i++)
@@ -259,41 +278,41 @@ static inline void StorePlayer(CTFPlayer* pPlayer, CTFPlayer* pLocal, Group_t* p
 			}
 		}
 
-		if (pPlayer->InCond(TF_COND_RADIUSHEAL) ||
-			pPlayer->InCond(TF_COND_HEALTH_BUFF) ||
-			pPlayer->InCond(TF_COND_RADIUSHEAL_ON_DAMAGE) ||
-			pPlayer->InCond(TF_COND_HALLOWEEN_QUICK_HEAL) ||
-			pPlayer->InCond(TF_COND_HALLOWEEN_HELL_HEAL) ||
-			pPlayer->InCond(TF_COND_KING_BUFFED))
+		if (bInCond(TF_COND_RADIUSHEAL) ||
+			bInCond(TF_COND_HEALTH_BUFF) ||
+			bInCond(TF_COND_RADIUSHEAL_ON_DAMAGE) ||
+			bInCond(TF_COND_HALLOWEEN_QUICK_HEAL) ||
+			bInCond(TF_COND_HALLOWEEN_HELL_HEAL) ||
+			bInCond(TF_COND_KING_BUFFED))
 			tCache.m_vText.emplace_back(ALIGN_TOPRIGHT, "Heal", Vars::Colors::IndicatorTextGood.Value, Vars::Menu::Theme::Background.Value);
-		else if (pPlayer->InCond(TF_COND_HEALTH_OVERHEALED))
+		else if (bInCond(TF_COND_HEALTH_OVERHEALED))
 			tCache.m_vText.emplace_back(ALIGN_TOPRIGHT, "HP+", Vars::Colors::IndicatorTextGood.Value, Vars::Menu::Theme::Background.Value);
 
-		//if (pPlayer->InCond(TF_COND_BLASTJUMPING))
+		//if (bInCond(TF_COND_BLASTJUMPING))
 		//	tCache.m_vText.emplace_back(ALIGN_TOPRIGHT, "Blastjump", Vars::Colors::IndicatorTextMid.Value, Vars::Menu::Theme::Background.Value);
 	}
 
 	// Debuffs
 	if (pGroup->m_iESP & ESPEnum::Debuffs)
 	{
-		if (pPlayer->InCond(TF_COND_MARKEDFORDEATH)
-			|| pPlayer->InCond(TF_COND_MARKEDFORDEATH_SILENT)
-			|| pPlayer->InCond(TF_COND_PASSTIME_PENALTY_DEBUFF))
+		if (bInCond(TF_COND_MARKEDFORDEATH)
+			|| bInCond(TF_COND_MARKEDFORDEATH_SILENT)
+			|| bInCond(TF_COND_PASSTIME_PENALTY_DEBUFF))
 			tCache.m_vText.emplace_back(ALIGN_TOPRIGHT, "Marked", Vars::Menu::Theme::Active.Value, Vars::Menu::Theme::Background.Value);
 
-		if (pPlayer->InCond(TF_COND_URINE))
+		if (bInCond(TF_COND_URINE))
 			tCache.m_vText.emplace_back(ALIGN_TOPRIGHT, "Jarate", Vars::Menu::Theme::Active.Value, Vars::Menu::Theme::Background.Value);
 
-		if (pPlayer->InCond(TF_COND_MAD_MILK))
+		if (bInCond(TF_COND_MAD_MILK))
 			tCache.m_vText.emplace_back(ALIGN_TOPRIGHT, "Milk", Vars::Menu::Theme::Active.Value, Vars::Menu::Theme::Background.Value);
 
-		if (pPlayer->InCond(TF_COND_STUNNED))
+		if (bInCond(TF_COND_STUNNED))
 			tCache.m_vText.emplace_back(ALIGN_TOPRIGHT, "Stun", Vars::Menu::Theme::Active.Value, Vars::Menu::Theme::Background.Value);
 
-		if (pPlayer->InCond(TF_COND_BURNING))
+		if (bInCond(TF_COND_BURNING))
 			tCache.m_vText.emplace_back(ALIGN_TOPRIGHT, "Burn", Vars::Menu::Theme::Active.Value, Vars::Menu::Theme::Background.Value);
 
-		if (pPlayer->InCond(TF_COND_BLEEDING))
+		if (bInCond(TF_COND_BLEEDING))
 			tCache.m_vText.emplace_back(ALIGN_TOPRIGHT, "Bleed", Vars::Menu::Theme::Active.Value, Vars::Menu::Theme::Background.Value);
 	}
 
@@ -302,16 +321,16 @@ static inline void StorePlayer(CTFPlayer* pPlayer, CTFPlayer* pLocal, Group_t* p
 	{
 		if (pPlayer->m_bFeignDeathReady())
 			tCache.m_vText.emplace_back(ALIGN_TOPRIGHT, "DR", Vars::Menu::Theme::Active.Value, Vars::Menu::Theme::Background.Value);
-		else if (pPlayer->InCond(TF_COND_FEIGN_DEATH))
+		else if (bInCond(TF_COND_FEIGN_DEATH))
 			tCache.m_vText.emplace_back(ALIGN_TOPRIGHT, "Feign", Vars::Menu::Theme::Active.Value, Vars::Menu::Theme::Background.Value);
 
 		if (float flInvis = pPlayer->GetEffectiveInvisibilityLevel())
 			tCache.m_vText.emplace_back(ALIGN_TOPRIGHT, std::format("Invis {:.0f}%", flInvis * 100), Vars::Menu::Theme::Active.Value, Vars::Menu::Theme::Background.Value);
 
-		if (pPlayer->InCond(TF_COND_DISGUISED))
+		if (bInCond(TF_COND_DISGUISED))
 			tCache.m_vText.emplace_back(ALIGN_TOPRIGHT, "Disguise", Vars::Menu::Theme::Active.Value, Vars::Menu::Theme::Background.Value);
 
-		if (pPlayer->InCond(TF_COND_AIMING) || pPlayer->InCond(TF_COND_ZOOMED))
+		if (bInCond(TF_COND_AIMING) || bInCond(TF_COND_ZOOMED))
 		{
 			switch (pWeapon ? pWeapon->GetWeaponID() : -1)
 			{
@@ -361,10 +380,10 @@ static inline void StorePlayer(CTFPlayer* pPlayer, CTFPlayer* pLocal, Group_t* p
 			}
 		}
 
-		if (pPlayer->InCond(TF_COND_SHIELD_CHARGE))
+		if (bInCond(TF_COND_SHIELD_CHARGE))
 			tCache.m_vText.emplace_back(ALIGN_TOPRIGHT, "Charging", Vars::Menu::Theme::Active.Value, Vars::Menu::Theme::Background.Value);
 
-		if (Vars::Visuals::Removals::Taunts.Value && pPlayer->InCond(TF_COND_TAUNTING))
+		if (Vars::Visuals::Removals::Taunts.Value && bInCond(TF_COND_TAUNTING))
 			tCache.m_vText.emplace_back(ALIGN_TOPRIGHT, "Taunt", Vars::Menu::Theme::Active.Value, Vars::Menu::Theme::Background.Value);
 
 		if (Vars::Debug::Info.Value && !bLocal /*&& !pPlayer->IsDormant()*/)
@@ -709,30 +728,93 @@ static inline void StoreMisc(CBaseEntity* pEntity, CTFPlayer* pLocal, Group_t* p
 	}
 }
 
+// Reset a cache entry to a default-constructed state (so every scalar field is
+// back to its default exactly as a fresh insert would be) while REUSING the
+// existing vectors' heap buffers instead of freeing and reallocating them. This
+// keeps behavior identical to the old clear()+fresh-insert while eliminating the
+// per-tick allocation churn. Stamped with the current store generation so stale
+// entries (entities no longer tracked) can be pruned afterward.
+template <typename T>
+static inline T& ResetCacheEntry(std::unordered_map<CBaseEntity*, T>& mCache, CBaseEntity* pEntity, uint32_t uStamp)
+{
+	T& tCache = mCache[pEntity];
+
+	// Salvage the vector buffers, reset the struct to defaults, move buffers back.
+	std::vector<Text_t> vText = std::move(tCache.m_vText);
+	vText.clear();
+	if constexpr (requires { tCache.m_vBars; })
+	{
+		std::vector<Bar_t> vBars = std::move(tCache.m_vBars);
+		vBars.clear();
+		tCache = T{};
+		tCache.m_vBars = std::move(vBars);
+	}
+	else
+		tCache = T{};
+	tCache.m_vText = std::move(vText);
+
+	tCache.m_uStamp = uStamp;
+	return tCache;
+}
+
+template <typename T>
+static inline void PruneStaleEntries(std::unordered_map<CBaseEntity*, T>& mCache, uint32_t uStamp)
+{
+	for (auto it = mCache.begin(); it != mCache.end();)
+		it = (it->second.m_uStamp != uStamp) ? mCache.erase(it) : std::next(it);
+}
+
 void CESP::Store(CTFPlayer* pLocal)
 {
-	m_mPlayerCache.clear();
-	m_mBuildingCache.clear();
-	m_mEntityCache.clear();
 	if (!pLocal || !F::Groups.GroupsActive())
+	{
+		m_mPlayerCache.clear();
+		m_mBuildingCache.clear();
+		m_mEntityCache.clear();
 		return;
+	}
+
+	const uint32_t uStamp = ++m_uStoreStamp;
 
 	for (auto& [pEntity, pGroup] : F::Groups.GetGroup(false))
 	{
 		if (!pGroup->m_iESP)
 			continue;
 
+		// Reset+stamp the entry up front so the Store* helpers append into a
+		// cleared-but-capacity-retaining vector instead of a freshly allocated one.
 		if (pEntity->IsPlayer())
+		{
+			ResetCacheEntry(m_mPlayerCache, pEntity, uStamp);
 			StorePlayer(pEntity->As<CTFPlayer>(), pLocal, pGroup, m_mPlayerCache);
+		}
 		else if (pEntity->IsBuilding())
+		{
+			ResetCacheEntry(m_mBuildingCache, pEntity, uStamp);
 			StoreBuilding(pEntity->As<CBaseObject>(), pLocal, pGroup, m_mBuildingCache);
+		}
 		else if (pEntity->IsProjectile())
+		{
+			ResetCacheEntry(m_mEntityCache, pEntity, uStamp);
 			StoreProjectile(pEntity, pLocal, pGroup, m_mEntityCache);
+		}
 		else if (pEntity->GetClassID() == ETFClassID::CCaptureFlag)
+		{
+			ResetCacheEntry(m_mEntityCache, pEntity, uStamp);
 			StoreObjective(pEntity, pLocal, pGroup, m_mEntityCache);
+		}
 		else
+		{
+			ResetCacheEntry(m_mEntityCache, pEntity, uStamp);
 			StoreMisc(pEntity, pLocal, pGroup, m_mEntityCache);
+		}
 	}
+
+	// Drop entries for entities that were not stored this tick (left the group /
+	// went dormant / despawned), keeping only live slots and their capacity.
+	PruneStaleEntries(m_mPlayerCache, uStamp);
+	PruneStaleEntries(m_mBuildingCache, uStamp);
+	PruneStaleEntries(m_mEntityCache, uStamp);
 }
 
 static matrix3x4 s_aBones[MAXSTUDIOBONES];
@@ -754,17 +836,22 @@ void CESP::DrawPlayers()
 
 	const auto& fFont = H::Fonts.GetFont(FONT_ESP);
 	const int nTall = fFont.m_nTall + H::Draw.Scale(2);
+	// Loop-invariant scaled paddings: Scale() reads the menu-scale ConfigVar and
+	// rounds; the args are constant, so resolve them once instead of per player.
+	const int iPad6 = H::Draw.Scale(6), iPad5 = H::Draw.Scale(5), iPad2 = H::Draw.Scale(2);
+	const int iBarSpace = H::Draw.Scale(4), iBarThickness = H::Draw.Scale(2, Scale_Round);
+	const int iIconSize = H::Draw.Scale(18, Scale_Round);
 	for (auto& [pEntity, tCache] : m_mPlayerCache)
 	{
 		float x, y, w, h;
 		if (!GetDrawBounds(pEntity, x, y, w, h))
 			continue;
 
-		int l = x - H::Draw.Scale(6), r = x + w + H::Draw.Scale(6), m = x + w / 2;
-		int t = y - H::Draw.Scale(5), b = y + h + H::Draw.Scale(5);
+		int l = x - iPad6, r = x + w + iPad6, m = x + w / 2;
+		int t = y - iPad5, b = y + h + iPad5;
 		int lOffset = 0, rOffset = 0, bOffset = 0, tOffset = 0;
 		I::MatSystemSurface->DrawSetAlphaMultiplier(tCache.m_flAlpha);
-		
+
 		if (tCache.m_bBox)
 			H::Draw.LineRectOutline(x, y, w, h, tCache.m_tColor, { 0, 0, 0, 255 });
 
@@ -773,21 +860,24 @@ void CESP::DrawPlayers()
 			auto pPlayer = pEntity->As<CTFPlayer>();
 			if (pPlayer->SetupBones(s_aBones, MAXSTUDIOBONES, BONE_USED_BY_ANYTHING, I::GlobalVars->curtime))
 			{
-				int iHead = pPlayer->GetBaseToHitbox(HITBOX_HEAD);
-				int iSpine2 = pPlayer->GetBaseToHitbox(HITBOX_SPINE2);
-				int iPelvis = pPlayer->GetBaseToHitbox(HITBOX_PELVIS);
-				int iLeftUpperarm = pPlayer->GetBaseToHitbox(HITBOX_LEFT_UPPERARM);
-				int iLeftForearm = pPlayer->GetBaseToHitbox(HITBOX_LEFT_FOREARM);
-				int iLeftHand = pPlayer->GetBaseToHitbox(HITBOX_LEFT_HAND);
-				int iRightUpperarm = pPlayer->GetBaseToHitbox(HITBOX_RIGHT_UPPERARM);
-				int iRightForearm = pPlayer->GetBaseToHitbox(HITBOX_RIGHT_FOREARM);
-				int iRightHand = pPlayer->GetBaseToHitbox(HITBOX_RIGHT_HAND);
-				int iLeftThigh = pPlayer->GetBaseToHitbox(HITBOX_LEFT_THIGH);
-				int iLeftCalf = pPlayer->GetBaseToHitbox(HITBOX_LEFT_CALF);
-				int iLeftFoot = pPlayer->GetBaseToHitbox(HITBOX_LEFT_FOOT);
-				int iRightThigh = pPlayer->GetBaseToHitbox(HITBOX_RIGHT_THIGH);
-				int iRightCalf = pPlayer->GetBaseToHitbox(HITBOX_RIGHT_CALF);
-				int iRightFoot = pPlayer->GetBaseToHitbox(HITBOX_RIGHT_FOOT);
+				// The model hash is constant across all 15 remaps; resolve it once
+				// instead of letting each GetBaseToHitbox re-run GetModel(entindex()).
+				const uint32_t uModel = H::Entities.GetModel(pPlayer->entindex());
+				int iHead = pPlayer->GetBaseToHitbox(HITBOX_HEAD, uModel);
+				int iSpine2 = pPlayer->GetBaseToHitbox(HITBOX_SPINE2, uModel);
+				int iPelvis = pPlayer->GetBaseToHitbox(HITBOX_PELVIS, uModel);
+				int iLeftUpperarm = pPlayer->GetBaseToHitbox(HITBOX_LEFT_UPPERARM, uModel);
+				int iLeftForearm = pPlayer->GetBaseToHitbox(HITBOX_LEFT_FOREARM, uModel);
+				int iLeftHand = pPlayer->GetBaseToHitbox(HITBOX_LEFT_HAND, uModel);
+				int iRightUpperarm = pPlayer->GetBaseToHitbox(HITBOX_RIGHT_UPPERARM, uModel);
+				int iRightForearm = pPlayer->GetBaseToHitbox(HITBOX_RIGHT_FOREARM, uModel);
+				int iRightHand = pPlayer->GetBaseToHitbox(HITBOX_RIGHT_HAND, uModel);
+				int iLeftThigh = pPlayer->GetBaseToHitbox(HITBOX_LEFT_THIGH, uModel);
+				int iLeftCalf = pPlayer->GetBaseToHitbox(HITBOX_LEFT_CALF, uModel);
+				int iLeftFoot = pPlayer->GetBaseToHitbox(HITBOX_LEFT_FOOT, uModel);
+				int iRightThigh = pPlayer->GetBaseToHitbox(HITBOX_RIGHT_THIGH, uModel);
+				int iRightCalf = pPlayer->GetBaseToHitbox(HITBOX_RIGHT_CALF, uModel);
+				int iRightFoot = pPlayer->GetBaseToHitbox(HITBOX_RIGHT_FOOT, uModel);
 
 				const int aSpine[] = { iHead, iSpine2, iPelvis };
 				const int aLeftArm[] = { iSpine2, iLeftUpperarm, iLeftForearm, iLeftHand };
@@ -816,8 +906,8 @@ void CESP::DrawPlayers()
 					H::Draw.FillRectPercent(x, y, w, h, flPercent, tColor, { 0, 0, 0, 255 }, eAlign, bAdjust);
 			};
 
-			int iSpace = H::Draw.Scale(4);
-			int iThickness = H::Draw.Scale(2, Scale_Round);
+			const int iSpace = iBarSpace;
+			const int iThickness = iBarThickness;
 			switch (iMode)
 			{
 			case ALIGN_LEFT:
@@ -844,10 +934,10 @@ void CESP::DrawPlayers()
 				bOffset += nTall;
 				break;
 			case ALIGN_LEFT:
-				H::Draw.StringOutlined(fFont, l - lOffset, y - H::Draw.Scale(2) + h - h * std::min(tCache.m_flHealth, 1.f), tColor, tOutline, ALIGN_TOPRIGHT, sText.c_str());
+				H::Draw.StringOutlined(fFont, l - lOffset, y - iPad2 + h - h * std::min(tCache.m_flHealth, 1.f), tColor, tOutline, ALIGN_TOPRIGHT, sText.c_str());
 				break;
 			case ALIGN_TOPRIGHT:
-				H::Draw.StringOutlined(fFont, r, y - H::Draw.Scale(2) + rOffset, tColor, tOutline, ALIGN_TOPLEFT, sText.c_str());
+				H::Draw.StringOutlined(fFont, r, y - iPad2 + rOffset, tColor, tOutline, ALIGN_TOPLEFT, sText.c_str());
 				rOffset += nTall;
 				break;
 			case ALIGN_BOTTOMRIGHT:
@@ -858,21 +948,22 @@ void CESP::DrawPlayers()
 
 		if (tCache.m_iClassIcon)
 		{
-			const char* sTexture = "vgui/glyph_multiplayer.vtf";
-			switch (tCache.m_iClassIcon)
-			{
-			case TF_CLASS_SCOUT: sTexture = "hud/leaderboard_class_scout.vtf"; break;
-			case TF_CLASS_SOLDIER: sTexture = "hud/leaderboard_class_soldier.vtf"; break;
-			case TF_CLASS_PYRO: sTexture = "hud/leaderboard_class_pyro.vtf"; break;
-			case TF_CLASS_DEMOMAN: sTexture = "hud/leaderboard_class_demo.vtf"; break;
-			case TF_CLASS_HEAVY: sTexture = "hud/leaderboard_class_heavy.vtf"; break;
-			case TF_CLASS_ENGINEER: sTexture = "hud/leaderboard_class_engineer.vtf"; break;
-			case TF_CLASS_MEDIC: sTexture = "hud/leaderboard_class_medic.vtf"; break;
-			case TF_CLASS_SNIPER: sTexture = "hud/leaderboard_class_sniper.vtf"; break;
-			case TF_CLASS_SPY: sTexture = "hud/leaderboard_class_spy.vtf"; break;
-			}
-			int iSize = H::Draw.Scale(18, Scale_Round);
-			H::Draw.Texture(sTexture, m, t - tOffset, iSize, iSize, ALIGN_BOTTOM);
+			// Class -> leaderboard icon, table lookup instead of a per-player switch.
+			static const char* const s_aClassIcons[] = {
+				"vgui/glyph_multiplayer.vtf",              // 0 / TF_CLASS_UNDEFINED
+				"hud/leaderboard_class_scout.vtf",         // TF_CLASS_SCOUT
+				"hud/leaderboard_class_sniper.vtf",        // TF_CLASS_SNIPER
+				"hud/leaderboard_class_soldier.vtf",       // TF_CLASS_SOLDIER
+				"hud/leaderboard_class_demo.vtf",          // TF_CLASS_DEMOMAN
+				"hud/leaderboard_class_medic.vtf",         // TF_CLASS_MEDIC
+				"hud/leaderboard_class_heavy.vtf",         // TF_CLASS_HEAVY
+				"hud/leaderboard_class_pyro.vtf",          // TF_CLASS_PYRO
+				"hud/leaderboard_class_spy.vtf",           // TF_CLASS_SPY
+				"hud/leaderboard_class_engineer.vtf",      // TF_CLASS_ENGINEER
+			};
+			const char* sTexture = (tCache.m_iClassIcon >= 0 && tCache.m_iClassIcon < int(std::size(s_aClassIcons)))
+				? s_aClassIcons[tCache.m_iClassIcon] : "vgui/glyph_multiplayer.vtf";
+			H::Draw.Texture(sTexture, m, t - tOffset, iIconSize, iIconSize, ALIGN_BOTTOM);
 		}
 
 		if (tCache.m_pWeaponIcon)
@@ -1036,13 +1127,26 @@ bool CESP::GetDrawBounds(CBaseEntity* pEntity, float& x, float& y, float& w, flo
 
 void CESP::DrawBones(CTFPlayer* pPlayer, matrix3x4* aBones, std::span<const int> vBones, Color_t tColor)
 {
+	if (vBones.empty())
+		return;
+
+	// Each segment's start point is the previous segment's end point; carry the
+	// resolved center + its W2S result forward so every joint is transformed and
+	// projected exactly once per chain instead of twice.
+	Vec3 vPrev = pPlayer->GetHitboxCenter(aBones, vBones[0]);
+	Vec3 vScreenPrev;
+	bool bPrevOnScreen = SDK::W2S(vPrev, vScreenPrev);
+
 	for (size_t n = 1; n < vBones.size(); n++)
 	{
-		auto vBone1 = pPlayer->GetHitboxCenter(aBones, vBones[n]);
-		auto vBone2 = pPlayer->GetHitboxCenter(aBones, vBones[n - 1]);
+		Vec3 vCur = pPlayer->GetHitboxCenter(aBones, vBones[n]);
+		Vec3 vScreenCur;
+		bool bCurOnScreen = SDK::W2S(vCur, vScreenCur);
 
-		Vec3 vScreen1, vScreen2;
-		if (SDK::W2S(vBone1, vScreen1) && SDK::W2S(vBone2, vScreen2))
-			H::Draw.Line(vScreen1.x, vScreen1.y, vScreen2.x, vScreen2.y, tColor);
+		if (bCurOnScreen && bPrevOnScreen)
+			H::Draw.Line(vScreenCur.x, vScreenCur.y, vScreenPrev.x, vScreenPrev.y, tColor);
+
+		vScreenPrev = vScreenCur;
+		bPrevOnScreen = bCurOnScreen;
 	}
 }

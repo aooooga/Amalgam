@@ -192,7 +192,7 @@ void CTrajectoryGhost::RenderMain()
 			// when the team's Health colour is enabled.
 			const Color_t cFill = bHealth ? EvalGlowStops(tGlow.Stops, flHealthFrac) : tColor.GetColor(flDistance);
 
-			auto pMaterial = F::Materials.GetMaterial(FNV1A::Hash32(sName.c_str()));
+			auto pMaterial = F::Materials.GetMaterial(tColor.NameHash(sName));
 			F::Materials.SetColor(pMaterial, cFill);
 			I::ModelRender->ForcedMaterialOverride(pMaterial ? pMaterial->m_pMaterial : nullptr);
 			I::RenderView->SetColorModulation(cFill);

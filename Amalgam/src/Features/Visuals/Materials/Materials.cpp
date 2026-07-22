@@ -367,9 +367,9 @@ void CMaterials::EditMaterial(const char* sName, const char* sVMT)
 	m_bLoaded = false;
 
 	auto uHash = FNV1A::Hash32(sName);
-	if (m_mMaterials.contains(uHash) && !m_mMaterials[uHash].m_bLocked)
+	if (auto it = m_mMaterials.find(uHash); it != m_mMaterials.end() && !it->second.m_bLocked)
 	{
-		auto& tMaterial = m_mMaterials[uHash];
+		auto& tMaterial = it->second;
 
 		Remove(tMaterial.m_pMaterial);
 		RemoveVars(tMaterial);
@@ -399,10 +399,10 @@ void CMaterials::RemoveMaterial(const char* sName)
 	m_bLoaded = false;
 
 	auto uHash = FNV1A::Hash32(sName);
-	if (m_mMaterials.contains(uHash) && !m_mMaterials[uHash].m_bLocked)
+	if (auto it = m_mMaterials.find(uHash); it != m_mMaterials.end() && !it->second.m_bLocked)
 	{
-		Remove(m_mMaterials[uHash].m_pMaterial);
-		m_mMaterials.erase(uHash);
+		Remove(it->second.m_pMaterial);
+		m_mMaterials.erase(it);
 
 		std::filesystem::remove(F::Configs.m_sMaterialsPath + sName + ".vmt");
 

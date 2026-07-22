@@ -213,7 +213,7 @@ void CRearView::DrawEnemies(uint32_t uCamBit)
 	auto pLocal = H::Entities.GetLocal();
 	for (auto& [sName, tColor] : Vars::Visuals::UI::RearViewMaterial.Value)
 	{
-		auto pMaterial = F::Materials.GetMaterial(FNV1A::Hash32(sName.c_str()));
+		auto pMaterial = F::Materials.GetMaterial(tColor.NameHash(sName));
 		I::ModelRender->ForcedMaterialOverride(pMaterial ? pMaterial->m_pMaterial : nullptr);
 
 		if (pMaterial && pMaterial->m_bInvertCull)

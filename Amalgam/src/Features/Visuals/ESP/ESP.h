@@ -26,6 +26,10 @@ struct EntityCache_t
 	std::vector<Text_t> m_vText = {};
 	Color_t m_tColor = {};
 	bool m_bBox = false;
+	// Store()-generation stamp: entries reuse their heap buffers across ticks
+	// instead of being freed/reallocated; a stamp older than the current store
+	// means the entity is no longer tracked and the slot is pruned.
+	uint32_t m_uStamp = 0;
 };
 
 struct BuildingCache_t : EntityCache_t
@@ -56,6 +60,7 @@ private:
 	std::unordered_map<CBaseEntity*, PlayerCache_t> m_mPlayerCache = {};
 	std::unordered_map<CBaseEntity*, BuildingCache_t> m_mBuildingCache = {};
 	std::unordered_map<CBaseEntity*, EntityCache_t> m_mEntityCache = {};
+	uint32_t m_uStoreStamp = 0;
 
 public:
 	void Store(CTFPlayer* pLocal);

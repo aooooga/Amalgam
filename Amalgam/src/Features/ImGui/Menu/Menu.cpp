@@ -2778,7 +2778,8 @@ void CMenu::MenuLogs(int iTab)
 							{
 								for (auto& iTag : vTags)
 								{
-									int iID = mAs.contains(iTag) ? mAs[iTag] : -1;
+									auto itAs = mAs.find(iTag);
+									int iID = itAs != mAs.end() ? itAs->second : -1;
 									if (iID != -1 && !F::PlayerUtils.HasTag(uAccountID, iID))
 										F::PlayerUtils.AddTag(uAccountID, iID, false);
 								}

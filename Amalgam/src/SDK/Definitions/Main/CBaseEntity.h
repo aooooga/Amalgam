@@ -320,4 +320,7 @@ public:
 	int SolidMask();
 	int GetHitboxToBase(int nHitbox);
 	int GetBaseToHitbox(int nHitbox);
+	// Overload for callers that resolve the model hash once (e.g. the ESP bones
+	// path issues 15 remaps per player): skips the per-call GetModel(entindex()).
+	int GetBaseToHitbox(int nHitbox, uint32_t uModel);
 };

@@ -101,7 +101,7 @@ void CChams::DrawModel(CBaseEntity* pEntity, const Chams_t& tChams, IMatRenderCo
 			if (bWeaponEntity && !(tColor.BodyParts & BODYPART_WEAPON))
 				continue;
 
-			auto pMaterial = F::Materials.GetMaterial(FNV1A::Hash32(sName.c_str()));
+			auto pMaterial = F::Materials.GetMaterial(tColor.NameHash(sName));
 
 			F::Materials.SetColor(pMaterial, ResolveColor(tColor));
 			I::ModelRender->ForcedMaterialOverride(pMaterial ? pMaterial->m_pMaterial : nullptr);
@@ -193,7 +193,7 @@ void CChams::DrawModel(CBaseEntity* pEntity, const Chams_t& tChams, IMatRenderCo
 			if (bWeaponEntity && !(tColor.BodyParts & BODYPART_WEAPON))
 				continue;
 
-			auto pMaterial = F::Materials.GetMaterial(FNV1A::Hash32(sName.c_str()));
+			auto pMaterial = F::Materials.GetMaterial(tColor.NameHash(sName));
 
 			F::Materials.SetColor(pMaterial, ResolveColor(tColor));
 			I::ModelRender->ForcedMaterialOverride(pMaterial ? pMaterial->m_pMaterial : nullptr);
@@ -698,7 +698,7 @@ bool CChams::RenderViewmodel(void* rcx, int flags, int* iReturn)
 	Begin();
 	for (auto& [sName, tColor] : pGroup->m_tChams.Visible)
 	{
-		auto pMaterial = F::Materials.GetMaterial(FNV1A::Hash32(sName.c_str()));
+		auto pMaterial = F::Materials.GetMaterial(tColor.NameHash(sName));
 
 		F::Materials.SetColor(pMaterial, tColor.GetColor(0.f)); // viewmodel = distance 0
 		I::ModelRender->ForcedMaterialOverride(pMaterial ? pMaterial->m_pMaterial : nullptr);
@@ -730,7 +730,7 @@ bool CChams::RenderViewmodel(const DrawModelState_t& pState, const ModelRenderIn
 	Begin();
 	for (auto& [sName, tColor] : pGroup->m_tChams.Visible)
 	{
-		auto pMaterial = F::Materials.GetMaterial(FNV1A::Hash32(sName.c_str()));
+		auto pMaterial = F::Materials.GetMaterial(tColor.NameHash(sName));
 
 		F::Materials.SetColor(pMaterial, tColor.GetColor(0.f)); // viewmodel = distance 0
 		I::ModelRender->ForcedMaterialOverride(pMaterial ? pMaterial->m_pMaterial : nullptr);

@@ -185,15 +185,30 @@ static float GetHealthFraction(CBaseEntity* pEntity)
 // evaluated at the local player's distance to the entity.
 static Color_t GetGlowColor(CBaseEntity* pEntity, const Glow_t& tGlow, CTFPlayer* pLocal)
 {
-	const float flDistance = pLocal ? pLocal->GetAbsOrigin().DistTo(pEntity->GetAbsOrigin()) : -1.f;
-	return tGlow.GetColor(GetHealthFraction(pEntity), flDistance);
+	const float flHealthFrac = GetHealthFraction(pEntity);
+	// Distance is only consulted when the distance gradient is enabled and the
+	// health gradient isn't taking precedence; otherwise the two GetAbsOrigin
+	// virtual calls + sqrt would be computed for a value GetColor discards.
+	const bool bNeedsDistance = pLocal && tGlow.DistanceColor.Enabled
+		&& !(tGlow.HealthColor && flHealthFrac >= 0.f && !tGlow.Stops.empty());
+	const float flDistance = bNeedsDistance ? pLocal->GetAbsOrigin().DistTo(pEntity->GetAbsOrigin()) : -1.f;
+	return tGlow.GetColor(flHealthFrac, flDistance);
 }
 
 void CGlow::Store(CTFPlayer* pLocal)
 {
-	m_mEntities.clear();
+	// Clear each glow bucket's vector but keep its heap buffer (buckets are keyed
+	// by a small set of distinct Glow_t shapes that recur every tick), instead of
+	// destroying the whole map and reallocating every bucket. Empty buckets are
+	// pruned at the end so RenderMain's iteration/behavior is unchanged.
+	for (auto& [tGlow, vInfo] : m_mEntities)
+		vInfo.clear();
+
 	if (!pLocal || !F::Groups.GroupsActive())
+	{
+		m_mEntities.clear();
 		return;
+	}
 
 	for (auto& [pEntity, pGroup] : F::Groups.GetGroup())
 	{
@@ -253,6 +268,12 @@ void CGlow::Store(CTFPlayer* pLocal)
 			}
 		}
 	}
+
+	// Prune buckets that ended up with no entities this tick so downstream code
+	// (UseInlineStamp checks m_mEntities.size() == 1, RenderMain iterates) sees
+	// exactly the same populated set the old clear()+rebuild produced.
+	for (auto it = m_mEntities.begin(); it != m_mEntities.end();)
+		it = it->second.empty() ? m_mEntities.erase(it) : std::next(it);
 }
 
 void CGlow::RenderFirst()

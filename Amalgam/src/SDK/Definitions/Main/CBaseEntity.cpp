@@ -312,7 +312,12 @@ int CBaseEntity::GetHitboxToBase(int nHitbox)
 
 int CBaseEntity::GetBaseToHitbox(int nHitbox)
 {
-	switch (H::Entities.GetModel(entindex()))
+	return GetBaseToHitbox(nHitbox, H::Entities.GetModel(entindex()));
+}
+
+int CBaseEntity::GetBaseToHitbox(int nHitbox, uint32_t uModel)
+{
+	switch (uModel)
 	{
 	case FNV1A::Hash32Const("models/bots/engineer/bot_engineer.mdl"):
 		switch (nHitbox)

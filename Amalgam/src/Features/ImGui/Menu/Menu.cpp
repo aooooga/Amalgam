@@ -328,6 +328,12 @@ void CMenu::MenuAimbot(int iTab)
 					FToggleRow(Vars::Aimbot::Healing::AutoSandvich, FToggleEnum::Right);
 					FToggleRow(Vars::Aimbot::Healing::AutoVaccinator, FToggleEnum::Left);
 					FToggleRow(Vars::Aimbot::Healing::ActivateOnVoice, FToggleEnum::Right);
+
+					FToggleRow(Vars::Aimbot::Healing::HealRadius, FToggleEnum::Left);
+					FColorPicker(Vars::Colors::HealRadiusDisconnectIgnoreZ, FColorPickerEnum::SameLine);
+					FColorPicker(Vars::Colors::HealRadiusDisconnect, FColorPickerEnum::SameLine);
+					FColorPicker(Vars::Colors::HealRadiusConnectIgnoreZ, FColorPickerEnum::SameLine);
+					FColorPicker(Vars::Colors::HealRadiusConnect, FColorPickerEnum::SameLine);
 				} EndSection();
 				if (Vars::Debug::Options.Value)
 				{

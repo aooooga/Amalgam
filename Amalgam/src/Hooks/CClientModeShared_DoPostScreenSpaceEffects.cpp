@@ -31,6 +31,7 @@ MAKE_HOOK(CClientModeShared_DoPostScreenSpaceEffects, U::Memory.GetVirtual(I::Cl
 	if (!F::FlexFOV.m_bReplacingView)
 		F::DoubleSticky.Draw();
 	F::Visuals.DrawStickyRadius();
+	F::Visuals.DrawHealRadius();
 	F::SentryRange.Draw();
 	// Cheap (scene-stripped) main pass: the composite paints over everything this
 	// pass produces, so chams / glow / effects here are pure wasted work.

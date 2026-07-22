@@ -41,6 +41,7 @@ public:
 
 	void ProjectileTrace(CTFPlayer* pPlayer, CTFWeaponBase* pWeapon, const bool bInterp = true);
 	void DrawStickyRadius();
+	void DrawHealRadius();
 	void DrawPickupTimers();
 
 	std::vector<DrawBox_t> GetHitboxes(matrix3x4* aBones, CBaseAnimating* pEntity, std::vector<int> vHitboxes = {}, int iTarget = -1);

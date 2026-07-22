@@ -316,6 +316,11 @@ NAMESPACE_BEGIN(Vars)
 		CVar(StickyRadiusIgnoreZ, "Sticky radius ignore Z color", Color_t(255, 255, 255, 255), VISUAL);
 		CVar(StickyRadiusPlayerInside, "Sticky radius player inside color", Color_t(255, 50, 50, 0), VISUAL);
 		CVar(StickyRadiusPlayerInsideIgnoreZ, "Sticky radius player inside ignore Z color", Color_t(255, 50, 50, 255), VISUAL);
+
+		CVar(HealRadiusConnect, "Heal radius connect color", Color_t(50, 255, 50, 0), VISUAL);
+		CVar(HealRadiusConnectIgnoreZ, "Heal radius connect ignore Z color", Color_t(50, 255, 50, 255), VISUAL);
+		CVar(HealRadiusDisconnect, "Heal radius disconnect color", Color_t(255, 50, 50, 0), VISUAL);
+		CVar(HealRadiusDisconnectIgnoreZ, "Heal radius disconnect ignore Z color", Color_t(255, 50, 50, 255), VISUAL);
 		CVar(SentryRangeEnemy, "Enemy edge color", Color_t(255, 100, 80, 255), VISUAL);
 		CVar(SentryRangeEnemyIgnoreZ, "Enemy edge ignore Z color", Color_t(255, 100, 80, 60), VISUAL);
 		CVar(SentryRangeTeam, "Team edge color", Color_t(80, 160, 255, 255), VISUAL);
@@ -512,6 +517,8 @@ NAMESPACE_BEGIN(Vars)
 			CVar(AutoVaccinatorBlastScale, "Auto vaccinator blast scale", 100.f, NOSAVE | DEBUGVAR | SLIDER_MIN | SLIDER_PRECISION, 0.f, 200.f, 10.f, "%g%%");
 			CVar(AutoVaccinatorFireScale, "Auto vaccinator fire scale", 100.f, NOSAVE | DEBUGVAR | SLIDER_MIN | SLIDER_PRECISION, 0.f, 200.f, 10.f, "%g%%");
 			CVar(AutoVaccinatorFlamethrowerDamageOnly, "Auto vaccinator flamethrower damage only", false, NOSAVE | DEBUGVAR);
+
+			CVar(HealRadius, "Heal radius", false, VISUAL);
 		NAMESPACE_END(Healing)
 
 		NAMESPACE_BEGIN(Draw)

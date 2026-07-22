@@ -141,22 +141,9 @@ static float RadialPlaneScale(float flFovXDeg, float d)
 	return RadialForwardR(flHalf, d);
 }
 
-static Vec3 RadialRay(float sx, float sy, float flFovXDeg, float d)
-{
-	const float flScale = RadialPlaneScale(flFovXDeg, d);
-	const float x = sx * flScale;
-	const float y = sy * flScale;
-	const float r = std::sqrt(x * x + y * y);
-	if (r < 1e-6f)
-		return Vec3(0.f, 0.f, -1.f);
-	// Solve r = (d+1)sin(t)/(d+cos(t)) for cos(t): the same quadratic as
-	// PaniniInverse's longitude solve (it is that equation with y = 0).
-	const float k = r * r / ((d + 1.f) * (d + 1.f));
-	const float dscr = k * k * d * d - (k + 1.f) * (k * d * d - 1.f);
-	const float ct = std::clamp((-k * d + std::sqrt(std::max(dscr, 0.f))) / (k + 1.f), -1.f, 1.f);
-	const float st = std::sqrt(1.f - ct * ct);
-	return Vec3(x / r * st, y / r * st, -ct);
-}
+// The forward radial ray (RadialRayScaled, defined with the other *Scaled
+// helpers below) takes a pre-resolved plane scale; the fov-only RadialPlaneScale
+// is hoisted into the RayCtx so it isn't recomputed per vertex.
 
 static bool RadialForwardScreen(float fx, float fy, float fz, float flFovXDeg, float d, float& sx, float& sy)
 {
@@ -305,10 +292,12 @@ static bool UseWideRig(float flFovX, float flAspect)
 
 static Vec3 LatLonToRay(float flLat, float flLon)
 {
+	// cos(flLat) was evaluated twice; hoist it. (Per-vertex via Mercator/Panini.)
+	const float flCosLat = std::cos(flLat);
 	return Vec3(
-		std::sin(flLon) * std::cos(flLat),
+		std::sin(flLon) * flCosLat,
 		std::sin(flLat),
-		std::cos(flLon) * std::cos(flLat)
+		std::cos(flLon) * flCosLat
 	);
 }
 
@@ -325,28 +314,9 @@ static Vec3 PaniniInverse(float x, float y, float d)
 	return LatLonToRay(flLat, flLon);
 }
 
-// screen (sx in [-1,1], sy = clip.y/aspect) -> view-space ray (forward = -z).
-static Vec3 PaniniRay(float sx, float sy, float flFovXDeg, float d)
-{
-	const float flLon = flFovXDeg * (3.14159265f / 180.f) * 0.5f; // half-fov, radians
-	const float S = (d + 1.f) / (d + std::cos(flLon));
-	const float flScale = S * std::sin(flLon); // panini_forward(0, fovx/2).x
-	Vec3 vRay = PaniniInverse(sx * flScale, sy * flScale, d);
-	vRay.z = -vRay.z;
-	return vRay;
-}
-
-// Mercator inverse (cylindrical). Takes over across the transition band.
-// Scale = fovx/2 rad.
-static Vec3 MercatorRay(float sx, float sy, float flFovXDeg)
-{
-	const float flScale = flFovXDeg * (3.14159265f / 180.f) * 0.5f;
-	const float flLon = sx * flScale;
-	const float flLat = std::atan(std::sinh(sy * flScale));
-	Vec3 vRay = LatLonToRay(flLat, flLon);
-	vRay.z = -vRay.z;
-	return vRay;
-}
+// The Panini/Mercator inverse rays (PaniniRayScaled / MercatorRayScaled, with
+// the other *Scaled helpers below) take a pre-resolved fov/strength scale hoisted
+// into the RayCtx, so the half-fov cos/sin isn't recomputed per vertex.
 
 // Rectilinear ("standard"), the projection the fov slider fades out of between
 // 90 and the transition start. tan(fov/2) diverges at 180, so the scale fov is
@@ -357,13 +327,131 @@ static float StandardPlaneScale(float flFovXDeg)
 	return std::tan(std::min(flFovXDeg, 175.f) * FLEXFOV_DEG2RAD * 0.5f);
 }
 
-static Vec3 StandardRay(float sx, float sy, float flFovXDeg)
+// Per-build projection constants: everything ScreenToRay needs that depends only
+// on (fov, strength, stereo, lo, hi) - i.e. is identical for every vertex of a
+// mesh build. The ray grid resolves this ONCE and reuses it across all ~4k-9k
+// vertices, hoisting the per-projection tan/sin/cos/acos out of the inner loop
+// (they used to be recomputed per vertex). The *Scaled ray helpers take the
+// resolved scales; the scalar ScreenToRay wrapper feeds the one-off UseWideRig
+// border walk.
+struct RayCtx
 {
-	const float flScale = StandardPlaneScale(flFovXDeg);
+	float m_flFovXDeg = 140.f;
+	float m_flStrength = 1.f;   // Panini/radial compression d
+	float m_flStereo = 0.f;
+	float m_flLo = 160.f, m_flHi = 300.f;
+
+	// Which tier(s) this frame actually needs, and their blend weight.
+	bool  m_bPureMercator = false; // fov >= hi
+	bool  m_bPureStandard = false; // fov <= 90
+	bool  m_bPurePanini = false;   // 90 < fov <= lo with saturated ease
+	bool  m_bPaniniMercator = false; // lo < fov < hi
+	bool  m_bStandardPanini = false; // 90 < fov <= lo, unsaturated
+	float m_flTierW = 0.f;         // blend weight for the mixed tiers
+
+	// Pre-resolved projection scales (each was a transcendental per vertex).
+	float m_flStandardScale = 0.f; // tan(min(fov,175)/2)
+	float m_flPaniniScale = 0.f;   // S*sin(halfLon)
+	float m_flMercScale = 0.f;     // fov/2 rad
+	float m_flRadialScale = 0.f;   // RadialForwardR(min(halfFov, maxHalf), d)
+
+	bool  m_bStereo = false;       // flStereo in (0,1)
+	bool  m_bPureRadial = false;   // flStereo >= 1
+};
+
+static RayCtx MakeRayCtx(float flFovXDeg, float flStrength, float flStereo, float flLo, float flHi)
+{
+	RayCtx c;
+	c.m_flFovXDeg = flFovXDeg;
+	c.m_flStrength = flStrength;
+	c.m_flStereo = flStereo;
+	c.m_flLo = flLo;
+	c.m_flHi = flHi;
+
+	c.m_bPureRadial = flStereo >= 1.f;
+	c.m_bStereo = flStereo > 0.f && flStereo < 1.f;
+
+	// Base-tier selection mirrors BaseRay exactly.
+	if (flFovXDeg >= flHi)
+		c.m_bPureMercator = true;
+	else if (flFovXDeg > flLo)
+	{
+		c.m_bPaniniMercator = true;
+		c.m_flTierW = TierEase((flFovXDeg - flLo) / std::max(flHi - flLo, 1e-3f));
+	}
+	else if (flFovXDeg <= 90.f)
+		c.m_bPureStandard = true;
+	else
+	{
+		const float w = TierEase((flFovXDeg - 90.f) / std::max(flLo - 90.f, 1e-3f));
+		if (w >= 1.f)
+			c.m_bPurePanini = true;
+		else
+		{
+			c.m_bStandardPanini = true;
+			c.m_flTierW = w;
+		}
+	}
+
+	// Resolve only the scales the selected tiers (and stereo) actually use.
+	const bool bNeedStandard = c.m_bPureStandard || c.m_bStandardPanini;
+	const bool bNeedPanini = c.m_bPurePanini || c.m_bStandardPanini || c.m_bPaniniMercator;
+	const bool bNeedMerc = c.m_bPureMercator || c.m_bPaniniMercator;
+	const bool bNeedRadial = c.m_bPureRadial || c.m_bStereo;
+
+	if (bNeedStandard)
+		c.m_flStandardScale = StandardPlaneScale(flFovXDeg);
+	if (bNeedPanini)
+	{
+		const float flLon = flFovXDeg * FLEXFOV_DEG2RAD * 0.5f;
+		const float S = (flStrength + 1.f) / (flStrength + std::cos(flLon));
+		c.m_flPaniniScale = S * std::sin(flLon);
+	}
+	if (bNeedMerc)
+		c.m_flMercScale = flFovXDeg * FLEXFOV_DEG2RAD * 0.5f;
+	if (bNeedRadial)
+		c.m_flRadialScale = RadialPlaneScale(flFovXDeg, flStrength);
+	return c;
+}
+
+// Scaled ray variants: identical math to PaniniRay/MercatorRay/StandardRay/
+// RadialRay but take the already-resolved scale from the RayCtx.
+static Vec3 PaniniRayScaled(float sx, float sy, float d, float flScale)
+{
+	Vec3 vRay = PaniniInverse(sx * flScale, sy * flScale, d);
+	vRay.z = -vRay.z;
+	return vRay;
+}
+
+static Vec3 MercatorRayScaled(float sx, float sy, float flScale)
+{
+	const float flLon = sx * flScale;
+	const float flLat = std::atan(std::sinh(sy * flScale));
+	Vec3 vRay = LatLonToRay(flLat, flLon);
+	vRay.z = -vRay.z;
+	return vRay;
+}
+
+static Vec3 StandardRayScaled(float sx, float sy, float flScale)
+{
 	const float x = sx * flScale;
 	const float y = sy * flScale;
 	const float flInv = 1.f / std::sqrt(x * x + y * y + 1.f);
 	return Vec3(x * flInv, y * flInv, -flInv);
+}
+
+static Vec3 RadialRayScaled(float sx, float sy, float d, float flScale)
+{
+	const float x = sx * flScale;
+	const float y = sy * flScale;
+	const float r = std::sqrt(x * x + y * y);
+	if (r < 1e-6f)
+		return Vec3(0.f, 0.f, -1.f);
+	const float k = r * r / ((d + 1.f) * (d + 1.f));
+	const float dscr = k * k * d * d - (k + 1.f) * (k * d * d - 1.f);
+	const float ct = std::clamp((-k * d + std::sqrt(std::max(dscr, 0.f))) / (k + 1.f), -1.f, 1.f);
+	const float st = std::sqrt(1.f - ct * ct);
+	return Vec3(x / r * st, y / r * st, -ct);
 }
 
 // Tier selection (ported from flex-fov's screen_to_ray): rectilinear at 90
@@ -371,33 +459,41 @@ static Vec3 StandardRay(float sx, float sy, float flFovXDeg)
 // transition band, pure Mercator past its end. Every boundary is a smooth
 // eased cross-fade, so dragging the fov slider never visibly changes gears -
 // and at low fov the warp fades toward a normal view like the original.
-static Vec3 BaseRay(float sx, float sy, float flFovXDeg, float flStrength, float flLo, float flHi)
+// Context form: reads the pre-resolved scales/tier flags from a RayCtx.
+static Vec3 BaseRay(float sx, float sy, const RayCtx& c)
 {
-	if (flFovXDeg >= flHi)
-		return MercatorRay(sx, sy, flFovXDeg);
-	if (flFovXDeg > flLo)
-		return NormMix(PaniniRay(sx, sy, flFovXDeg, flStrength), MercatorRay(sx, sy, flFovXDeg),
-			TierEase((flFovXDeg - flLo) / std::max(flHi - flLo, 1e-3f)));
-	if (flFovXDeg <= 90.f)
-		return StandardRay(sx, sy, flFovXDeg);
-	const float w = TierEase((flFovXDeg - 90.f) / std::max(flLo - 90.f, 1e-3f));
-	if (w >= 1.f)
-		return PaniniRay(sx, sy, flFovXDeg, flStrength);
-	return NormMix(StandardRay(sx, sy, flFovXDeg), PaniniRay(sx, sy, flFovXDeg, flStrength), w);
+	if (c.m_bPureMercator)
+		return MercatorRayScaled(sx, sy, c.m_flMercScale);
+	if (c.m_bPaniniMercator)
+		return NormMix(PaniniRayScaled(sx, sy, c.m_flStrength, c.m_flPaniniScale),
+			MercatorRayScaled(sx, sy, c.m_flMercScale), c.m_flTierW);
+	if (c.m_bPureStandard)
+		return StandardRayScaled(sx, sy, c.m_flStandardScale);
+	if (c.m_bPurePanini)
+		return PaniniRayScaled(sx, sy, c.m_flStrength, c.m_flPaniniScale);
+	return NormMix(StandardRayScaled(sx, sy, c.m_flStandardScale),
+		PaniniRayScaled(sx, sy, c.m_flStrength, c.m_flPaniniScale), c.m_flTierW);
 }
 
 // Base (rectilinear/Panini/Mercator) ray blended toward the radial projection
 // by flStereo (0 = base, 1 = pure radial). flStereo arrives already scaled by
 // the fov-tier envelope (CurrentStereoBlend); 1 only ever means the full-
 // stereographic toggle, which bypasses the tiers entirely.
+static Vec3 ScreenToRay(float sx, float sy, const RayCtx& c)
+{
+	if (c.m_bPureRadial)
+		return RadialRayScaled(sx, sy, c.m_flStrength, c.m_flRadialScale);
+	const Vec3 a = BaseRay(sx, sy, c);
+	if (!c.m_bStereo)
+		return a;
+	return NormMix(a, RadialRayScaled(sx, sy, c.m_flStrength, c.m_flRadialScale), c.m_flStereo);
+}
+
+// Thin wrapper keeping the scalar signature for the one-off UseWideRig border
+// walk (builds a context per call - fine, that path is cached by verdict).
 static Vec3 ScreenToRay(float sx, float sy, float flFovXDeg, float flStrength, float flStereo, float flLo, float flHi)
 {
-	if (flStereo >= 1.f)
-		return RadialRay(sx, sy, flFovXDeg, flStrength);
-	const Vec3 a = BaseRay(sx, sy, flFovXDeg, flStrength, flLo, flHi);
-	if (flStereo <= 0.f)
-		return a;
-	return NormMix(a, RadialRay(sx, sy, flFovXDeg, flStrength), flStereo);
+	return ScreenToRay(sx, sy, MakeRayCtx(flFovXDeg, flStrength, flStereo, flLo, flHi));
 }
 
 // --- Forward projection (inverse of ScreenToRay) -----------------------------
@@ -941,8 +1037,14 @@ void CFlexFOV::CaptureGlobe(void* rcx, const CViewSetup& pViewSetup)
 		const Vec3 vWorldFwd = ToWorld(tWant[i].m_vFwd);
 		const Vec3 vAngles = AnglesFromBasis(vWorldFwd, ToWorld(tWant[i].m_vRight) * -1.f, ToWorld(tWant[i].m_vUp));
 		m_vCaptureFwd = vWorldFwd;
-		m_flCaptureHalfAngle = std::atan(std::sqrt(
-			tWant[i].m_flTanX * tWant[i].m_flTanX + tWant[i].m_flTanY * tWant[i].m_flTanY));
+		const float flHyp = std::sqrt(
+			tWant[i].m_flTanX * tWant[i].m_flTanX + tWant[i].m_flTanY * tWant[i].m_flTanY);
+		m_flCaptureHalfAngle = std::atan(flHyp);
+		// cos(atan(h)) = 1/sqrt(1+h^2), sin(atan(h)) = h/sqrt(1+h^2). Cached for
+		// FaceCanSee's cos(half+slack) expansion.
+		const float flInvHyp = 1.f / std::sqrt(1.f + flHyp * flHyp);
+		m_flCaptureHalfCos = flInvHyp;
+		m_flCaptureHalfSin = flHyp * flInvHyp;
 
 		// Cheap periphery: every non-front cube face (the wide rig's faces both
 		// cover screen-center regions, so it never applies there).
@@ -1413,6 +1515,14 @@ void CFlexFOV::DrawComposite()
 		|| flLo != s_flCacheLo || flHi != s_flCacheHi
 		|| int(m_bWideRig) != s_iCacheWide || sw != s_iCacheW || sh != s_iCacheH;
 	m_flMeshBuildMs = 0.f;
+	// Toggling tight faces ON changes no projection param but must recompute the
+	// wanted rects (they're skipped while it's off), so treat the enable edge as a
+	// dirty. (The tight-off ideal-pass skip lives further down.)
+	const bool bTightWanted = Vars::Visuals::UI::FlexFOVTightFaces.Value;
+	static bool s_bTightPrev = false;
+	if (bTightWanted && !s_bTightPrev)
+		m_bWantDirty = true;
+	s_bTightPrev = bTightWanted;
 	const bool bFullRebuild = bParamsChanged || m_bWantDirty;
 	const bool bRebuiltNow = bFullRebuild || m_uFrustumGen != s_uCacheFrusGen || !bAllAligned || !s_bBucketsAligned;
 	if (bRebuiltNow)
@@ -1481,14 +1591,19 @@ void CFlexFOV::DrawComposite()
 		static std::vector<Vec3> vRays;
 		if (bParamsChanged || int(vRays.size()) != nSide * nSide)
 		{
+			// Resolve every fov/strength/stereo-only projection scale once, then
+			// reuse across all nSide^2 vertices (was a fistful of transcendentals
+			// per vertex).
+			const RayCtx tRayCtx = MakeRayCtx(flFovX, flStrength, flStereo, flLo, flHi);
 			vRays.resize(nSide * nSide);
+			const float flInvAspect = 1.f / flAspect;
 			for (int j = 0; j < nSide; j++)
 			{
+				const float cy = (-1.f + 2.f * j / nGrid) * flInvAspect;
 				for (int i = 0; i < nSide; i++)
 				{
 					const float cx = -1.f + 2.f * i / nGrid;
-					const float cy = -1.f + 2.f * j / nGrid;
-					vRays[j * nSide + i] = ScreenToRay(cx, cy / flAspect, flFovX, flStrength, flStereo, flLo, flHi);
+					vRays[j * nSide + i] = ScreenToRay(cx, cy, tRayCtx);
 				}
 			}
 		}
@@ -1502,7 +1617,13 @@ void CFlexFOV::DrawComposite()
 		// is what lets a face's rect GROW again when the params change: deriving
 		// it from the drawn buckets would shrink-lock, since the drawn mask can
 		// only assign what the last (tight) capture contains.
-		if (bFullRebuild)
+		//
+		// Only CaptureGlobe consumes these rects, and only when tight faces is on
+		// - so with tight faces off the whole ideal-mask + accumulate pass (a full
+		// nSide^2-per-face sweep) is dead work. Skip it there; m_bWantValid stays
+		// whatever it was (CaptureGlobe ignores it while the cvar is off). The
+		// tight-enable edge above forced m_bWantDirty, so this recomputes then.
+		if (bTightWanted && bFullRebuild)
 		{
 			static std::vector<unsigned char> vIdealMask;
 			vIdealMask.assign(vRays.size(), 0);
@@ -1616,10 +1737,18 @@ void CFlexFOV::DrawComposite()
 		// bitmask - each grid vertex is shared by up to 6 triangles, so testing
 		// at the vertex level instead of inside EmitTri does the same work
 		// several times cheaper.
-		static std::vector<Vec3> vFaceRays[FACE_COUNT];
+		// A stale face rotates every ray into its capture frame before dotting
+		// against its (fixed) basis: r' = vCapX*r.x + vCapY*r.y + vCapZ*r.z, then
+		// Dot3(r', vB*). Since dot is linear, that equals Dot3(r, vB*') where the
+		// FOLDED basis vB*' = (Dot3(vCapX,vB*), Dot3(vCapY,vB*), Dot3(vCapZ,vB*)).
+		// So every containment / UV / fallback dot can run against the SHARED
+		// unrotated vRays with a per-face folded basis - no per-vertex rotated
+		// Vec3 array (was a full resize + write + reread per stale face). Aligned
+		// faces fold to the identity (their basis is unchanged).
+		Vec3 vBFwdF[FACE_COUNT], vBRightF[FACE_COUNT], vBUpF[FACE_COUNT];
+		bool bFaceInMesh[FACE_COUNT] = {};
 		static std::vector<unsigned char> vMask; // bit f: vertex ray inside face f's frustum
 		vMask.assign(vRays.size(), 0);
-		const Vec3* pRays[FACE_COUNT] = {};
 		for (int f = 0; f < nFaces; f++)
 		{
 			// The previous build's needed-set is only a valid filter while the
@@ -1631,27 +1760,30 @@ void CFlexFOV::DrawComposite()
 			// false so it never recovers.
 			if (!bFaceUsable[f] || (!bFullRebuild && !m_bFaceNeeded[f]))
 				continue;
+			bFaceInMesh[f] = true;
 			if (bFaceAligned[f])
-				pRays[f] = vRays.data();
+			{
+				vBFwdF[f] = vBFwd[f]; vBRightF[f] = vBRight[f]; vBUpF[f] = vBUp[f];
+			}
 			else
 			{
-				vFaceRays[f].resize(vRays.size());
-				for (size_t n = 0; n < vRays.size(); n++)
+				const auto Fold = [&](const Vec3& b)
 				{
-					const Vec3& r = vRays[n];
-					vFaceRays[f][n] = vCapX[f] * r.x + vCapY[f] * r.y + vCapZ[f] * r.z;
-				}
-				pRays[f] = vFaceRays[f].data();
+					return Vec3(Dot3(vCapX[f], b), Dot3(vCapY[f], b), Dot3(vCapZ[f], b));
+				};
+				vBFwdF[f] = Fold(vBFwd[f]); vBRightF[f] = Fold(vBRight[f]); vBUpF[f] = Fold(vBUp[f]);
 			}
 
 			const unsigned char uBit = 1 << f;
+			const Vec3 vF = vBFwdF[f], vR = vBRightF[f], vU = vBUpF[f];
+			const float flLimXf = flLimX[f], flLimYf = flLimY[f];
 			for (size_t n = 0; n < vRays.size(); n++)
 			{
-				const Vec3& r = pRays[f][n];
-				const float lz = -Dot3(r, vBFwd[f]);
+				const Vec3& r = vRays[n];
+				const float lz = -Dot3(r, vF);
 				if (lz < -0.05f
-					&& std::fabs(Dot3(r, vBRight[f])) <= -lz * flLimX[f]
-					&& std::fabs(Dot3(r, vBUp[f])) <= -lz * flLimY[f])
+					&& std::fabs(Dot3(r, vR)) <= -lz * flLimXf
+					&& std::fabs(Dot3(r, vU)) <= -lz * flLimYf)
 					vMask[n] |= uBit;
 			}
 		}
@@ -1685,17 +1817,18 @@ void CFlexFOV::DrawComposite()
 
 			// Fallback for triangles no face fully contains (extreme-periphery
 			// smear regions): the face that best contains the *worst* vertex
-			// (max over faces of the min per-vertex alignment).
+			// (max over faces of the min per-vertex alignment). Folded basis, so
+			// the dots run against the shared unrotated rays.
 			if (iFace < 0)
 			{
 				float flBestMin = -1e30f;
 				for (int f = 0; f < nFaces; f++)
 				{
-					if (!pRays[f])
+					if (!bFaceInMesh[f])
 						continue;
 					float flMin = 1e30f;
 					for (int t = 0; t < 3; t++)
-						flMin = std::min(flMin, Dot3(pRays[f][tri[t]], vBFwd[f]));
+						flMin = std::min(flMin, Dot3(vRays[tri[t]], vBFwdF[f]));
 					if (flMin > flBestMin) { flBestMin = flMin; iFace = f; }
 				}
 			}
@@ -1704,12 +1837,12 @@ void CFlexFOV::DrawComposite()
 
 			for (int t = 0; t < 3; t++)
 			{
-				const Vec3& r = pRays[iFace][tri[t]];
-				float lz = -Dot3(r, vBFwd[iFace]); // < 0 for the owning face
+				const Vec3& r = vRays[tri[t]];
+				float lz = -Dot3(r, vBFwdF[iFace]); // < 0 for the owning face
 				if (lz > -0.2f)
 					lz = -0.2f; // guard: never let a straddling vertex blow the UV to infinity
-				const float lx = Dot3(r, vBRight[iFace]);
-				const float ly = Dot3(r, vBUp[iFace]);
+				const float lx = Dot3(r, vBRightF[iFace]);
+				const float ly = Dot3(r, vBUpF[iFace]);
 				FVert fv;
 				fv.x = ClipX(tri[t]); fv.y = ClipY(tri[t]); fv.z = 0.5f;
 				// No UV clamp: faces are captured with margin around the containment
@@ -1945,15 +2078,16 @@ bool CFlexFOV::WorldToScreen(const Vec3& vWorld, Vec3& vScreen, bool bAlways)
 
 	// Ray from the (snapshotted) eye to the target, in the cached view basis.
 	Vec3 vDir = vWorld - m_vEyeOrigin;
-	const float flLen = std::sqrt(Dot3(vDir, vDir));
-	if (flLen < 1e-4f)
+	const float flLenSqr = Dot3(vDir, vDir);
+	if (flLenSqr < 1e-8f) // (1e-4)^2
 		return false;
-	vDir.x /= flLen; vDir.y /= flLen; vDir.z /= flLen;
+	// One reciprocal, folded into the basis dots below (was 3 divides on vDir).
+	const float flInvLen = 1.f / std::sqrt(flLenSqr);
 
 	// Native flex-fov frame: fx = right, fy = up, fz = forward (forward = +z).
-	const float fx = Dot3(vDir, m_vViewRight);
-	const float fy = Dot3(vDir, m_vViewUp);
-	const float fz = Dot3(vDir, m_vViewFwd);
+	const float fx = Dot3(vDir, m_vViewRight) * flInvLen;
+	const float fy = Dot3(vDir, m_vViewUp) * flInvLen;
+	const float fz = Dot3(vDir, m_vViewFwd) * flInvLen;
 
 	float sx = 0.f, sy = 0.f;
 	if (ForwardProject(fx, fy, fz, m_flFovX, m_flStrength, m_flStereoBlend, m_flTierLo, m_flTierHi, sx, sy))
@@ -1991,8 +2125,14 @@ bool CFlexFOV::FaceCanSee(const Vec3& vOrigin, float flExtent)
 	const float flDist = vDelta.Length();
 	if (flDist < 150.f) // close enough that the bbox can wrap any frustum
 		return true;
-	const float flSlack = std::asin(std::min(1.f, flExtent / flDist));
-	const float flCos = std::cos(std::min(3.14159f, m_flCaptureHalfAngle + flSlack));
+	// cos(halfAngle + slack), where slack = asin(min(1, extent/dist)):
+	// expanded via cos(a+b) = cosA cosB - sinA sinB so neither asin nor cos runs.
+	// sinSlack = min(1, extent/dist); cosSlack = sqrt(1 - sinSlack^2). The old
+	// min(pi, .) clamp capped the sum at cos(pi) = -1, so clamp the result there.
+	const float flSinSlack = std::min(1.f, flExtent / flDist);
+	const float flCosSlack = std::sqrt(std::max(0.f, 1.f - flSinSlack * flSinSlack));
+	const float flCos = std::max(-1.f,
+		m_flCaptureHalfCos * flCosSlack - m_flCaptureHalfSin * flSinSlack);
 	return vDelta.Dot(m_vCaptureFwd) > flCos * flDist;
 }
 

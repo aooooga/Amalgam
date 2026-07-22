@@ -193,9 +193,12 @@ public:
 
 	// Frustum of the face currently being captured (valid while m_bDrawing):
 	// world-space forward of the face camera and its half-diagonal angle in
-	// radians. Glow uses these to skip entities the face can't see.
+	// radians. Glow uses these to skip entities the face can't see. The cos/sin
+	// of that angle are cached alongside so FaceCanSee's per-entity angular test
+	// expands cos(half+slack) algebraically instead of calling cos()/asin().
 	Vec3 m_vCaptureFwd = {};
 	float m_flCaptureHalfAngle = 0.f;
+	float m_flCaptureHalfCos = 1.f, m_flCaptureHalfSin = 0.f;
 
 	// True when DrawComposite actually repainted the screen this paint, so
 	// DrawViewmodel knows the viewmodels need re-drawing on top.

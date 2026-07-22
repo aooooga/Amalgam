@@ -181,11 +181,64 @@ void CVisuals::DrawStickyRadius()
 	}
 }
 
-// Local player's Medigun connect/disconnect radius, a surface-conforming circle
-// around the player's feet - same shape and caching approach as DrawStickyRadius.
+// Extrudes a conformed ring upwards into a cylinder shaded from tBottom at the
+// ring to tTop at the cap. Every rib starts at its own ring vertex, so the wall
+// rides the terrain the ring is draped over. The engine's render primitives die
+// at roughly 10k calls in one pass and this can run up to ~7x/frame under
+// FlexFOV, so ribs are strided and the gradient uses a coarse step count.
+static void RenderRadiusCylinder(const std::vector<Vec3>& vPoints, float flHeight, const Color_t& tBottom, const Color_t& tTop, bool bZBuffer)
+{
+	constexpr int iSteps = 8, iRibStride = 2;
+	if (vPoints.size() < 2 || flHeight <= 0.f || !tBottom.a && !tTop.a)
+		return;
+
+	auto fnLerp = [&](float flFrac)
+	{
+		Color_t tColor = {};
+		tColor.SetRGB(tBottom.r + (float(tTop.r) - tBottom.r) * flFrac,
+			tBottom.g + (float(tTop.g) - tBottom.g) * flFrac,
+			tBottom.b + (float(tTop.b) - tBottom.b) * flFrac,
+			tBottom.a + (float(tTop.a) - tBottom.a) * flFrac);
+		return tColor;
+	};
+
+	// vertical ribs, each split into gradient steps
+	for (size_t i = 0; i + 1 < vPoints.size(); i += iRibStride)
+	{
+		const Vec3& vBase = vPoints[i];
+		for (int j = 0; j < iSteps; j++)
+		{
+			const float flLow = flHeight * j / iSteps, flHigh = flHeight * (j + 1) / iSteps;
+			const Color_t tColor = fnLerp((j + 0.5f) / iSteps);
+			if (!tColor.a)
+				continue;
+
+			H::Draw.RenderLine(vBase + Vec3(0, 0, flLow), vBase + Vec3(0, 0, flHigh), tColor, bZBuffer);
+		}
+	}
+
+	// cap ring
+	if (tTop.a)
+	{
+		std::vector<Vec3> vTop = vPoints;
+		for (auto& vPoint : vTop)
+			vPoint.z += flHeight;
+		H::Draw.RenderPath(vTop, tTop, bZBuffer, Vars::Visuals::Path::StyleEnum::Line);
+	}
+}
+
+// Local player's Medigun ranges, as surface-conforming circles around the
+// player's feet - same shape and caching approach as DrawStickyRadius. Connect
+// is the range at which a beam can latch onto a target (the weapon's own range),
+// disconnect the wider range at which an established beam finally breaks
+// (CWeaponMedigun::GetStickRange). Both are independent toggles and can show at
+// once; either can be extruded into a vertical gradient cylinder.
+static constexpr float flMedigunStickMult = 1.2f; // CWeaponMedigun::GetStickRange
+
 void CVisuals::DrawHealRadius()
 {
-	if (!Vars::Aimbot::Healing::HealRadius.Value)
+	const int iValue = Vars::Aimbot::Healing::HealRadius.Value;
+	if (!(iValue & Vars::Aimbot::Healing::HealRadiusEnum::Enabled))
 		return;
 
 	auto pLocal = H::Entities.GetLocal();
@@ -195,21 +248,25 @@ void CVisuals::DrawHealRadius()
 
 	static Vec3 vLastOrigin = {};
 	static float flLastRange = 0.f;
-	static std::vector<Vec3> vPoints = {};
-	static int iLastFrame = -1;
+	static std::vector<Vec3> vConnect = {}, vDisconnect = {};
+	static int iLastFrame = -1, iLastValue = 0;
 
-	bool bHealing = pWeapon->As<CWeaponMedigun>()->m_hHealingTarget().Get() != nullptr;
-	float flRange = pWeapon->GetRange();
-	Vec3 vOrigin = pLocal->m_vecOrigin();
+	const float flRange = pWeapon->GetRange();
+	const Vec3 vOrigin = pLocal->m_vecOrigin();
 
 	if (iLastFrame != I::GlobalVars->framecount)
 	{
 		iLastFrame = I::GlobalVars->framecount;
-		if (vPoints.empty() || vOrigin != vLastOrigin || flRange != flLastRange)
+		if (vOrigin != vLastOrigin || flRange != flLastRange || iLastValue != iValue)
 		{
 			vLastOrigin = vOrigin;
 			flLastRange = flRange;
-			vPoints = SplashTrace(vOrigin, flRange, { 0, 0, 1 }, true);
+			iLastValue = iValue;
+
+			vConnect = iValue & Vars::Aimbot::Healing::HealRadiusEnum::Connect
+				? SplashTrace(vOrigin, flRange, { 0, 0, 1 }, true) : std::vector<Vec3>{};
+			vDisconnect = iValue & Vars::Aimbot::Healing::HealRadiusEnum::Disconnect
+				? SplashTrace(vOrigin, flRange * flMedigunStickMult, { 0, 0, 1 }, true) : std::vector<Vec3>{};
 		}
 	}
 
@@ -218,10 +275,25 @@ void CVisuals::DrawHealRadius()
 	if (F::FlexFOV.m_bReplacingView)
 		return;
 
-	const Color_t& tColor = bHealing ? Vars::Colors::HealRadiusDisconnect.Value : Vars::Colors::HealRadiusConnect.Value;
-	const Color_t& tColorIgnoreZ = bHealing ? Vars::Colors::HealRadiusDisconnectIgnoreZ.Value : Vars::Colors::HealRadiusConnectIgnoreZ.Value;
-	H::Draw.RenderPath(vPoints, tColorIgnoreZ, false, Vars::Visuals::Path::StyleEnum::Line);
-	H::Draw.RenderPath(vPoints, tColor, true, Vars::Visuals::Path::StyleEnum::Line);
+	const float flHeight = iValue & Vars::Aimbot::Healing::HealRadiusEnum::Cylinder ? Vars::Aimbot::Healing::HealRadiusHeight.Value : 0.f;
+	auto fnDraw = [&](const std::vector<Vec3>& vPoints, const Color_t& tColor, const Color_t& tColorIgnoreZ, const Color_t& tTop, const Color_t& tTopIgnoreZ)
+	{
+		if (vPoints.empty())
+			return;
+
+		if (tColorIgnoreZ.a)
+			H::Draw.RenderPath(vPoints, tColorIgnoreZ, false, Vars::Visuals::Path::StyleEnum::Line);
+		if (tColor.a)
+			H::Draw.RenderPath(vPoints, tColor, true, Vars::Visuals::Path::StyleEnum::Line);
+
+		RenderRadiusCylinder(vPoints, flHeight, tColorIgnoreZ, tTopIgnoreZ, false);
+		RenderRadiusCylinder(vPoints, flHeight, tColor, tTop, true);
+	};
+
+	fnDraw(vConnect, Vars::Colors::HealRadiusConnect.Value, Vars::Colors::HealRadiusConnectIgnoreZ.Value,
+		Vars::Colors::HealRadiusConnectTop.Value, Vars::Colors::HealRadiusConnectTopIgnoreZ.Value);
+	fnDraw(vDisconnect, Vars::Colors::HealRadiusDisconnect.Value, Vars::Colors::HealRadiusDisconnectIgnoreZ.Value,
+		Vars::Colors::HealRadiusDisconnectTop.Value, Vars::Colors::HealRadiusDisconnectTopIgnoreZ.Value);
 }
 
 // Interp-path trajectory data, computed once per frame and re-drawn per render

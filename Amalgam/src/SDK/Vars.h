@@ -319,8 +319,12 @@ NAMESPACE_BEGIN(Vars)
 
 		CVar(HealRadiusConnect, "Heal radius connect color", Color_t(50, 255, 50, 0), VISUAL);
 		CVar(HealRadiusConnectIgnoreZ, "Heal radius connect ignore Z color", Color_t(50, 255, 50, 255), VISUAL);
+		CVar(HealRadiusConnectTop, "Heal radius connect top color", Color_t(50, 255, 50, 0), VISUAL);
+		CVar(HealRadiusConnectTopIgnoreZ, "Heal radius connect top ignore Z color", Color_t(50, 255, 50, 0), VISUAL);
 		CVar(HealRadiusDisconnect, "Heal radius disconnect color", Color_t(255, 50, 50, 0), VISUAL);
 		CVar(HealRadiusDisconnectIgnoreZ, "Heal radius disconnect ignore Z color", Color_t(255, 50, 50, 255), VISUAL);
+		CVar(HealRadiusDisconnectTop, "Heal radius disconnect top color", Color_t(255, 50, 50, 0), VISUAL);
+		CVar(HealRadiusDisconnectTopIgnoreZ, "Heal radius disconnect top ignore Z color", Color_t(255, 50, 50, 0), VISUAL);
 		CVar(SentryRangeEnemy, "Enemy edge color", Color_t(255, 100, 80, 255), VISUAL);
 		CVar(SentryRangeEnemyIgnoreZ, "Enemy edge ignore Z color", Color_t(255, 100, 80, 60), VISUAL);
 		CVar(SentryRangeTeam, "Team edge color", Color_t(80, 160, 255, 255), VISUAL);
@@ -518,7 +522,11 @@ NAMESPACE_BEGIN(Vars)
 			CVar(AutoVaccinatorFireScale, "Auto vaccinator fire scale", 100.f, NOSAVE | DEBUGVAR | SLIDER_MIN | SLIDER_PRECISION, 0.f, 200.f, 10.f, "%g%%");
 			CVar(AutoVaccinatorFlamethrowerDamageOnly, "Auto vaccinator flamethrower damage only", false, NOSAVE | DEBUGVAR);
 
-			CVar(HealRadius, "Heal radius", false, VISUAL);
+			CVarEnum(HealRadius, "Heal radius", 0b0, VISUAL | DROPDOWN_MULTI, "Off",
+				VA_LIST("Connect", "Disconnect", "##Divider", "Cylinder"),
+				Connect = 1 << 0, Disconnect = 1 << 1, Cylinder = 1 << 2,
+				Enabled = Connect | Disconnect);
+			CVar(HealRadiusHeight, VA_LIST("Height", "Heal radius cylinder height"), 100.f, VISUAL | SLIDER_MIN | SLIDER_PRECISION, 0.f, 500.f, 5.f);
 		NAMESPACE_END(Healing)
 
 		NAMESPACE_BEGIN(Draw)

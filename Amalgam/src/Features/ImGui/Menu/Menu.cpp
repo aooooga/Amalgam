@@ -329,11 +329,18 @@ void CMenu::MenuAimbot(int iTab)
 					FToggleRow(Vars::Aimbot::Healing::AutoVaccinator, FToggleEnum::Left);
 					FToggleRow(Vars::Aimbot::Healing::ActivateOnVoice, FToggleEnum::Right);
 
-					FToggleRow(Vars::Aimbot::Healing::HealRadius, FToggleEnum::Left);
-					FColorPicker(Vars::Colors::HealRadiusDisconnectIgnoreZ, FColorPickerEnum::SameLine);
-					FColorPicker(Vars::Colors::HealRadiusDisconnect, FColorPickerEnum::SameLine);
-					FColorPicker(Vars::Colors::HealRadiusConnectIgnoreZ, FColorPickerEnum::SameLine);
-					FColorPicker(Vars::Colors::HealRadiusConnect, FColorPickerEnum::SameLine);
+					FDropdown(Vars::Aimbot::Healing::HealRadius, FDropdownEnum::None, -10);
+					FColorPicker(Vars::Colors::HealRadiusConnectIgnoreZ, FColorPickerEnum::SameLine, { 0, H::Draw.Scale(30) }, { H::Draw.Scale(10), H::Draw.Scale(10) });
+					FColorPicker(Vars::Colors::HealRadiusConnect, FColorPickerEnum::SameLine, { H::Draw.Scale(-10), H::Draw.Scale(-10) }, { H::Draw.Scale(10), H::Draw.Scale(10) });
+					FColorPicker(Vars::Colors::HealRadiusConnectTopIgnoreZ, FColorPickerEnum::SameLine, { H::Draw.Scale(-10), H::Draw.Scale(-10) }, { H::Draw.Scale(10), H::Draw.Scale(10) });
+					FColorPicker(Vars::Colors::HealRadiusConnectTop, FColorPickerEnum::SameLine, { H::Draw.Scale(-10), H::Draw.Scale(-10) }, { H::Draw.Scale(10), H::Draw.Scale(10) });
+					SameLine(); DebugDummy({ 0, H::Draw.Scale(48) });
+					FSliderRow(Vars::Aimbot::Healing::HealRadiusHeight, FSliderEnum::None);
+					FColorPicker(Vars::Colors::HealRadiusDisconnectIgnoreZ, FColorPickerEnum::SameLine, { 0, H::Draw.Scale(30) }, { H::Draw.Scale(10), H::Draw.Scale(10) });
+					FColorPicker(Vars::Colors::HealRadiusDisconnect, FColorPickerEnum::SameLine, { H::Draw.Scale(-10), H::Draw.Scale(-10) }, { H::Draw.Scale(10), H::Draw.Scale(10) });
+					FColorPicker(Vars::Colors::HealRadiusDisconnectTopIgnoreZ, FColorPickerEnum::SameLine, { H::Draw.Scale(-10), H::Draw.Scale(-10) }, { H::Draw.Scale(10), H::Draw.Scale(10) });
+					FColorPicker(Vars::Colors::HealRadiusDisconnectTop, FColorPickerEnum::SameLine, { H::Draw.Scale(-10), H::Draw.Scale(-10) }, { H::Draw.Scale(10), H::Draw.Scale(10) });
+					SameLine(); DebugDummy({ 0, H::Draw.Scale(48) });
 				} EndSection();
 				if (Vars::Debug::Options.Value)
 				{

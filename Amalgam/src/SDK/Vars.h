@@ -321,26 +321,14 @@ NAMESPACE_BEGIN(Vars)
 		CVar(HealRadiusConnectIgnoreZ, VA_LIST("Radius edge ignore Z## Connect", "Heal radius connect ignore Z color"), Color_t(50, 255, 50, 255), VISUAL);
 		CVar(HealRadiusConnectFill, VA_LIST("Radius fill## Connect", "Heal radius connect fill color"), Color_t(50, 255, 50, 0), VISUAL);
 		CVar(HealRadiusConnectFillIgnoreZ, VA_LIST("Radius fill ignore Z## Connect", "Heal radius connect fill ignore Z color"), Color_t(50, 255, 50, 0), VISUAL);
-		CVar(HealRadiusConnectBottom, VA_LIST("Cylinder bottom edge## Connect", "Heal radius connect bottom color"), Color_t(50, 255, 50, 0), VISUAL);
-		CVar(HealRadiusConnectBottomIgnoreZ, VA_LIST("Cylinder bottom edge ignore Z## Connect", "Heal radius connect bottom ignore Z color"), Color_t(50, 255, 50, 0), VISUAL);
-		CVar(HealRadiusConnectTop, VA_LIST("Cylinder top edge## Connect", "Heal radius connect top color"), Color_t(50, 255, 50, 0), VISUAL);
-		CVar(HealRadiusConnectTopIgnoreZ, VA_LIST("Cylinder top edge ignore Z## Connect", "Heal radius connect top ignore Z color"), Color_t(50, 255, 50, 255), VISUAL);
-		CVar(HealRadiusConnectBottomFill, VA_LIST("Cylinder bottom fill## Connect", "Heal radius connect bottom fill color"), Color_t(50, 255, 50, 0), VISUAL);
-		CVar(HealRadiusConnectBottomFillIgnoreZ, VA_LIST("Cylinder bottom fill ignore Z## Connect", "Heal radius connect bottom fill ignore Z color"), Color_t(50, 255, 50, 60), VISUAL);
-		CVar(HealRadiusConnectTopFill, VA_LIST("Cylinder top fill## Connect", "Heal radius connect top fill color"), Color_t(50, 255, 50, 0), VISUAL);
-		CVar(HealRadiusConnectTopFillIgnoreZ, VA_LIST("Cylinder top fill ignore Z## Connect", "Heal radius connect top fill ignore Z color"), Color_t(50, 255, 50, 0), VISUAL);
+		CVar(HealRadiusConnectGlow, VA_LIST("Radius glow## Connect", "Heal radius connect glow color"), Color_t(50, 255, 50, 0), VISUAL);
+		CVar(HealRadiusConnectGlowIgnoreZ, VA_LIST("Radius glow ignore Z## Connect", "Heal radius connect glow ignore Z color"), Color_t(50, 255, 50, 120), VISUAL);
 		CVar(HealRadiusDisconnect, VA_LIST("Radius edge## Disconnect", "Heal radius disconnect color"), Color_t(255, 50, 50, 0), VISUAL);
 		CVar(HealRadiusDisconnectIgnoreZ, VA_LIST("Radius edge ignore Z## Disconnect", "Heal radius disconnect ignore Z color"), Color_t(255, 50, 50, 255), VISUAL);
 		CVar(HealRadiusDisconnectFill, VA_LIST("Radius fill## Disconnect", "Heal radius disconnect fill color"), Color_t(255, 50, 50, 0), VISUAL);
 		CVar(HealRadiusDisconnectFillIgnoreZ, VA_LIST("Radius fill ignore Z## Disconnect", "Heal radius disconnect fill ignore Z color"), Color_t(255, 50, 50, 0), VISUAL);
-		CVar(HealRadiusDisconnectBottom, VA_LIST("Cylinder bottom edge## Disconnect", "Heal radius disconnect bottom color"), Color_t(255, 50, 50, 0), VISUAL);
-		CVar(HealRadiusDisconnectBottomIgnoreZ, VA_LIST("Cylinder bottom edge ignore Z## Disconnect", "Heal radius disconnect bottom ignore Z color"), Color_t(255, 50, 50, 0), VISUAL);
-		CVar(HealRadiusDisconnectTop, VA_LIST("Cylinder top edge## Disconnect", "Heal radius disconnect top color"), Color_t(255, 50, 50, 0), VISUAL);
-		CVar(HealRadiusDisconnectTopIgnoreZ, VA_LIST("Cylinder top edge ignore Z## Disconnect", "Heal radius disconnect top ignore Z color"), Color_t(255, 50, 50, 255), VISUAL);
-		CVar(HealRadiusDisconnectBottomFill, VA_LIST("Cylinder bottom fill## Disconnect", "Heal radius disconnect bottom fill color"), Color_t(255, 50, 50, 0), VISUAL);
-		CVar(HealRadiusDisconnectBottomFillIgnoreZ, VA_LIST("Cylinder bottom fill ignore Z## Disconnect", "Heal radius disconnect bottom fill ignore Z color"), Color_t(255, 50, 50, 60), VISUAL);
-		CVar(HealRadiusDisconnectTopFill, VA_LIST("Cylinder top fill## Disconnect", "Heal radius disconnect top fill color"), Color_t(255, 50, 50, 0), VISUAL);
-		CVar(HealRadiusDisconnectTopFillIgnoreZ, VA_LIST("Cylinder top fill ignore Z## Disconnect", "Heal radius disconnect top fill ignore Z color"), Color_t(255, 50, 50, 0), VISUAL);
+		CVar(HealRadiusDisconnectGlow, VA_LIST("Radius glow## Disconnect", "Heal radius disconnect glow color"), Color_t(255, 50, 50, 0), VISUAL);
+		CVar(HealRadiusDisconnectGlowIgnoreZ, VA_LIST("Radius glow ignore Z## Disconnect", "Heal radius disconnect glow ignore Z color"), Color_t(255, 50, 50, 120), VISUAL);
 		CVar(SentryRangeEnemy, "Enemy edge color", Color_t(255, 100, 80, 255), VISUAL);
 		CVar(SentryRangeEnemyIgnoreZ, "Enemy edge ignore Z color", Color_t(255, 100, 80, 60), VISUAL);
 		CVar(SentryRangeTeam, "Team edge color", Color_t(80, 160, 255, 255), VISUAL);
@@ -539,16 +527,19 @@ NAMESPACE_BEGIN(Vars)
 			CVar(AutoVaccinatorFlamethrowerDamageOnly, "Auto vaccinator flamethrower damage only", false, NOSAVE | DEBUGVAR);
 
 			CVarEnum(HealRadius, "Heal radius", 0b0, VISUAL | DROPDOWN_MULTI, "Off",
-				VA_LIST("Connect", "Disconnect", "##Divider", "Cylinder"),
-				Connect = 1 << 0, Disconnect = 1 << 1, Cylinder = 1 << 2,
+				VA_LIST("Connect", "Disconnect"),
+				Connect = 1 << 0, Disconnect = 1 << 1,
 				Enabled = Connect | Disconnect);
 			CVar(HealRadiusHeal, VA_LIST("Disconnect while healing only", "Heal radius disconnect while healing only"), true, VISUAL);
-			// the wall is filled geometry and can run up to ~7x/frame under FlexFOV,
-			// so the vertex count is capped well short of the engine's primitive limit
+			// every ring is traced and drawn per vertex, and the draw repeats up to
+			// ~7x/frame under FlexFOV, so both counts stay well short of the engine's
+			// primitive limit
 			CVar(HealRadiusVertices, VA_LIST("Vertices", "Heal radius vertices"), 48, VISUAL | SLIDER_CLAMP, 8, 64);
 			CVar(HealRadiusRounding, VA_LIST("Rounding", "Heal radius rounding"), 2, VISUAL | SLIDER_CLAMP, 0, 8);
-			CVar(HealRadiusConnectHeight, VA_LIST("Cylinder height## Connect", "Heal radius connect cylinder height"), 100.f, VISUAL | SLIDER_MIN | SLIDER_PRECISION, 0.f, 500.f, 5.f);
-			CVar(HealRadiusDisconnectHeight, VA_LIST("Cylinder height## Disconnect", "Heal radius disconnect cylinder height"), 100.f, VISUAL | SLIDER_MIN | SLIDER_PRECISION, 0.f, 500.f, 5.f);
+			// the glow is the ring redrawn in concentric offset copies that fade out,
+			// so its width costs layers - the engine gives no line thickness
+			CVar(HealRadiusGlowSize, VA_LIST("Glow size", "Heal radius glow size"), 0.f, VISUAL | SLIDER_MIN | SLIDER_PRECISION, 0.f, 32.f, 1.f, "%gu");
+			CVar(HealRadiusGlowLayers, VA_LIST("Glow layers", "Heal radius glow layers"), 4, VISUAL | SLIDER_CLAMP, 1, 8);
 		NAMESPACE_END(Healing)
 
 		NAMESPACE_BEGIN(Draw)

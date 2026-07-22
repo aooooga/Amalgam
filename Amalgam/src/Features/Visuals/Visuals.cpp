@@ -181,16 +181,6 @@ void CVisuals::DrawStickyRadius()
 	}
 }
 
-static Color_t LerpColor(const Color_t& tFrom, const Color_t& tTo, float flFrac)
-{
-	Color_t tColor = {};
-	tColor.SetRGB(tFrom.r + (float(tTo.r) - tFrom.r) * flFrac,
-		tFrom.g + (float(tTo.g) - tFrom.g) * flFrac,
-		tFrom.b + (float(tTo.b) - tFrom.b) * flFrac,
-		tFrom.a + (float(tTo.a) - tFrom.a) * flFrac);
-	return tColor;
-}
-
 // Rounds off the corners a conforming trace leaves behind: a stair or a crate
 // edge puts a hard step between neighbouring vertices, and the ring reads as a
 // staircase. Only the heights move, in a wrapping 3-tap average, so the radius
@@ -223,30 +213,26 @@ static void RoundRingHeights(std::vector<Vec3>& vPoints, int iPasses)
 // and the draw path below does nothing but hand triangles to the engine.
 struct HealRingCache_t
 {
-	std::vector<Vec3> m_vPoints = {};  // conformed, rounded, closed loop
-	std::vector<Vec3> m_vTop = {};     // the same ring lifted by m_flHeight
-	float m_flRadius = 0.f, m_flHeight = 0.f;
+	std::vector<Vec3> m_vPoints = {};   // conformed, rounded, closed loop
+	std::vector<Vec3> m_vOutward = {};  // per-vertex unit vector away from the centre, for the glow
+	float m_flRadius = 0.f;
 
 	void Build(const Vec3& vOrigin, float flRadius, int iVertices, int iRounding)
 	{
 		m_flRadius = flRadius;
 		m_vPoints = SplashTrace(vOrigin, flRadius, { 0, 0, 1 }, true, iVertices);
 		RoundRingHeights(m_vPoints, iRounding);
-		m_flHeight = -1.f; // force the cap ring to rebuild against the new base
+
+		m_vOutward.resize(m_vPoints.size());
+		for (size_t i = 0; i < m_vPoints.size(); i++)
+		{
+			Vec3 vOut = { m_vPoints[i].x - vOrigin.x, m_vPoints[i].y - vOrigin.y, 0.f };
+			const float flLength = vOut.Length2D();
+			m_vOutward[i] = flLength > 0.f ? vOut / flLength : Vec3();
+		}
 	}
 
-	void SetHeight(float flHeight)
-	{
-		if (m_flHeight == flHeight)
-			return;
-
-		m_flHeight = flHeight;
-		m_vTop = m_vPoints;
-		for (auto& vPoint : m_vTop)
-			vPoint.z += flHeight;
-	}
-
-	void Clear() { m_vPoints.clear(); m_vTop.clear(); m_flRadius = 0.f; m_flHeight = -1.f; }
+	void Clear() { m_vPoints.clear(); m_vOutward.clear(); m_flRadius = 0.f; }
 };
 
 // Fills a ring as a triangle fan from its centre. The rim keeps the per-vertex
@@ -265,55 +251,36 @@ static void RenderRadiusDisc(const Vec3& vCenter, const std::vector<Vec3>& vPoin
 	}
 }
 
-// Extrudes a ring upwards into a solid cylinder. Each wall quad rises from its
-// own ring vertex, so the wall rides the terrain the ring is draped over. Fill
-// and edges are coloured independently, both gradients running from the bottom
-// stop at the ring to the top stop at the cap. The engine takes one colour per
-// triangle, so the fill is stepped through horizontal bands - but only as many
-// as the gradient actually needs: a flat gradient collapses to a single band,
-// and the count is trimmed further so one pass stays clear of the ~10k
-// primitives that kill the engine's overlay path.
-static void RenderRadiusCylinder(const HealRingCache_t& tRing,
-	const Color_t& tFillBottom, const Color_t& tFillTop,
-	const Color_t& tEdgeBottom, const Color_t& tEdgeTop, bool bZBuffer)
+// Haloes the ring. The engine gives no line thickness, so the glow is the ring
+// redrawn as concentric copies stepped outwards and inwards along each vertex's
+// own outward vector, fading to nothing at the full width. Copies are offset in
+// the ground plane rather than in Z so the halo stays flush with the surface the
+// ring is draped over.
+static void RenderRadiusGlow(const HealRingCache_t& tRing, float flSize, int iLayers, const Color_t& tColor, bool bZBuffer)
 {
-	constexpr int iMaxBands = 6, iBandBudget = 2048; // triangles, per cylinder per z mode
-	const auto& vPoints = tRing.m_vPoints;
-	if (vPoints.size() < 2 || tRing.m_flHeight <= 0.f)
+	if (tRing.m_vPoints.size() < 2 || flSize <= 0.f || iLayers < 1 || !tColor.a)
 		return;
 
-	if (tFillBottom.a || tFillTop.a)
+	static std::vector<Vec3> vOffset = {}; // reused, this runs per pass
+	vOffset.resize(tRing.m_vPoints.size());
+
+	for (int j = 1; j <= iLayers; j++)
 	{
-		const bool bGradient = tFillBottom.r != tFillTop.r || tFillBottom.g != tFillTop.g
-			|| tFillBottom.b != tFillTop.b || tFillBottom.a != tFillTop.a;
-		const int iSegments = int(vPoints.size()) - 1;
-		const int iBands = bGradient ? std::max(1, std::min(iMaxBands, iBandBudget / std::max(1, iSegments * 4))) : 1;
+		const float flFrac = float(j) / iLayers;
+		Color_t tLayer = tColor;
+		tLayer.a = byte(tColor.a * (1.f - flFrac) / iLayers);
+		if (!tLayer.a)
+			continue;
 
-		for (int j = 0; j < iBands; j++)
+		for (int iSign = -1; iSign <= 1; iSign += 2)
 		{
-			const Color_t tColor = LerpColor(tFillBottom, tFillTop, (j + 0.5f) / iBands);
-			if (!tColor.a)
-				continue;
+			const float flStep = flSize * flFrac * iSign;
+			for (size_t i = 0; i < tRing.m_vPoints.size(); i++)
+				vOffset[i] = tRing.m_vPoints[i] + tRing.m_vOutward[i] * flStep;
 
-			const Vec3 vLow = { 0, 0, tRing.m_flHeight * j / iBands }, vHigh = { 0, 0, tRing.m_flHeight * (j + 1) / iBands };
-			for (size_t i = 0; i + 1 < vPoints.size(); i++)
-			{
-				const Vec3 vA0 = vPoints[i] + vLow, vA1 = vPoints[i] + vHigh;
-				const Vec3 vB0 = vPoints[i + 1] + vLow, vB1 = vPoints[i + 1] + vHigh;
-				// both windings, the wall is seen from inside and out
-				H::Draw.RenderTriangle(vA0, vB0, vB1, tColor, bZBuffer);
-				H::Draw.RenderTriangle(vB1, vB0, vA0, tColor, bZBuffer);
-				H::Draw.RenderTriangle(vA0, vB1, vA1, tColor, bZBuffer);
-				H::Draw.RenderTriangle(vA1, vB1, vA0, tColor, bZBuffer);
-			}
+			H::Draw.RenderPath(vOffset, tLayer, bZBuffer, Vars::Visuals::Path::StyleEnum::Line);
 		}
 	}
-
-	// base and cap outlines - no ribs, they only made the wall look jagged
-	if (tEdgeBottom.a)
-		H::Draw.RenderPath(vPoints, tEdgeBottom, bZBuffer, Vars::Visuals::Path::StyleEnum::Line);
-	if (tEdgeTop.a)
-		H::Draw.RenderPath(tRing.m_vTop, tEdgeTop, bZBuffer, Vars::Visuals::Path::StyleEnum::Line);
 }
 
 // Local player's Medigun ranges, as surface-conforming circles around the
@@ -321,8 +288,8 @@ static void RenderRadiusCylinder(const HealRingCache_t& tRing,
 // is the range at which a beam can latch onto a target (the weapon's own range),
 // disconnect the wider range at which an established beam finally breaks
 // (CWeaponMedigun::GetStickRange), which is only meaningful while a beam is
-// actually attached. Both are independent toggles and can show at once; either
-// can be extruded into a vertical gradient cylinder.
+// actually attached. Both are independent toggles and can show at once; each
+// draws as a filled disc, a haloed outline, or any mix the colours allow.
 static constexpr float flMedigunStickMult = 1.2f; // CWeaponMedigun::GetStickRange
 static constexpr float flHealRadiusMoveEpsilon = 2.f; // units of drift tolerated before retracing
 
@@ -379,12 +346,6 @@ void CVisuals::DrawHealRadius()
 			tDisconnect.Clear();
 		else if (bShape || tDisconnect.m_flRadius != flStickRange)
 			tDisconnect.Build(vLastOrigin, flStickRange, iVertices, iRounding);
-
-		if (iValue & Vars::Aimbot::Healing::HealRadiusEnum::Cylinder)
-		{
-			tConnect.SetHeight(Vars::Aimbot::Healing::HealRadiusConnectHeight.Value);
-			tDisconnect.SetHeight(Vars::Aimbot::Healing::HealRadiusDisconnectHeight.Value);
-		}
 	}
 
 	// Scene-stripped (replaced) main pass: the composite paints over anything
@@ -392,52 +353,41 @@ void CVisuals::DrawHealRadius()
 	if (F::FlexFOV.m_bReplacingView)
 		return;
 
-	const bool bCylinder = iValue & Vars::Aimbot::Healing::HealRadiusEnum::Cylinder;
 	// the cached rings belong to vLastOrigin, which is where the discs fan from
 	const Vec3& vCenter = vLastOrigin;
+	const float flGlowSize = Vars::Aimbot::Healing::HealRadiusGlowSize.Value;
+	const int iGlowLayers = Vars::Aimbot::Healing::HealRadiusGlowLayers.Value;
 
-	// each range takes its edge / fill pair for the ring, then the cylinder's
-	// bottom and top gradient stops for edge and fill, ignore-Z variant first
+	// each range takes its glow, fill and edge, ignore-Z variant first. The glow
+	// goes down before the line it haloes, and the fill before both.
 	auto fnDraw = [&](const HealRingCache_t& tRing,
-		const Color_t& tRingEdge, const Color_t& tRingEdgeNoZ,
-		const Color_t& tRingFill, const Color_t& tRingFillNoZ,
-		const Color_t& tEdgeBottom, const Color_t& tEdgeBottomNoZ,
-		const Color_t& tEdgeTop, const Color_t& tEdgeTopNoZ,
-		const Color_t& tFillBottom, const Color_t& tFillBottomNoZ,
-		const Color_t& tFillTop, const Color_t& tFillTopNoZ)
+		const Color_t& tEdge, const Color_t& tEdgeNoZ,
+		const Color_t& tFill, const Color_t& tFillNoZ,
+		const Color_t& tGlow, const Color_t& tGlowNoZ)
 	{
 		if (tRing.m_vPoints.empty())
 			return;
 
-		RenderRadiusDisc(vCenter, tRing.m_vPoints, tRingFillNoZ, false);
-		RenderRadiusDisc(vCenter, tRing.m_vPoints, tRingFill, true);
+		RenderRadiusDisc(vCenter, tRing.m_vPoints, tFillNoZ, false);
+		RenderRadiusDisc(vCenter, tRing.m_vPoints, tFill, true);
 
-		if (tRingEdgeNoZ.a)
-			H::Draw.RenderPath(tRing.m_vPoints, tRingEdgeNoZ, false, Vars::Visuals::Path::StyleEnum::Line);
-		if (tRingEdge.a)
-			H::Draw.RenderPath(tRing.m_vPoints, tRingEdge, true, Vars::Visuals::Path::StyleEnum::Line);
+		RenderRadiusGlow(tRing, flGlowSize, iGlowLayers, tGlowNoZ, false);
+		RenderRadiusGlow(tRing, flGlowSize, iGlowLayers, tGlow, true);
 
-		if (!bCylinder)
-			return;
-
-		RenderRadiusCylinder(tRing, tFillBottomNoZ, tFillTopNoZ, tEdgeBottomNoZ, tEdgeTopNoZ, false);
-		RenderRadiusCylinder(tRing, tFillBottom, tFillTop, tEdgeBottom, tEdgeTop, true);
+		if (tEdgeNoZ.a)
+			H::Draw.RenderPath(tRing.m_vPoints, tEdgeNoZ, false, Vars::Visuals::Path::StyleEnum::Line);
+		if (tEdge.a)
+			H::Draw.RenderPath(tRing.m_vPoints, tEdge, true, Vars::Visuals::Path::StyleEnum::Line);
 	};
 
 	fnDraw(tConnect,
 		Vars::Colors::HealRadiusConnect.Value, Vars::Colors::HealRadiusConnectIgnoreZ.Value,
 		Vars::Colors::HealRadiusConnectFill.Value, Vars::Colors::HealRadiusConnectFillIgnoreZ.Value,
-		Vars::Colors::HealRadiusConnectBottom.Value, Vars::Colors::HealRadiusConnectBottomIgnoreZ.Value,
-		Vars::Colors::HealRadiusConnectTop.Value, Vars::Colors::HealRadiusConnectTopIgnoreZ.Value,
-		Vars::Colors::HealRadiusConnectBottomFill.Value, Vars::Colors::HealRadiusConnectBottomFillIgnoreZ.Value,
-		Vars::Colors::HealRadiusConnectTopFill.Value, Vars::Colors::HealRadiusConnectTopFillIgnoreZ.Value);
+		Vars::Colors::HealRadiusConnectGlow.Value, Vars::Colors::HealRadiusConnectGlowIgnoreZ.Value);
 	fnDraw(tDisconnect,
 		Vars::Colors::HealRadiusDisconnect.Value, Vars::Colors::HealRadiusDisconnectIgnoreZ.Value,
 		Vars::Colors::HealRadiusDisconnectFill.Value, Vars::Colors::HealRadiusDisconnectFillIgnoreZ.Value,
-		Vars::Colors::HealRadiusDisconnectBottom.Value, Vars::Colors::HealRadiusDisconnectBottomIgnoreZ.Value,
-		Vars::Colors::HealRadiusDisconnectTop.Value, Vars::Colors::HealRadiusDisconnectTopIgnoreZ.Value,
-		Vars::Colors::HealRadiusDisconnectBottomFill.Value, Vars::Colors::HealRadiusDisconnectBottomFillIgnoreZ.Value,
-		Vars::Colors::HealRadiusDisconnectTopFill.Value, Vars::Colors::HealRadiusDisconnectTopFillIgnoreZ.Value);
+		Vars::Colors::HealRadiusDisconnectGlow.Value, Vars::Colors::HealRadiusDisconnectGlowIgnoreZ.Value);
 }
 
 // Interp-path trajectory data, computed once per frame and re-drawn per render

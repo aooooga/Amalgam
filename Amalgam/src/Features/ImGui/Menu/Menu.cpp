@@ -333,30 +333,20 @@ void CMenu::MenuAimbot(int iTab)
 					FToggleRow(Vars::Aimbot::Healing::HealRadiusHeal);
 					FSliderRow(Vars::Aimbot::Healing::HealRadiusVertices, FSliderEnum::Left);
 					FSliderRow(Vars::Aimbot::Healing::HealRadiusRounding, FSliderEnum::Right);
+					FSliderRow(Vars::Aimbot::Healing::HealRadiusGlowSize, FSliderEnum::Left);
+					FSliderRow(Vars::Aimbot::Healing::HealRadiusGlowLayers, FSliderEnum::Right);
 
-					// each range gets its own popup: height, then the ring's edge and
-					// fill, then the cylinder's bottom / top gradient stops for edge
-					// and fill (ignore Z left, Z-buffered right)
+					// each range gets its own popup: the ring's edge, its fill and the
+					// glow around it (ignore Z left, Z-buffered right)
 					FText("Connect", { 5, 5 });
 					if (FPopupButton("Connect", { 0, -5 }))
 					{
-						FSliderRow(Vars::Aimbot::Healing::HealRadiusConnectHeight);
-
-						Divider();
 						FColorPicker(Vars::Colors::HealRadiusConnectIgnoreZ, FColorPickerEnum::Left);
 						FColorPicker(Vars::Colors::HealRadiusConnect, FColorPickerEnum::Right);
 						FColorPicker(Vars::Colors::HealRadiusConnectFillIgnoreZ, FColorPickerEnum::Left);
 						FColorPicker(Vars::Colors::HealRadiusConnectFill, FColorPickerEnum::Right);
-
-						Divider();
-						FColorPicker(Vars::Colors::HealRadiusConnectBottomIgnoreZ, FColorPickerEnum::Left);
-						FColorPicker(Vars::Colors::HealRadiusConnectBottom, FColorPickerEnum::Right);
-						FColorPicker(Vars::Colors::HealRadiusConnectTopIgnoreZ, FColorPickerEnum::Left);
-						FColorPicker(Vars::Colors::HealRadiusConnectTop, FColorPickerEnum::Right);
-						FColorPicker(Vars::Colors::HealRadiusConnectBottomFillIgnoreZ, FColorPickerEnum::Left);
-						FColorPicker(Vars::Colors::HealRadiusConnectBottomFill, FColorPickerEnum::Right);
-						FColorPicker(Vars::Colors::HealRadiusConnectTopFillIgnoreZ, FColorPickerEnum::Left);
-						FColorPicker(Vars::Colors::HealRadiusConnectTopFill, FColorPickerEnum::Right);
+						FColorPicker(Vars::Colors::HealRadiusConnectGlowIgnoreZ, FColorPickerEnum::Left);
+						FColorPicker(Vars::Colors::HealRadiusConnectGlow, FColorPickerEnum::Right);
 
 						EndPopup();
 					}
@@ -364,23 +354,12 @@ void CMenu::MenuAimbot(int iTab)
 					FText("Disconnect", { 5, 5 });
 					if (FPopupButton("Disconnect", { 0, -5 }))
 					{
-						FSliderRow(Vars::Aimbot::Healing::HealRadiusDisconnectHeight);
-
-						Divider();
 						FColorPicker(Vars::Colors::HealRadiusDisconnectIgnoreZ, FColorPickerEnum::Left);
 						FColorPicker(Vars::Colors::HealRadiusDisconnect, FColorPickerEnum::Right);
 						FColorPicker(Vars::Colors::HealRadiusDisconnectFillIgnoreZ, FColorPickerEnum::Left);
 						FColorPicker(Vars::Colors::HealRadiusDisconnectFill, FColorPickerEnum::Right);
-
-						Divider();
-						FColorPicker(Vars::Colors::HealRadiusDisconnectBottomIgnoreZ, FColorPickerEnum::Left);
-						FColorPicker(Vars::Colors::HealRadiusDisconnectBottom, FColorPickerEnum::Right);
-						FColorPicker(Vars::Colors::HealRadiusDisconnectTopIgnoreZ, FColorPickerEnum::Left);
-						FColorPicker(Vars::Colors::HealRadiusDisconnectTop, FColorPickerEnum::Right);
-						FColorPicker(Vars::Colors::HealRadiusDisconnectBottomFillIgnoreZ, FColorPickerEnum::Left);
-						FColorPicker(Vars::Colors::HealRadiusDisconnectBottomFill, FColorPickerEnum::Right);
-						FColorPicker(Vars::Colors::HealRadiusDisconnectTopFillIgnoreZ, FColorPickerEnum::Left);
-						FColorPicker(Vars::Colors::HealRadiusDisconnectTopFill, FColorPickerEnum::Right);
+						FColorPicker(Vars::Colors::HealRadiusDisconnectGlowIgnoreZ, FColorPickerEnum::Left);
+						FColorPicker(Vars::Colors::HealRadiusDisconnectGlow, FColorPickerEnum::Right);
 
 						EndPopup();
 					}

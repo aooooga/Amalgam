@@ -330,9 +330,11 @@ void CMenu::MenuAimbot(int iTab)
 					FToggleRow(Vars::Aimbot::Healing::ActivateOnVoice, FToggleEnum::Right);
 
 					FDropdown(Vars::Aimbot::Healing::HealRadius);
+					FSliderRow(Vars::Aimbot::Healing::HealRadiusVertices);
 
-					// each range gets its own popup: height, then the ring and the
-					// cylinder's top / bottom gradient stops (ignore Z left, Z right)
+					// each range gets its own popup: height, then the ring's edge and
+					// fill, then the cylinder's bottom / top gradient stops for edge
+					// and fill (ignore Z left, Z-buffered right)
 					FText("Connect", { 5, 5 });
 					if (FPopupButton("Connect", { 0, -5 }))
 					{
@@ -341,10 +343,18 @@ void CMenu::MenuAimbot(int iTab)
 						Divider();
 						FColorPicker(Vars::Colors::HealRadiusConnectIgnoreZ, FColorPickerEnum::Left);
 						FColorPicker(Vars::Colors::HealRadiusConnect, FColorPickerEnum::Right);
-						FColorPicker(Vars::Colors::HealRadiusConnectTopIgnoreZ, FColorPickerEnum::Left);
-						FColorPicker(Vars::Colors::HealRadiusConnectTop, FColorPickerEnum::Right);
+						FColorPicker(Vars::Colors::HealRadiusConnectFillIgnoreZ, FColorPickerEnum::Left);
+						FColorPicker(Vars::Colors::HealRadiusConnectFill, FColorPickerEnum::Right);
+
+						Divider();
 						FColorPicker(Vars::Colors::HealRadiusConnectBottomIgnoreZ, FColorPickerEnum::Left);
 						FColorPicker(Vars::Colors::HealRadiusConnectBottom, FColorPickerEnum::Right);
+						FColorPicker(Vars::Colors::HealRadiusConnectTopIgnoreZ, FColorPickerEnum::Left);
+						FColorPicker(Vars::Colors::HealRadiusConnectTop, FColorPickerEnum::Right);
+						FColorPicker(Vars::Colors::HealRadiusConnectBottomFillIgnoreZ, FColorPickerEnum::Left);
+						FColorPicker(Vars::Colors::HealRadiusConnectBottomFill, FColorPickerEnum::Right);
+						FColorPicker(Vars::Colors::HealRadiusConnectTopFillIgnoreZ, FColorPickerEnum::Left);
+						FColorPicker(Vars::Colors::HealRadiusConnectTopFill, FColorPickerEnum::Right);
 
 						EndPopup();
 					}
@@ -357,10 +367,18 @@ void CMenu::MenuAimbot(int iTab)
 						Divider();
 						FColorPicker(Vars::Colors::HealRadiusDisconnectIgnoreZ, FColorPickerEnum::Left);
 						FColorPicker(Vars::Colors::HealRadiusDisconnect, FColorPickerEnum::Right);
-						FColorPicker(Vars::Colors::HealRadiusDisconnectTopIgnoreZ, FColorPickerEnum::Left);
-						FColorPicker(Vars::Colors::HealRadiusDisconnectTop, FColorPickerEnum::Right);
+						FColorPicker(Vars::Colors::HealRadiusDisconnectFillIgnoreZ, FColorPickerEnum::Left);
+						FColorPicker(Vars::Colors::HealRadiusDisconnectFill, FColorPickerEnum::Right);
+
+						Divider();
 						FColorPicker(Vars::Colors::HealRadiusDisconnectBottomIgnoreZ, FColorPickerEnum::Left);
 						FColorPicker(Vars::Colors::HealRadiusDisconnectBottom, FColorPickerEnum::Right);
+						FColorPicker(Vars::Colors::HealRadiusDisconnectTopIgnoreZ, FColorPickerEnum::Left);
+						FColorPicker(Vars::Colors::HealRadiusDisconnectTop, FColorPickerEnum::Right);
+						FColorPicker(Vars::Colors::HealRadiusDisconnectBottomFillIgnoreZ, FColorPickerEnum::Left);
+						FColorPicker(Vars::Colors::HealRadiusDisconnectBottomFill, FColorPickerEnum::Right);
+						FColorPicker(Vars::Colors::HealRadiusDisconnectTopFillIgnoreZ, FColorPickerEnum::Left);
+						FColorPicker(Vars::Colors::HealRadiusDisconnectTopFill, FColorPickerEnum::Right);
 
 						EndPopup();
 					}

@@ -181,49 +181,79 @@ void CVisuals::DrawStickyRadius()
 	}
 }
 
-// Extrudes a conformed ring upwards into a cylinder shaded from tBottom at the
-// ring to tTop at the cap. Every rib starts at its own ring vertex, so the wall
-// rides the terrain the ring is draped over. The engine's render primitives die
-// at roughly 10k calls in one pass and this can run up to ~7x/frame under
-// FlexFOV, so ribs are strided and the gradient uses a coarse step count.
-static void RenderRadiusCylinder(const std::vector<Vec3>& vPoints, float flHeight, const Color_t& tBottom, const Color_t& tTop, bool bZBuffer)
+static Color_t LerpColor(const Color_t& tFrom, const Color_t& tTo, float flFrac)
 {
-	constexpr int iSteps = 8, iRibStride = 2;
-	if (vPoints.size() < 2 || flHeight <= 0.f || !tBottom.a && !tTop.a)
+	Color_t tColor = {};
+	tColor.SetRGB(tFrom.r + (float(tTo.r) - tFrom.r) * flFrac,
+		tFrom.g + (float(tTo.g) - tFrom.g) * flFrac,
+		tFrom.b + (float(tTo.b) - tFrom.b) * flFrac,
+		tFrom.a + (float(tTo.a) - tFrom.a) * flFrac);
+	return tColor;
+}
+
+// Fills a conformed ring as a triangle fan from its centre. The rim keeps the
+// per-vertex heights the ring was draped with, so the disc follows the terrain.
+static void RenderRadiusDisc(const Vec3& vCenter, const std::vector<Vec3>& vPoints, const Color_t& tColor, bool bZBuffer)
+{
+	if (vPoints.size() < 2 || !tColor.a)
 		return;
 
-	auto fnLerp = [&](float flFrac)
+	for (size_t i = 0; i + 1 < vPoints.size(); i++)
 	{
-		Color_t tColor = {};
-		tColor.SetRGB(tBottom.r + (float(tTop.r) - tBottom.r) * flFrac,
-			tBottom.g + (float(tTop.g) - tBottom.g) * flFrac,
-			tBottom.b + (float(tTop.b) - tBottom.b) * flFrac,
-			tBottom.a + (float(tTop.a) - tBottom.a) * flFrac);
-		return tColor;
-	};
+		// both windings: the viewer stands at the centre of their own heal
+		// radius, but the terrain can put the disc above or below their eyes
+		H::Draw.RenderTriangle(vCenter, vPoints[i], vPoints[i + 1], tColor, bZBuffer);
+		H::Draw.RenderTriangle(vCenter, vPoints[i + 1], vPoints[i], tColor, bZBuffer);
+	}
+}
 
-	// vertical ribs, each split into gradient steps
-	for (size_t i = 0; i + 1 < vPoints.size(); i += iRibStride)
+// Extrudes a conformed ring upwards into a solid cylinder. Each wall quad rises
+// from its own ring vertex, so the wall rides the terrain the ring is draped
+// over. Fill and edges are coloured independently, both gradients running from
+// the bottom stop at the ring to the top stop at the cap; the fill steps through
+// a small number of horizontal bands since the engine takes one colour per
+// triangle. That engine primitive path dies at roughly 10k calls in a single
+// pass and this can run up to ~7x/frame under FlexFOV, which is what caps the
+// vertex slider and the band count.
+static void RenderRadiusCylinder(const std::vector<Vec3>& vPoints, float flHeight,
+	const Color_t& tFillBottom, const Color_t& tFillTop,
+	const Color_t& tEdgeBottom, const Color_t& tEdgeTop, bool bZBuffer)
+{
+	constexpr int iBands = 6;
+	if (vPoints.size() < 2 || flHeight <= 0.f)
+		return;
+
+	if (tFillBottom.a || tFillTop.a)
 	{
-		const Vec3& vBase = vPoints[i];
-		for (int j = 0; j < iSteps; j++)
+		for (int j = 0; j < iBands; j++)
 		{
-			const float flLow = flHeight * j / iSteps, flHigh = flHeight * (j + 1) / iSteps;
-			const Color_t tColor = fnLerp((j + 0.5f) / iSteps);
+			const Color_t tColor = LerpColor(tFillBottom, tFillTop, (j + 0.5f) / iBands);
 			if (!tColor.a)
 				continue;
 
-			H::Draw.RenderLine(vBase + Vec3(0, 0, flLow), vBase + Vec3(0, 0, flHigh), tColor, bZBuffer);
+			const Vec3 vLow = { 0, 0, flHeight * j / iBands }, vHigh = { 0, 0, flHeight * (j + 1) / iBands };
+			for (size_t i = 0; i + 1 < vPoints.size(); i++)
+			{
+				const Vec3 vA0 = vPoints[i] + vLow, vA1 = vPoints[i] + vHigh;
+				const Vec3 vB0 = vPoints[i + 1] + vLow, vB1 = vPoints[i + 1] + vHigh;
+				// both windings, the wall is seen from inside and out
+				H::Draw.RenderTriangle(vA0, vB0, vB1, tColor, bZBuffer);
+				H::Draw.RenderTriangle(vB1, vB0, vA0, tColor, bZBuffer);
+				H::Draw.RenderTriangle(vA0, vB1, vA1, tColor, bZBuffer);
+				H::Draw.RenderTriangle(vA1, vB1, vA0, tColor, bZBuffer);
+			}
 		}
 	}
 
-	// cap ring
-	if (tTop.a)
+	// base and cap outlines - no ribs, they only made the wall look jagged
+	if (tEdgeBottom.a)
+		H::Draw.RenderPath(vPoints, tEdgeBottom, bZBuffer, Vars::Visuals::Path::StyleEnum::Line);
+	if (tEdgeTop.a)
 	{
 		std::vector<Vec3> vTop = vPoints;
 		for (auto& vPoint : vTop)
 			vPoint.z += flHeight;
-		H::Draw.RenderPath(vTop, tTop, bZBuffer, Vars::Visuals::Path::StyleEnum::Line);
+		H::Draw.RenderPath(vTop, tEdgeTop, bZBuffer, Vars::Visuals::Path::StyleEnum::Line);
 	}
 }
 
@@ -249,24 +279,26 @@ void CVisuals::DrawHealRadius()
 	static Vec3 vLastOrigin = {};
 	static float flLastRange = 0.f;
 	static std::vector<Vec3> vConnect = {}, vDisconnect = {};
-	static int iLastFrame = -1, iLastValue = 0;
+	static int iLastFrame = -1, iLastValue = 0, iLastVertices = 0;
 
 	const float flRange = pWeapon->GetRange();
 	const Vec3 vOrigin = pLocal->m_vecOrigin();
+	const int iVertices = Vars::Aimbot::Healing::HealRadiusVertices.Value;
 
 	if (iLastFrame != I::GlobalVars->framecount)
 	{
 		iLastFrame = I::GlobalVars->framecount;
-		if (vOrigin != vLastOrigin || flRange != flLastRange || iLastValue != iValue)
+		if (vOrigin != vLastOrigin || flRange != flLastRange || iLastValue != iValue || iLastVertices != iVertices)
 		{
 			vLastOrigin = vOrigin;
 			flLastRange = flRange;
 			iLastValue = iValue;
+			iLastVertices = iVertices;
 
 			vConnect = iValue & Vars::Aimbot::Healing::HealRadiusEnum::Connect
-				? SplashTrace(vOrigin, flRange, { 0, 0, 1 }, true) : std::vector<Vec3>{};
+				? SplashTrace(vOrigin, flRange, { 0, 0, 1 }, true, iVertices) : std::vector<Vec3>{};
 			vDisconnect = iValue & Vars::Aimbot::Healing::HealRadiusEnum::Disconnect
-				? SplashTrace(vOrigin, flRange * flMedigunStickMult, { 0, 0, 1 }, true) : std::vector<Vec3>{};
+				? SplashTrace(vOrigin, flRange * flMedigunStickMult, { 0, 0, 1 }, true, iVertices) : std::vector<Vec3>{};
 		}
 	}
 
@@ -276,34 +308,51 @@ void CVisuals::DrawHealRadius()
 		return;
 
 	const bool bCylinder = iValue & Vars::Aimbot::Healing::HealRadiusEnum::Cylinder;
+	// the cached ring belongs to vLastOrigin, which is where the disc has to fan from
+	const Vec3& vCenter = vLastOrigin;
+
+	// each range takes its edge / fill pair for the ring, then the cylinder's
+	// bottom and top gradient stops for edge and fill, ignore-Z variant first
 	auto fnDraw = [&](const std::vector<Vec3>& vPoints, float flHeight,
-		const Color_t& tRing, const Color_t& tRingIgnoreZ,
-		const Color_t& tTop, const Color_t& tTopIgnoreZ,
-		const Color_t& tBottom, const Color_t& tBottomIgnoreZ)
+		const ConfigVar<Color_t>& tRingEdge, const ConfigVar<Color_t>& tRingEdgeNoZ,
+		const ConfigVar<Color_t>& tRingFill, const ConfigVar<Color_t>& tRingFillNoZ,
+		const ConfigVar<Color_t>& tEdgeBottom, const ConfigVar<Color_t>& tEdgeBottomNoZ,
+		const ConfigVar<Color_t>& tEdgeTop, const ConfigVar<Color_t>& tEdgeTopNoZ,
+		const ConfigVar<Color_t>& tFillBottom, const ConfigVar<Color_t>& tFillBottomNoZ,
+		const ConfigVar<Color_t>& tFillTop, const ConfigVar<Color_t>& tFillTopNoZ)
 	{
 		if (vPoints.empty())
 			return;
 
-		if (tRingIgnoreZ.a)
-			H::Draw.RenderPath(vPoints, tRingIgnoreZ, false, Vars::Visuals::Path::StyleEnum::Line);
-		if (tRing.a)
-			H::Draw.RenderPath(vPoints, tRing, true, Vars::Visuals::Path::StyleEnum::Line);
+		RenderRadiusDisc(vCenter, vPoints, tRingFillNoZ.Value, false);
+		RenderRadiusDisc(vCenter, vPoints, tRingFill.Value, true);
+
+		if (tRingEdgeNoZ.Value.a)
+			H::Draw.RenderPath(vPoints, tRingEdgeNoZ.Value, false, Vars::Visuals::Path::StyleEnum::Line);
+		if (tRingEdge.Value.a)
+			H::Draw.RenderPath(vPoints, tRingEdge.Value, true, Vars::Visuals::Path::StyleEnum::Line);
 
 		if (!bCylinder)
 			return;
 
-		RenderRadiusCylinder(vPoints, flHeight, tBottomIgnoreZ, tTopIgnoreZ, false);
-		RenderRadiusCylinder(vPoints, flHeight, tBottom, tTop, true);
+		RenderRadiusCylinder(vPoints, flHeight, tFillBottomNoZ.Value, tFillTopNoZ.Value, tEdgeBottomNoZ.Value, tEdgeTopNoZ.Value, false);
+		RenderRadiusCylinder(vPoints, flHeight, tFillBottom.Value, tFillTop.Value, tEdgeBottom.Value, tEdgeTop.Value, true);
 	};
 
 	fnDraw(vConnect, Vars::Aimbot::Healing::HealRadiusConnectHeight.Value,
-		Vars::Colors::HealRadiusConnect.Value, Vars::Colors::HealRadiusConnectIgnoreZ.Value,
-		Vars::Colors::HealRadiusConnectTop.Value, Vars::Colors::HealRadiusConnectTopIgnoreZ.Value,
-		Vars::Colors::HealRadiusConnectBottom.Value, Vars::Colors::HealRadiusConnectBottomIgnoreZ.Value);
+		Vars::Colors::HealRadiusConnect, Vars::Colors::HealRadiusConnectIgnoreZ,
+		Vars::Colors::HealRadiusConnectFill, Vars::Colors::HealRadiusConnectFillIgnoreZ,
+		Vars::Colors::HealRadiusConnectBottom, Vars::Colors::HealRadiusConnectBottomIgnoreZ,
+		Vars::Colors::HealRadiusConnectTop, Vars::Colors::HealRadiusConnectTopIgnoreZ,
+		Vars::Colors::HealRadiusConnectBottomFill, Vars::Colors::HealRadiusConnectBottomFillIgnoreZ,
+		Vars::Colors::HealRadiusConnectTopFill, Vars::Colors::HealRadiusConnectTopFillIgnoreZ);
 	fnDraw(vDisconnect, Vars::Aimbot::Healing::HealRadiusDisconnectHeight.Value,
-		Vars::Colors::HealRadiusDisconnect.Value, Vars::Colors::HealRadiusDisconnectIgnoreZ.Value,
-		Vars::Colors::HealRadiusDisconnectTop.Value, Vars::Colors::HealRadiusDisconnectTopIgnoreZ.Value,
-		Vars::Colors::HealRadiusDisconnectBottom.Value, Vars::Colors::HealRadiusDisconnectBottomIgnoreZ.Value);
+		Vars::Colors::HealRadiusDisconnect, Vars::Colors::HealRadiusDisconnectIgnoreZ,
+		Vars::Colors::HealRadiusDisconnectFill, Vars::Colors::HealRadiusDisconnectFillIgnoreZ,
+		Vars::Colors::HealRadiusDisconnectBottom, Vars::Colors::HealRadiusDisconnectBottomIgnoreZ,
+		Vars::Colors::HealRadiusDisconnectTop, Vars::Colors::HealRadiusDisconnectTopIgnoreZ,
+		Vars::Colors::HealRadiusDisconnectBottomFill, Vars::Colors::HealRadiusDisconnectBottomFillIgnoreZ,
+		Vars::Colors::HealRadiusDisconnectTopFill, Vars::Colors::HealRadiusDisconnectTopFillIgnoreZ);
 }
 
 // Interp-path trajectory data, computed once per frame and re-drawn per render

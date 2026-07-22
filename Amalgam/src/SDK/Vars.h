@@ -317,18 +317,30 @@ NAMESPACE_BEGIN(Vars)
 		CVar(StickyRadiusPlayerInside, "Sticky radius player inside color", Color_t(255, 50, 50, 0), VISUAL);
 		CVar(StickyRadiusPlayerInsideIgnoreZ, "Sticky radius player inside ignore Z color", Color_t(255, 50, 50, 255), VISUAL);
 
-		CVar(HealRadiusConnect, VA_LIST("Radius", "Heal radius connect color"), Color_t(50, 255, 50, 0), VISUAL);
-		CVar(HealRadiusConnectIgnoreZ, VA_LIST("Radius ignore Z", "Heal radius connect ignore Z color"), Color_t(50, 255, 50, 255), VISUAL);
-		CVar(HealRadiusConnectTop, VA_LIST("Cylinder top", "Heal radius connect top color"), Color_t(50, 255, 50, 0), VISUAL);
-		CVar(HealRadiusConnectTopIgnoreZ, VA_LIST("Cylinder top ignore Z", "Heal radius connect top ignore Z color"), Color_t(50, 255, 50, 0), VISUAL);
-		CVar(HealRadiusConnectBottom, VA_LIST("Cylinder bottom", "Heal radius connect bottom color"), Color_t(50, 255, 50, 0), VISUAL);
-		CVar(HealRadiusConnectBottomIgnoreZ, VA_LIST("Cylinder bottom ignore Z", "Heal radius connect bottom ignore Z color"), Color_t(50, 255, 50, 255), VISUAL);
-		CVar(HealRadiusDisconnect, VA_LIST("Radius", "Heal radius disconnect color"), Color_t(255, 50, 50, 0), VISUAL);
-		CVar(HealRadiusDisconnectIgnoreZ, VA_LIST("Radius ignore Z", "Heal radius disconnect ignore Z color"), Color_t(255, 50, 50, 255), VISUAL);
-		CVar(HealRadiusDisconnectTop, VA_LIST("Cylinder top", "Heal radius disconnect top color"), Color_t(255, 50, 50, 0), VISUAL);
-		CVar(HealRadiusDisconnectTopIgnoreZ, VA_LIST("Cylinder top ignore Z", "Heal radius disconnect top ignore Z color"), Color_t(255, 50, 50, 0), VISUAL);
-		CVar(HealRadiusDisconnectBottom, VA_LIST("Cylinder bottom", "Heal radius disconnect bottom color"), Color_t(255, 50, 50, 0), VISUAL);
-		CVar(HealRadiusDisconnectBottomIgnoreZ, VA_LIST("Cylinder bottom ignore Z", "Heal radius disconnect bottom ignore Z color"), Color_t(255, 50, 50, 255), VISUAL);
+		CVar(HealRadiusConnect, VA_LIST("Radius edge", "Heal radius connect color"), Color_t(50, 255, 50, 0), VISUAL);
+		CVar(HealRadiusConnectIgnoreZ, VA_LIST("Radius edge ignore Z", "Heal radius connect ignore Z color"), Color_t(50, 255, 50, 255), VISUAL);
+		CVar(HealRadiusConnectFill, VA_LIST("Radius fill", "Heal radius connect fill color"), Color_t(50, 255, 50, 0), VISUAL);
+		CVar(HealRadiusConnectFillIgnoreZ, VA_LIST("Radius fill ignore Z", "Heal radius connect fill ignore Z color"), Color_t(50, 255, 50, 0), VISUAL);
+		CVar(HealRadiusConnectBottom, VA_LIST("Cylinder bottom edge", "Heal radius connect bottom color"), Color_t(50, 255, 50, 0), VISUAL);
+		CVar(HealRadiusConnectBottomIgnoreZ, VA_LIST("Cylinder bottom edge ignore Z", "Heal radius connect bottom ignore Z color"), Color_t(50, 255, 50, 0), VISUAL);
+		CVar(HealRadiusConnectTop, VA_LIST("Cylinder top edge", "Heal radius connect top color"), Color_t(50, 255, 50, 0), VISUAL);
+		CVar(HealRadiusConnectTopIgnoreZ, VA_LIST("Cylinder top edge ignore Z", "Heal radius connect top ignore Z color"), Color_t(50, 255, 50, 255), VISUAL);
+		CVar(HealRadiusConnectBottomFill, VA_LIST("Cylinder bottom fill", "Heal radius connect bottom fill color"), Color_t(50, 255, 50, 0), VISUAL);
+		CVar(HealRadiusConnectBottomFillIgnoreZ, VA_LIST("Cylinder bottom fill ignore Z", "Heal radius connect bottom fill ignore Z color"), Color_t(50, 255, 50, 60), VISUAL);
+		CVar(HealRadiusConnectTopFill, VA_LIST("Cylinder top fill", "Heal radius connect top fill color"), Color_t(50, 255, 50, 0), VISUAL);
+		CVar(HealRadiusConnectTopFillIgnoreZ, VA_LIST("Cylinder top fill ignore Z", "Heal radius connect top fill ignore Z color"), Color_t(50, 255, 50, 0), VISUAL);
+		CVar(HealRadiusDisconnect, VA_LIST("Radius edge", "Heal radius disconnect color"), Color_t(255, 50, 50, 0), VISUAL);
+		CVar(HealRadiusDisconnectIgnoreZ, VA_LIST("Radius edge ignore Z", "Heal radius disconnect ignore Z color"), Color_t(255, 50, 50, 255), VISUAL);
+		CVar(HealRadiusDisconnectFill, VA_LIST("Radius fill", "Heal radius disconnect fill color"), Color_t(255, 50, 50, 0), VISUAL);
+		CVar(HealRadiusDisconnectFillIgnoreZ, VA_LIST("Radius fill ignore Z", "Heal radius disconnect fill ignore Z color"), Color_t(255, 50, 50, 0), VISUAL);
+		CVar(HealRadiusDisconnectBottom, VA_LIST("Cylinder bottom edge", "Heal radius disconnect bottom color"), Color_t(255, 50, 50, 0), VISUAL);
+		CVar(HealRadiusDisconnectBottomIgnoreZ, VA_LIST("Cylinder bottom edge ignore Z", "Heal radius disconnect bottom ignore Z color"), Color_t(255, 50, 50, 0), VISUAL);
+		CVar(HealRadiusDisconnectTop, VA_LIST("Cylinder top edge", "Heal radius disconnect top color"), Color_t(255, 50, 50, 0), VISUAL);
+		CVar(HealRadiusDisconnectTopIgnoreZ, VA_LIST("Cylinder top edge ignore Z", "Heal radius disconnect top ignore Z color"), Color_t(255, 50, 50, 255), VISUAL);
+		CVar(HealRadiusDisconnectBottomFill, VA_LIST("Cylinder bottom fill", "Heal radius disconnect bottom fill color"), Color_t(255, 50, 50, 0), VISUAL);
+		CVar(HealRadiusDisconnectBottomFillIgnoreZ, VA_LIST("Cylinder bottom fill ignore Z", "Heal radius disconnect bottom fill ignore Z color"), Color_t(255, 50, 50, 60), VISUAL);
+		CVar(HealRadiusDisconnectTopFill, VA_LIST("Cylinder top fill", "Heal radius disconnect top fill color"), Color_t(255, 50, 50, 0), VISUAL);
+		CVar(HealRadiusDisconnectTopFillIgnoreZ, VA_LIST("Cylinder top fill ignore Z", "Heal radius disconnect top fill ignore Z color"), Color_t(255, 50, 50, 0), VISUAL);
 		CVar(SentryRangeEnemy, "Enemy edge color", Color_t(255, 100, 80, 255), VISUAL);
 		CVar(SentryRangeEnemyIgnoreZ, "Enemy edge ignore Z color", Color_t(255, 100, 80, 60), VISUAL);
 		CVar(SentryRangeTeam, "Team edge color", Color_t(80, 160, 255, 255), VISUAL);
@@ -530,6 +542,9 @@ NAMESPACE_BEGIN(Vars)
 				VA_LIST("Connect", "Disconnect", "##Divider", "Cylinder"),
 				Connect = 1 << 0, Disconnect = 1 << 1, Cylinder = 1 << 2,
 				Enabled = Connect | Disconnect);
+			// the wall is filled geometry and can run up to ~7x/frame under FlexFOV,
+			// so the vertex count is capped well short of the engine's primitive limit
+			CVar(HealRadiusVertices, VA_LIST("Vertices", "Heal radius vertices"), 48, VISUAL | SLIDER_CLAMP, 8, 64);
 			CVar(HealRadiusConnectHeight, VA_LIST("Cylinder height", "Heal radius connect cylinder height"), 100.f, VISUAL | SLIDER_MIN | SLIDER_PRECISION, 0.f, 500.f, 5.f);
 			CVar(HealRadiusDisconnectHeight, VA_LIST("Cylinder height", "Heal radius disconnect cylinder height"), 100.f, VISUAL | SLIDER_MIN | SLIDER_PRECISION, 0.f, 500.f, 5.f);
 		NAMESPACE_END(Healing)

@@ -1,5 +1,6 @@
 #include "Glow.h"
 
+#include "../Visuals.h"
 #include "../Groups/Groups.h"
 #include "../Materials/Materials.h"
 #include "../FakeAngle/FakeAngle.h"
@@ -195,8 +196,22 @@ static Color_t GetGlowColor(CBaseEntity* pEntity, const Glow_t& tGlow, CTFPlayer
 	return tGlow.GetColor(flHealthFrac, flDistance);
 }
 
+void CGlow::DrawWorldGlow(int iType, const Color_t& tColor)
+{
+	switch (iType)
+	{
+	case WORLDGLOW_HEALRADIUS_CONNECT: F::Visuals.DrawHealRadiusSilhouette(false, tColor); break;
+	case WORLDGLOW_HEALRADIUS_DISCONNECT: F::Visuals.DrawHealRadiusSilhouette(true, tColor); break;
+	}
+}
+
 void CGlow::Store(CTFPlayer* pLocal)
 {
+	// World glows re-register every frame from their own draw code, which runs
+	// after this - and unlike the entity buckets they must survive the early
+	// returns below, since they don't depend on groups being active at all.
+	m_mWorld.clear();
+
 	// Clear each glow bucket's vector but keep its heap buffer (buckets are keyed
 	// by a small set of distinct Glow_t shapes that recur every tick), instead of
 	// destroying the whole map and reallocating every bucket. Empty buckets are
@@ -337,6 +352,16 @@ void CGlow::RenderSecond()
 			StampStencilEnd(pRenderContext);
 		SecondEnd(tGlow, pRenderContext, w, h);
 	}
+
+	// World geometry batches. Same silhouette / blur / halo passes, no interior
+	// stamp - see AddWorldGlow.
+	for (auto& [tGlow, vTypes] : m_mWorld)
+	{
+		SecondBegin(pRenderContext);
+		for (int iType : vTypes)
+			DrawWorldGlow(iType, tGlow.Color);
+		SecondEnd(tGlow, pRenderContext, w, h);
+	}
 }
 
 void CGlow::InitFlexBuffers(int iW, int iH)
@@ -433,7 +458,9 @@ void CGlow::RenderOnFlexFace()
 	if (m_pFlexBuffer1 && m_iFlexBaseW && m_iFlexBaseH)
 		InitFlexBuffers(m_iFlexBaseW, m_iFlexBaseH);
 
-	if (m_mEntities.empty() || !m_pFlexBuffer1 || !m_pFlexBuffer2 || !m_pFlexHalo || !m_pFlexBlurX || !m_pFlexBlurY)
+	if (m_mEntities.empty() && m_mWorld.empty())
+		return;
+	if (!m_pFlexBuffer1 || !m_pFlexBuffer2 || !m_pFlexHalo || !m_pFlexBlurX || !m_pFlexBlurY)
 		return;
 
 	auto pRenderContext = I::MaterialSystem->GetRenderContext();
@@ -515,50 +542,75 @@ void CGlow::RenderOnFlexFace()
 		}
 		pRenderContext->PopRenderTargetAndViewport();
 
-		if (tGlow.Blur)
-		{
-			m_pFlexBloomAmount->SetFloatValue(tGlow.Blur);
-
-			pRenderContext->PushRenderTargetAndViewport();
-			{
-				pRenderContext->Viewport(0, 0, bw, bh);
-				pRenderContext->SetRenderTarget(m_pFlexBuffer2);
-				pRenderContext->DrawScreenSpaceRectangle(m_pFlexBlurX, 0, 0, bw, bh, 0.f, 0.f, bw - 1, bh - 1, bw, bh);
-				pRenderContext->SetRenderTarget(m_pFlexBuffer1);
-				pRenderContext->DrawScreenSpaceRectangle(m_pFlexBlurY, 0, 0, bw, bh, 0.f, 0.f, bw - 1, bh - 1, bw, bh);
-			}
-			pRenderContext->PopRenderTargetAndViewport();
-		}
-
-		pRenderContext->SetStencilEnable(true);
-		pRenderContext->SetStencilCompareFunction(STENCILCOMPARISONFUNCTION_EQUAL);
-		pRenderContext->SetStencilPassOperation(STENCILOPERATION_KEEP);
-		pRenderContext->SetStencilFailOperation(STENCILOPERATION_KEEP);
-		pRenderContext->SetStencilZFailOperation(STENCILOPERATION_KEEP);
-		pRenderContext->SetStencilReferenceValue(0);
-		pRenderContext->SetStencilWriteMask(0x0);
-		pRenderContext->SetStencilTestMask(0xFF);
-
-		if (tGlow.Stencil)
-		{
-			// 4 cardinal offset blits only (the 4 corner blits of the screen path
-			// are dropped - at face scale the difference is invisible and each
-			// blit is a full-face additive fill). Offsets are in face pixels, so
-			// scale by the face/buffer ratio to keep the on-screen width.
-			const float flScale = float(fh) / float(bh);
-			int iSide = std::max(1, static_cast<int>((tGlow.Stencil + 1) / 2.f * flScale));
-			pRenderContext->DrawScreenSpaceRectangle(m_pFlexHalo, -iSide, 0, fw, fh, 0.f, 0.f, bw - 1, bh - 1, bw, bh);
-			pRenderContext->DrawScreenSpaceRectangle(m_pFlexHalo, 0, -iSide, fw, fh, 0.f, 0.f, bw - 1, bh - 1, bw, bh);
-			pRenderContext->DrawScreenSpaceRectangle(m_pFlexHalo, iSide, 0, fw, fh, 0.f, 0.f, bw - 1, bh - 1, bw, bh);
-			pRenderContext->DrawScreenSpaceRectangle(m_pFlexHalo, 0, iSide, fw, fh, 0.f, 0.f, bw - 1, bh - 1, bw, bh);
-		}
-		if (tGlow.Blur)
-			pRenderContext->DrawScreenSpaceRectangle(m_pFlexHalo, 0, 0, fw, fh, 0.f, 0.f, bw - 1, bh - 1, bw, bh);
-
-		pRenderContext->SetStencilEnable(false);
-
-		End();
+		FlexFaceEnd(tGlow, pRenderContext, bw, bh, fw, fh);
 	}
+
+	// World geometry batches, the same silhouette + halo passes the entities get.
+	// No FaceCanSee cull: this geometry has no single origin to test, and the
+	// ring the medic stands in the middle of is visible from most faces anyway.
+	for (auto& [tGlow, vTypes] : m_mWorld)
+	{
+		Begin();
+		pRenderContext->PushRenderTargetAndViewport();
+		pRenderContext->SetRenderTarget(m_pFlexBuffer1);
+		pRenderContext->Viewport(0, 0, bw, bh);
+		pRenderContext->ClearColor4ub(0, 0, 0, 0);
+		pRenderContext->ClearBuffers(true, true, false);
+		for (int iType : vTypes)
+			DrawWorldGlow(iType, tGlow.Color);
+		pRenderContext->PopRenderTargetAndViewport();
+
+		FlexFaceEnd(tGlow, pRenderContext, bw, bh, fw, fh);
+	}
+}
+
+// The blur + stencil-tested halo blits that close out one face batch, shared by
+// the entity and world loops above.
+void CGlow::FlexFaceEnd(const Glow_t& tGlow, IMatRenderContext* pRenderContext, int bw, int bh, int fw, int fh)
+{
+	if (tGlow.Blur)
+	{
+		m_pFlexBloomAmount->SetFloatValue(tGlow.Blur);
+
+		pRenderContext->PushRenderTargetAndViewport();
+		{
+			pRenderContext->Viewport(0, 0, bw, bh);
+			pRenderContext->SetRenderTarget(m_pFlexBuffer2);
+			pRenderContext->DrawScreenSpaceRectangle(m_pFlexBlurX, 0, 0, bw, bh, 0.f, 0.f, bw - 1, bh - 1, bw, bh);
+			pRenderContext->SetRenderTarget(m_pFlexBuffer1);
+			pRenderContext->DrawScreenSpaceRectangle(m_pFlexBlurY, 0, 0, bw, bh, 0.f, 0.f, bw - 1, bh - 1, bw, bh);
+		}
+		pRenderContext->PopRenderTargetAndViewport();
+	}
+
+	pRenderContext->SetStencilEnable(true);
+	pRenderContext->SetStencilCompareFunction(STENCILCOMPARISONFUNCTION_EQUAL);
+	pRenderContext->SetStencilPassOperation(STENCILOPERATION_KEEP);
+	pRenderContext->SetStencilFailOperation(STENCILOPERATION_KEEP);
+	pRenderContext->SetStencilZFailOperation(STENCILOPERATION_KEEP);
+	pRenderContext->SetStencilReferenceValue(0);
+	pRenderContext->SetStencilWriteMask(0x0);
+	pRenderContext->SetStencilTestMask(0xFF);
+
+	if (tGlow.Stencil)
+	{
+		// 4 cardinal offset blits only (the 4 corner blits of the screen path
+		// are dropped - at face scale the difference is invisible and each
+		// blit is a full-face additive fill). Offsets are in face pixels, so
+		// scale by the face/buffer ratio to keep the on-screen width.
+		const float flScale = float(fh) / float(bh);
+		int iSide = std::max(1, static_cast<int>((tGlow.Stencil + 1) / 2.f * flScale));
+		pRenderContext->DrawScreenSpaceRectangle(m_pFlexHalo, -iSide, 0, fw, fh, 0.f, 0.f, bw - 1, bh - 1, bw, bh);
+		pRenderContext->DrawScreenSpaceRectangle(m_pFlexHalo, 0, -iSide, fw, fh, 0.f, 0.f, bw - 1, bh - 1, bw, bh);
+		pRenderContext->DrawScreenSpaceRectangle(m_pFlexHalo, iSide, 0, fw, fh, 0.f, 0.f, bw - 1, bh - 1, bw, bh);
+		pRenderContext->DrawScreenSpaceRectangle(m_pFlexHalo, 0, iSide, fw, fh, 0.f, 0.f, bw - 1, bh - 1, bw, bh);
+	}
+	if (tGlow.Blur)
+		pRenderContext->DrawScreenSpaceRectangle(m_pFlexHalo, 0, 0, fw, fh, 0.f, 0.f, bw - 1, bh - 1, bw, bh);
+
+	pRenderContext->SetStencilEnable(false);
+
+	End();
 }
 
 void CGlow::RenderBacktrack(const DrawModelState_t& pState, const ModelRenderInfo_t& pInfo)

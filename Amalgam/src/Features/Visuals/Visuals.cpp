@@ -5,6 +5,7 @@
 #include "../Aimbot/Aimbot.h"
 #include "CameraWindow/CameraWindow.h"
 #include "FlexFOV/FlexFOV.h"
+#include "Glow/Glow.h"
 #include "Groups/Groups.h"
 #include "../Backtrack/Backtrack.h"
 #include "../Spectate/Spectate.h"
@@ -256,50 +257,22 @@ static void RenderRadiusDisc(const Vec3& vCenter, const std::vector<Vec3>& vPoin
 	}
 }
 
-// Haloes the ring from the same Glow_t the model glows use, so the menu block
-// and the scales behind it are the ones every other glow has.
-//
-// The engine's glow pipeline (CGlow) is a stencil-and-blur pass over model
-// silhouettes - it has nothing to consume for a debug-overlay line, and the
-// engine offers no line thickness either. So the two scales are honoured
-// geometrically: the ring is redrawn as concentric copies stepped along each
-// vertex's own outward vector, solid out to the stencil width and fading over
-// the blur width past it. Copies step in the ground plane, not in Z, so the halo
-// stays flush with the surface the ring is draped over.
-static void RenderRadiusGlow(const HealRingCache_t& tRing, const Glow_t& tGlow, bool bZBuffer)
-{
-	constexpr float flScaleUnits = 2.f; // world units per point of stencil / blur scale
-	constexpr int iMaxLayers = 8;       // per side; the copies are full ring draws
+// The rings live at file scope so CGlow can call back into them (see
+// DrawHealRadiusSilhouette) while its silhouette buffer is bound.
+static HealRingCache_t g_tHealConnect = {}, g_tHealDisconnect = {};
 
-	const float flSolid = tGlow.Stencil * flScaleUnits, flFade = tGlow.Blur * flScaleUnits;
-	const float flWidth = flSolid + flFade;
-	if (tRing.m_vPoints.size() < 2 || flWidth <= 0.f || !tGlow.Color.a)
+// CGlow's world-glow callback: lays the ring into the bound silhouette buffer in
+// the batch's glow colour. Everything after this - the blur, the offset halo
+// blits, the stencil test - is the same pipeline the model glows go through, so
+// the ring picks up the stencil and blur scales exactly as an ESP glow does.
+// Ignore-Z: the silhouette is the glow's shape, not a visibility test.
+void CVisuals::DrawHealRadiusSilhouette(bool bDisconnect, const Color_t& tColor)
+{
+	const auto& vPoints = (bDisconnect ? g_tHealDisconnect : g_tHealConnect).m_vPoints;
+	if (vPoints.size() < 2)
 		return;
 
-	const int iLayers = std::min(iMaxLayers, std::max(1, int(std::ceil(flWidth / flScaleUnits))));
-
-	static std::vector<Vec3> vOffset = {}; // reused, this runs per pass
-	vOffset.resize(tRing.m_vPoints.size());
-
-	for (int j = 1; j <= iLayers; j++)
-	{
-		const float flStep = flWidth * j / iLayers;
-
-		Color_t tLayer = tGlow.Color;
-		// solid across the stencil width, then a linear falloff over the blur
-		const float flAlpha = flStep <= flSolid || flFade <= 0.f ? 1.f : 1.f - (flStep - flSolid) / flFade;
-		tLayer.a = byte(tGlow.Color.a * std::max(0.f, flAlpha) / iLayers);
-		if (!tLayer.a)
-			continue;
-
-		for (int iSign = -1; iSign <= 1; iSign += 2)
-		{
-			for (size_t i = 0; i < tRing.m_vPoints.size(); i++)
-				vOffset[i] = tRing.m_vPoints[i] + tRing.m_vOutward[i] * (flStep * iSign);
-
-			H::Draw.RenderPath(vOffset, tLayer, bZBuffer, Vars::Visuals::Path::StyleEnum::Line);
-		}
-	}
+	H::Draw.RenderPath(vPoints, tColor, false, Vars::Visuals::Path::StyleEnum::Line);
 }
 
 // Local player's Medigun ranges, as surface-conforming circles around the
@@ -314,7 +287,7 @@ static constexpr float flHealRadiusMoveEpsilon = 2.f; // units of drift tolerate
 
 void CVisuals::DrawHealRadius()
 {
-	static HealRingCache_t tConnect = {}, tDisconnect = {};
+	auto& tConnect = g_tHealConnect; auto& tDisconnect = g_tHealDisconnect;
 
 	const int iValue = Vars::Aimbot::Healing::HealRadius.Value;
 	auto pLocal = H::Entities.GetLocal();
@@ -368,6 +341,17 @@ void CVisuals::DrawHealRadius()
 			tDisconnect.Clear();
 		else if (bShape || tDisconnect.m_flRadius != flStickRange)
 			tDisconnect.Build(vLastOrigin, flStickRange, iVertices, iRounding, flHeight);
+
+		// Hand the rings to the glow pipeline for this frame. Registration has to
+		// happen here, once a frame, between CGlow::Store clearing the list and
+		// RenderSecond consuming it later in this same hook.
+		const Glow_t& tGlowConnect = Vars::Aimbot::Healing::HealRadiusGlowConnect.Value;
+		if (tGlowConnect() && !tConnect.m_vPoints.empty())
+			F::Glow.AddWorldGlow(tGlowConnect, CGlow::WORLDGLOW_HEALRADIUS_CONNECT);
+
+		const Glow_t& tGlowDisconnect = Vars::Aimbot::Healing::HealRadiusGlowDisconnect.Value;
+		if (tGlowDisconnect() && !tDisconnect.m_vPoints.empty())
+			F::Glow.AddWorldGlow(tGlowDisconnect, CGlow::WORLDGLOW_HEALRADIUS_DISCONNECT);
 	}
 
 	// Scene-stripped (replaced) main pass: the composite paints over anything
@@ -379,20 +363,17 @@ void CVisuals::DrawHealRadius()
 	// lifted with them so the fill stays flat against the ring
 	const Vec3 vCenter = vLastOrigin + Vec3(0, 0, flLastHeight);
 
-	// each range takes its edge and fill, ignore-Z variant first, plus its glow.
-	// The glow goes down before the line it haloes, and the fill before both.
+	// each range takes its edge and fill, ignore-Z variant first; the glow around
+	// them is the real pipeline and renders from CGlow, not here.
 	auto fnDraw = [&](const HealRingCache_t& tRing,
 		const Color_t& tEdge, const Color_t& tEdgeNoZ,
-		const Color_t& tFill, const Color_t& tFillNoZ, const Glow_t& tGlow)
+		const Color_t& tFill, const Color_t& tFillNoZ)
 	{
 		if (tRing.m_vPoints.empty())
 			return;
 
 		RenderRadiusDisc(vCenter, tRing.m_vPoints, tFillNoZ, false);
 		RenderRadiusDisc(vCenter, tRing.m_vPoints, tFill, true);
-
-		// through walls, like the model glows it shares its options with
-		RenderRadiusGlow(tRing, tGlow, false);
 
 		if (tEdgeNoZ.a)
 			H::Draw.RenderPath(tRing.m_vPoints, tEdgeNoZ, false, Vars::Visuals::Path::StyleEnum::Line);
@@ -402,12 +383,10 @@ void CVisuals::DrawHealRadius()
 
 	fnDraw(tConnect,
 		Vars::Colors::HealRadiusConnect.Value, Vars::Colors::HealRadiusConnectIgnoreZ.Value,
-		Vars::Colors::HealRadiusConnectFill.Value, Vars::Colors::HealRadiusConnectFillIgnoreZ.Value,
-		Vars::Aimbot::Healing::HealRadiusGlowConnect.Value);
+		Vars::Colors::HealRadiusConnectFill.Value, Vars::Colors::HealRadiusConnectFillIgnoreZ.Value);
 	fnDraw(tDisconnect,
 		Vars::Colors::HealRadiusDisconnect.Value, Vars::Colors::HealRadiusDisconnectIgnoreZ.Value,
-		Vars::Colors::HealRadiusDisconnectFill.Value, Vars::Colors::HealRadiusDisconnectFillIgnoreZ.Value,
-		Vars::Aimbot::Healing::HealRadiusGlowDisconnect.Value);
+		Vars::Colors::HealRadiusDisconnectFill.Value, Vars::Colors::HealRadiusDisconnectFillIgnoreZ.Value);
 }
 
 // Interp-path trajectory data, computed once per frame and re-drawn per render

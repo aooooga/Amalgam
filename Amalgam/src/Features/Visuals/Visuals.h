@@ -42,6 +42,9 @@ public:
 	void ProjectileTrace(CTFPlayer* pPlayer, CTFWeaponBase* pWeapon, const bool bInterp = true);
 	void DrawStickyRadius();
 	void DrawHealRadius();
+	// CGlow world-glow callback: draws a cached heal ring into the glow
+	// pipeline's silhouette buffer. Not for general use - call DrawHealRadius.
+	void DrawHealRadiusSilhouette(bool bDisconnect, const Color_t& tColor);
 	void DrawPickupTimers();
 
 	std::vector<DrawBox_t> GetHitboxes(matrix3x4* aBones, CBaseAnimating* pEntity, std::vector<int> vHitboxes = {}, int iTarget = -1);

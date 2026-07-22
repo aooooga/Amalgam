@@ -36,7 +36,13 @@ private:
 	// mask through the shared depth-stencil, so RenderFirst's per-entity stamp
 	// draws are skipped entirely. Needs the shared (unscaled) buffer, and one
 	// glow batch so no halo blits before every interior is stamped.
-	bool UseInlineStamp() const { return m_bBufShared && m_mEntities.size() == 1; }
+	bool UseInlineStamp() const { return m_bBufShared && m_mEntities.size() == 1 && m_mWorld.empty(); }
+
+	// Draws one registered world glow's geometry into the currently bound
+	// silhouette buffer, in the batch's glow colour. See AddWorldGlow.
+	void DrawWorldGlow(int iType, const Color_t& tColor);
+	// Blur + stencil-tested halo blits closing out one FlexFOV face batch.
+	void FlexFaceEnd(const Glow_t& tGlow, IMatRenderContext* pRenderContext, int bw, int bh, int fw, int fh);
 
 	IMaterial* m_pMatGlowColor = nullptr;
 	ITexture* m_pRenderBuffer1 = nullptr;
@@ -82,6 +88,9 @@ private:
 		int m_iFlags = 0;
 	};
 	std::unordered_map<Glow_t, std::vector<GlowInfo_t>, GlowHasher_t> m_mEntities = {};
+	// World (non-entity) glows, batched by Glow_t exactly like the entities so
+	// each shape gets its own silhouette + blur + halo pass.
+	std::unordered_map<Glow_t, std::vector<int>, GlowHasher_t> m_mWorld = {};
 
 	Color_t m_tOriginalColor = {};
 	float m_flOriginalBlend = 1.f;
@@ -91,6 +100,21 @@ private:
 	int m_iFlags = false;
 
 public:
+	// Geometry that isn't an entity but wants the real glow. The pipeline is
+	// built entirely around model silhouettes, so a world draw registers its
+	// Glow_t and a type here and CGlow calls the owning feature back
+	// (DrawWorldGlow) while the silhouette buffer is bound - the geometry then
+	// goes through the same blur and halo blits every model glow does.
+	//
+	// These get no interior stamp: on a line the silhouette IS the thing meant
+	// to light up, and stamping it would punch the halo back out of it.
+	// Registered per frame (cleared by Store) by whoever draws the geometry.
+	enum EWorldGlow
+	{
+		WORLDGLOW_HEALRADIUS_CONNECT,
+		WORLDGLOW_HEALRADIUS_DISCONNECT
+	};
+	void AddWorldGlow(const Glow_t& tGlow, int iType) { m_mWorld[tGlow].push_back(iType); }
 
 	void Store(CTFPlayer* pLocal);
 	void RenderFirst();

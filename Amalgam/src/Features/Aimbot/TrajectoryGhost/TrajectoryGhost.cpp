@@ -59,6 +59,15 @@ void CTrajectoryGhost::Run(CTFPlayer* pLocal, CTFWeaponBase* pWeapon)
 	const int iFrame = I::GlobalVars->framecount;
 	if (m_iRunFrame == iFrame)
 		return;
+	// framecount resets on a level change, which leaves every cached stamp in the
+	// future: the staleness below would go negative, no slot would ever reach the
+	// refresh threshold, and the ghosts would render off deltas simulated on the
+	// previous map. Drop the whole cache when the clock goes backwards.
+	if (iFrame < m_iRunFrame)
+	{
+		for (auto& tGhost : m_aGhosts)
+			tGhost.m_iFrame = -1;
+	}
 	m_iRunFrame = iFrame;
 
 	ClearGhosts();

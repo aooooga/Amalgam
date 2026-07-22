@@ -66,6 +66,13 @@ void CChams::DrawModel(CBaseEntity* pEntity, const Chams_t& tChams, IMatRenderCo
 	bool bSame = tChams.Visible == tChams.Occluded;
 	bTwoModel &= bOccluded && !bSame;
 
+	// Passes that draw nothing return below without touching render state, so
+	// Begin()'s 3 virtual snapshot calls would be pure waste. Skip it up front:
+	// non-two-model Visible with Visible==Occluded, and non-two-model Occluded
+	// with no occluded layers, both early-return before any draw or End().
+	if (!bTwoModel && (iModel == ModelEnum::Visible ? bSame : !bOccluded))
+		return;
+
 	Begin();
 	switch (iModel)
 	{

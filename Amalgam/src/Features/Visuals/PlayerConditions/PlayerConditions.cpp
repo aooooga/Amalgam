@@ -28,7 +28,7 @@ std::vector<std::string> CPlayerConditions::Get(CTFPlayer* pEntity)
 	if (auto pWeapon = pEntity->m_hActiveWeapon()->As<CTFWeaponBase>())
 	{
 		if (bMiniCrits && SDK::AttribHookValue(0, "minicrits_become_crits", pWeapon)
-			|| SDK::AttribHookValue(0, "crit_while_airborne", pWeapon) && pEntity->InCond(TF_COND_BLASTJUMPING))
+			|| pEntity->InCond(TF_COND_BLASTJUMPING) && SDK::AttribHookValue(0, "crit_while_airborne", pWeapon))
 			bCrits = true, bMiniCrits = false;
 		if (bCrits && SDK::AttribHookValue(0, "crits_become_minicrits", pWeapon))
 			bCrits = false, bMiniCrits = true;

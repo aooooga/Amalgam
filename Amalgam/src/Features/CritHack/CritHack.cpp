@@ -481,7 +481,8 @@ void CCritHack::Event(IGameEvent* pEvent, uint32_t uHash, CTFPlayer* pLocal)
 			}
 			else if (pVictim && (pVictim->m_bFeignDeathReady() || pVictim->InCond(TF_COND_FEIGN_DEATH))) // damage number is spoofed upon sending, correct it
 			{
-				int iOldHealth = (tHistory.m_mHistory.contains(iHealth) ? tHistory.m_mHistory[iHealth].m_iOldHealth : tHistory.m_iNewHealth) % 32768;
+				auto itHealth = tHistory.m_mHistory.find(iHealth);
+				int iOldHealth = (itHealth != tHistory.m_mHistory.end() ? itHealth->second.m_iOldHealth : tHistory.m_iNewHealth) % 32768;
 				if (iHealth > iOldHealth)
 				{
 					for (auto& tOldHealth : tHistory.m_mHistory | std::views::values)

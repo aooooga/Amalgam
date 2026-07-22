@@ -174,7 +174,7 @@ static inline void StorePlayer(CTFPlayer* pPlayer, CTFPlayer* pLocal, Group_t* p
 		if (pWeapon)
 		{
 			if (bMiniCrits && SDK::AttribHookValue(0, "minicrits_become_crits", pWeapon)
-				|| SDK::AttribHookValue(0, "crit_while_airborne", pWeapon) && pPlayer->InCond(TF_COND_BLASTJUMPING))
+				|| pPlayer->InCond(TF_COND_BLASTJUMPING) && SDK::AttribHookValue(0, "crit_while_airborne", pWeapon))
 				bCrits = true, bMiniCrits = false;
 			if (bCrits && SDK::AttribHookValue(0, "crits_become_minicrits", pWeapon))
 				bCrits = false, bMiniCrits = true;

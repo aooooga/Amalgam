@@ -21,13 +21,24 @@ MAKE_HOOK(CBaseAnimating_SetupBones, S::CBaseAnimating_SetupBones(), bool,
 	if (!pEntity->IsPlayer() || pEntity->entindex() == I::EngineClient->GetLocalPlayer())
 		return CALL_ORIGINAL(rcx, pBoneToWorldOut, nMaxBones, boneMask, currentTime);
 
+	auto pAnimatingEntity = pEntity->As<CBaseAnimating>();
+
+	// Freshness gate: only serve the cache when the engine actually recomputed
+	// this entity's bones on THIS frame (it stamps m_flLastBoneSetupTime with
+	// curtime whenever it does). Without this, a redraw of a player the engine
+	// hasn't drawn yet this frame would copy last frame's pose - visible bone
+	// lag/ghosting on chams/glow, which is why the optimization was previously
+	// left off by default. On a stale/missing cache, fall through to the real
+	// SetupBones so correctness is preserved rather than serving old bones.
+	if (pAnimatingEntity->m_flLastBoneSetupTime() != I::GlobalVars->curtime)
+		return CALL_ORIGINAL(rcx, pBoneToWorldOut, nMaxBones, boneMask, currentTime);
+
 	if (pBoneToWorldOut)
 	{
-		auto& aBones = pEntity->As<CBaseAnimating>()->m_CachedBoneData();
-		if (nMaxBones >= aBones.Count())
-			memcpy(pBoneToWorldOut, aBones.Base(), sizeof(matrix3x4) * aBones.Count());
-		else
-			return false;
+		auto& aBones = pAnimatingEntity->m_CachedBoneData();
+		if (aBones.Count() < 1 || nMaxBones < aBones.Count())
+			return CALL_ORIGINAL(rcx, pBoneToWorldOut, nMaxBones, boneMask, currentTime);
+		memcpy(pBoneToWorldOut, aBones.Base(), sizeof(matrix3x4) * aBones.Count());
 	}
 
 	return true;

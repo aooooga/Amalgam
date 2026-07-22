@@ -39,6 +39,10 @@ public:
 
 	NETVAR_OFF(m_pStudioHdr, CStudioHdr*, "CBaseAnimating", "m_nMuzzleFlashParity", 16);
 	NETVAR_OFF(m_CachedBoneData, CUtlVector<matrix3x4>, "CBaseAnimating", "m_hLightingOrigin", -88);
+	// Engine stamps this with curtime every time it actually recomputes the bone
+	// cache; it sits immediately after m_CachedBoneData (CUtlVector = 16 bytes).
+	// Used to gate the SetupBones cache so it only serves frame-fresh bones.
+	NETVAR_OFF(m_flLastBoneSetupTime, float, "CBaseAnimating", "m_hLightingOrigin", -72);
 	NETVAR_OFF(m_bSequenceLoops, bool, "CBaseAnimating", "m_flFadeScale", 13);
 
 	VIRTUAL_ARGS(GetAttachment, bool, 71, (int number, Vec3& origin), this, number, std::ref(origin))

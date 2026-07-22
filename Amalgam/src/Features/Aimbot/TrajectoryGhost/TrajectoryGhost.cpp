@@ -17,9 +17,17 @@ bool CTrajectoryGhost::Active()
 // number of ticks the held weapon needs to reach them and cache the resulting
 // origin delta. Runs inside CreateMove so movement simulation has a valid
 // prediction context, exactly like the projectile aimbot's lead loop.
+void CTrajectoryGhost::ClearGhosts()
+{
+	// Only the slots flagged last tick need resetting; the index list records them.
+	for (int iIndex : m_vGhostIndices)
+		m_aValid[iIndex] = false;
+	m_vGhostIndices.clear();
+}
+
 void CTrajectoryGhost::Run(CTFPlayer* pLocal, CTFWeaponBase* pWeapon)
 {
-	m_mGhosts.clear();
+	ClearGhosts();
 
 	if (!Active() || !pLocal || !pLocal->IsAlive() || !pWeapon)
 		return;
@@ -57,6 +65,8 @@ void CTrajectoryGhost::Run(CTFPlayer* pLocal, CTFWeaponBase* pWeapon)
 		// Lead time: shot travel time to the target's current position plus the
 		// backtrack latency, tuned by the scale/offset options and capped.
 		const float flTravel = flSpeed > 1.f ? vShoot.DistTo(pPlayer->GetShootPos()) / flSpeed : 0.f;
+		// (GetShootPos above is only evaluated on the projectile path; hitscan/melee
+		// short-circuits it via flSpeed <= 1.)
 		float flLead = (flLatency + flTravel) * flScale + flOffset;
 		flLead = std::clamp(flLead, 0.f, flMaxTime);
 
@@ -79,16 +89,20 @@ void CTrajectoryGhost::Run(CTFPlayer* pLocal, CTFWeaponBase* pWeapon)
 		if (vDelta.Length2D() < flMinDist)
 			continue;
 
-		m_mGhosts[pPlayer->entindex()] = { vDelta };
+		const int iIndex = pPlayer->entindex();
+		if (iIndex < 0 || iIndex >= MAX_PLAYERS_ARRAY_SAFE)
+			continue;
+		m_aGhosts[iIndex] = { vDelta };
+		m_aValid[iIndex] = true;
+		m_vGhostIndices.push_back(iIndex);
 	}
 }
 
 bool CTrajectoryGhost::GetDelta(int iIndex, Vec3& vDelta)
 {
-	auto it = m_mGhosts.find(iIndex);
-	if (it == m_mGhosts.end())
+	if (iIndex < 0 || iIndex >= MAX_PLAYERS_ARRAY_SAFE || !m_aValid[iIndex])
 		return false;
-	vDelta = it->second.m_vDelta;
+	vDelta = m_aGhosts[iIndex].m_vDelta;
 	return true;
 }
 
@@ -121,7 +135,7 @@ void CTrajectoryGhost::RenderMain()
 	// Mirror the DrawModelExecute hook's own guards: under any of these the hook
 	// early-returns to the engine draw, so triggering pEntity->DrawModel here
 	// would render an extra untranslated real model instead of the ghost.
-	if (!Active() || m_mGhosts.empty()
+	if (!Active() || m_vGhostIndices.empty()
 		|| I::EngineVGui->IsGameUIVisible() || SDK::CleanScreenshot()
 		|| F::CameraWindow.m_bDrawing || F::FlexFOV.m_bReplacingView
 		|| !F::Materials.m_bLoaded || G::Unload)
@@ -141,8 +155,9 @@ void CTrajectoryGhost::RenderMain()
 	IMaterial* pOldMaterial = nullptr; OverrideType_t iOldOverride = OVERRIDE_NORMAL;
 	I::ModelRender->GetMaterialOverride(&pOldMaterial, &iOldOverride);
 
-	for (auto& [iIndex, tGhost] : m_mGhosts)
+	for (int iIndex : m_vGhostIndices)
 	{
+		Ghost_t& tGhost = m_aGhosts[iIndex];
 		auto pEntity = I::ClientEntityList->GetClientEntity(iIndex);
 		if (!pEntity)
 			continue;

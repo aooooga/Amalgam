@@ -22,13 +22,24 @@ public:
 	};
 
 private:
-	// entindex -> predicted delta, rebuilt every CreateMove tick.
-	std::unordered_map<int, Ghost_t> m_mGhosts = {};
+	// entindex -> predicted delta, rebuilt every CreateMove tick. A fixed array
+	// indexed by entindex (players are 1..MAX_PLAYERS) plus a companion valid flag
+	// gives O(1), allocation-free lookup in the per-model-draw hot paths
+	// (RenderHandler / CGlow::RenderTrajectory) without the per-tick bucket churn
+	// of an unordered_map. m_vGhostIndices holds the active entindices in insertion
+	// order so RenderMain iterates only the populated slots; its capacity is reused
+	// across ticks (clear() keeps the buffer).
+	Ghost_t m_aGhosts[MAX_PLAYERS_ARRAY_SAFE] = {};
+	bool m_aValid[MAX_PLAYERS_ARRAY_SAFE] = {};
+	std::vector<int> m_vGhostIndices = {};
 
 	// The ghost the render pass is currently drawing, so RenderHandler (re-entered
 	// through the model-draw hook) knows which delta to translate the bones by.
 	const Ghost_t* m_pActive = nullptr;
 	bool m_bActiveIgnoreZ = false;
+
+	// Reset every slot flagged last tick, then drop the index list.
+	void ClearGhosts();
 
 public:
 	void Run(CTFPlayer* pLocal, CTFWeaponBase* pWeapon);

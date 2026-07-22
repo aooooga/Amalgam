@@ -319,7 +319,8 @@ Material_t* CMaterials::GetMaterial(uint32_t uHash)
 	if (uHash == FNV1A::Hash32Const("Original"))
 		return nullptr;
 
-	return m_mMaterials.contains(uHash) ? &m_mMaterials[uHash] : nullptr;
+	auto it = m_mMaterials.find(uHash);
+	return it != m_mMaterials.end() ? &it->second : nullptr;
 }
 
 std::string CMaterials::GetVMT(uint32_t uHash)

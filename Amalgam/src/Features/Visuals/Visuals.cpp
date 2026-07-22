@@ -462,9 +462,14 @@ std::vector<DrawBox_t> CVisuals::GetHitboxes(matrix3x4* aBones, CBaseAnimating* 
 
 	if (vHitboxes.empty())
 	{
+		vHitboxes.reserve(pSet->numhitboxes);
 		for (int nHitbox = 0; nHitbox < pSet->numhitboxes; nHitbox++)
 			vHitboxes.push_back(nHitbox);
 	}
+
+	// One box per requested hitbox at most; size the buffer once so the per-box
+	// loop never reallocates (this runs per player per frame when hitbox ESP is on).
+	vBoxes.reserve(vHitboxes.size());
 
 	for (int nHitbox : vHitboxes)
 	{
@@ -1011,7 +1016,8 @@ void CVisuals::Store()
 
 			Vec3 vShootPos = pPlayer->m_vecOrigin() + pPlayer->GetViewOffset();
 			Vec3 vForward; Math::AngleVectors(pPlayer->GetEyeAngles(), &vForward);
-			Vec3 vShootEnd = mDots.contains(pPlayer) ? mDots[pPlayer] : vShootPos + (vForward * 8192.f);
+			auto itDot = mDots.find(pPlayer);
+			Vec3 vShootEnd = itDot != mDots.end() ? itDot->second : vShootPos + (vForward * 8192.f);
 
 			CGameTrace trace = {};
 			CTraceFilterHitscan filter = {};

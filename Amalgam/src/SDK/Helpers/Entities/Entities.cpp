@@ -239,9 +239,9 @@ void CEntities::Store()
 
 				m_mIPriorities[n] = m_mUPriorities[uAccountID] = !bLocal ? F::PlayerUtils.GetPriority(uAccountID, false) : 0;
 				m_mIFriends[n] = m_mUFriends[uAccountID] = !pResource->IsFakePlayer(n) ? I::SteamFriends->HasFriend({ uAccountID, 1, k_EUniversePublic, k_EAccountTypeIndividual }, k_EFriendFlagImmediate) : false;
-				m_mIParty[n] = m_mUParty[uAccountID] = mParties.contains(uAccountID) ? mParties[uAccountID] : 0;
-				m_mIF2P[n] = m_mUF2P[uAccountID] = mF2P.contains(uAccountID) ? mF2P[uAccountID] : false;
-				m_mILevels[n] = m_mULevels[uAccountID] = mLevels.contains(uAccountID) ? mLevels[uAccountID] : -2;
+				auto itParty = mParties.find(uAccountID); m_mIParty[n] = m_mUParty[uAccountID] = itParty != mParties.end() ? itParty->second : 0;
+				auto itF2P = mF2P.find(uAccountID); m_mIF2P[n] = m_mUF2P[uAccountID] = itF2P != mF2P.end() ? itF2P->second : false;
+				auto itLevel = mLevels.find(uAccountID); m_mILevels[n] = m_mULevels[uAccountID] = itLevel != mLevels.end() ? itLevel->second : -2;
 			}
 		}
 
@@ -533,7 +533,7 @@ Vec3* CEntities::GetAvgVelocity(uint16_t iIndex) { return iIndex < MAX_PLAYERS &
 void CEntities::SetAvgVelocity(uint16_t iIndex, Vec3 vAvgVelocity) { if (iIndex < MAX_PLAYERS) m_aAvgVelocities[iIndex] = vAvgVelocity; }
 std::deque<VelFixRecord>* CEntities::GetOrigins(uint16_t iIndex) { return iIndex < MAX_PLAYERS ? &m_aOrigins[iIndex] : nullptr; }
 uint32_t CEntities::GetModel(unsigned short iIndex) { return iIndex < MAX_EDICTS ? m_aModels[iIndex] : 0; }
-DormantData* CEntities::GetDormancy(unsigned short iIndex) { return s_mDormancy.contains(iIndex) ? &s_mDormancy[iIndex] : nullptr; }
+DormantData* CEntities::GetDormancy(unsigned short iIndex) { auto it = s_mDormancy.find(iIndex); return it != s_mDormancy.end() ? &it->second : nullptr; }
 
 int CEntities::GetPriority(int iIndex) { return m_mIPriorities[iIndex]; }
 int CEntities::GetPriority(uint32_t uAccountID) { return m_mUPriorities[uAccountID]; }
@@ -543,8 +543,8 @@ bool CEntities::InParty(int iIndex) { return iIndex != I::EngineClient->GetLocal
 bool CEntities::InParty(uint32_t uAccountID) { return uAccountID != m_uAccountID && m_mUParty[uAccountID] == 1; }
 bool CEntities::IsF2P(int iIndex) { return m_mIF2P[iIndex]; }
 bool CEntities::IsF2P(uint32_t uAccountID) { return m_mUF2P[uAccountID]; }
-int CEntities::GetLevel(int iIndex) { return m_mILevels.contains(iIndex) ? m_mILevels[iIndex] : -2; }
-int CEntities::GetLevel(uint32_t uAccountID) { return m_mULevels.contains(uAccountID) ? m_mULevels[uAccountID] : -2; }
-int CEntities::GetParty(int iIndex) { return m_mIParty.contains(iIndex) ? m_mIParty[iIndex] : 0; }
-int CEntities::GetParty(uint32_t uAccountID) { return m_mUParty.contains(uAccountID) ? m_mUParty[uAccountID] : 0; }
+int CEntities::GetLevel(int iIndex) { auto it = m_mILevels.find(iIndex); return it != m_mILevels.end() ? it->second : -2; }
+int CEntities::GetLevel(uint32_t uAccountID) { auto it = m_mULevels.find(uAccountID); return it != m_mULevels.end() ? it->second : -2; }
+int CEntities::GetParty(int iIndex) { auto it = m_mIParty.find(iIndex); return it != m_mIParty.end() ? it->second : 0; }
+int CEntities::GetParty(uint32_t uAccountID) { auto it = m_mUParty.find(uAccountID); return it != m_mUParty.end() ? it->second : 0; }
 int CEntities::GetPartyCount() { return m_iPartyCount; }

@@ -194,6 +194,7 @@ NAMESPACE_BEGIN(Vars)
 		// Design 3a — menu content-layout tweaks (UI only)
 		CVar(CompactColumns, "Compact columns", true, NOBIND);
 		CVar(DescriptionsOnHover, "Descriptions on hover", true, NOBIND);
+		CVar(CollapsedPanels, "Collapsed panels", std::string(""), NOBIND);
 
 		NAMESPACE_BEGIN(Theme)
 			CVar(Accent, "Accent color", Color_t(175, 150, 255, 255), VISUAL);
@@ -277,6 +278,8 @@ NAMESPACE_BEGIN(Vars)
 
 		CVar(Local, "Local color", Color_t(255, 255, 255), VISUAL);
 		CVar(FOVCircle, "FOV circle color", Color_t(255, 255, 255, 100), VISUAL);
+		CVar(TrajectoryGlowEnemy, "Trajectory glow enemy color", Color_t(255, 120, 120, 255), VISUAL);
+		CVar(TrajectoryGlowTeam, "Trajectory glow team color", Color_t(120, 255, 140, 255), VISUAL);
 		CVar(SpellFootstep, "Spell footstep color", Color_t(255, 255, 255, 255), VISUAL);
 
 		CVar(WorldModulation, VA_LIST("World modulation", "World modulation color"), Color_t(255, 255, 255, 255), VISUAL);
@@ -512,6 +515,28 @@ NAMESPACE_BEGIN(Vars)
 			CVar(AutoVaccinatorFireScale, "Auto vaccinator fire scale", 100.f, NOSAVE | DEBUGVAR | SLIDER_MIN | SLIDER_PRECISION, 0.f, 200.f, 10.f, "%g%%");
 			CVar(AutoVaccinatorFlamethrowerDamageOnly, "Auto vaccinator flamethrower damage only", false, NOSAVE | DEBUGVAR);
 		NAMESPACE_END(Healing)
+
+		NAMESPACE_BEGIN(Draw)
+			// Player trajectory ghost: a duplicate of the target's own player model
+			// drawn at where they will be when the local player's currently-held
+			// weapon reaches them (projectile travel time, hitscan ~ latency).
+			CVar(Trajectory, "Trajectory ghost", false, VISUAL);
+			CVarEnum(TrajectoryTeams, "Trajectory teams", 0b01, VISUAL | DROPDOWN_MULTI, "Off",
+				VA_LIST("Enemies", "Teammates"),
+				Enemies = 1 << 0, Teammates = 1 << 1);
+			CVar(TrajectoryMaterialEnemy, "Enemy material", (std::vector<std::pair<std::string, MaterialColor_t>>{ { "Flat", Color_t(255, 120, 120, 140) } }), VISUAL);
+			CVar(TrajectoryMaterialTeam, "Team material", (std::vector<std::pair<std::string, MaterialColor_t>>{ { "Flat", Color_t(120, 255, 140, 140) } }), VISUAL);
+			CVar(TrajectoryLeadScale, "Trajectory lead scale", 100.f, VISUAL | SLIDER_CLAMP | SLIDER_PRECISION, 0.f, 300.f, 5.f, "%g%%");
+			CVar(TrajectoryOffset, "Trajectory offset", 0.f, VISUAL | SLIDER_PRECISION, -500.f, 500.f, 10.f, "%gms");
+			CVar(TrajectoryMaxTime, "Trajectory max time", 1.5f, VISUAL | SLIDER_MIN | SLIDER_PRECISION, 0.1f, 5.f, 0.1f, "%gs");
+			CVar(TrajectoryMinDistance, "Trajectory min distance", 24.f, VISUAL | SLIDER_MIN | SLIDER_PRECISION, 0.f, 200.f, 4.f, "%gu");
+			CVar(TrajectoryFOV, "Trajectory FOV", 0.f, VISUAL | SLIDER_MIN | SLIDER_PRECISION, 0.f, 180.f, 5.f);
+			CVar(TrajectoryBehindOnly, "Trajectory behind only", false, VISUAL);
+			CVar(TrajectoryIgnoreZ, "Trajectory ignore Z", false, VISUAL);
+			CVar(TrajectoryGlow, "Trajectory glow", false, VISUAL);
+			CVar(TrajectoryGlowStencil, "Trajectory glow width", 3, VISUAL | SLIDER_CLAMP, 0, 20);
+			CVar(TrajectoryGlowBlur, "Trajectory glow blur", 0.f, VISUAL | SLIDER_CLAMP | SLIDER_PRECISION, 0.f, 10.f, 0.5f);
+		NAMESPACE_END(Draw)
 	NAMESPACE_END(Aimbot)
 	
 	NAMESPACE_BEGIN(CritHack, Crit Hack)

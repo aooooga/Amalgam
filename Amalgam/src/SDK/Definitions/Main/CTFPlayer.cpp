@@ -141,6 +141,14 @@ bool CTFPlayer::IsMiniCritBoosted()
 		/*|| InCond(TF_COND_CRITBOOSTED_DEMO_CHARGE)*/;
 }
 
+bool CTFPlayer::IsCritHealed()
+{
+	// healing ramps from 24 hp/s to a max of 72 hp/s (3x, "crit heal") once the
+	// target has gone 10-15s without taking damage; eligible regardless of
+	// whether a healer is currently active
+	return I::GlobalVars->curtime - m_flLastDamageTime() >= 10.f;
+}
+
 bool CTFPlayer::IsMarked()
 {
 	return InCond(TF_COND_URINE)

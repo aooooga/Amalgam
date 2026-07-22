@@ -526,6 +526,7 @@ bool CConfigs::SaveConfig(const std::string& sConfigName, bool bNotify)
 
 				boost::property_tree::ptree tChild;
 				SaveJson(tChild, "Name", tGroup.m_sName);
+				SaveJson(tChild, "Slot", tGroup.m_iSlot);
 				SaveJson(tChild, "Color", tGroup.m_tColor);
 				SaveJson(tChild, "TagsOverrideColor", tGroup.m_bTagsOverrideColor);
 				SaveJson(tChild, "Targets", tGroup.m_iTargets);
@@ -643,6 +644,10 @@ bool CConfigs::LoadConfig(const std::string& sConfigName, bool bNotify)
 			{
 				Group_t tGroup = {};
 				LoadJson(tChild, "Name", tGroup.m_sName);
+				LoadJson(tChild, "Slot", tGroup.m_iSlot);
+				if (tGroup.m_iSlot < 0 || tGroup.m_iSlot >= sizeof(int) * 8
+					|| std::any_of(F::Groups.m_vGroups.begin(), F::Groups.m_vGroups.end(), [&](auto& g) { return g.m_iSlot == tGroup.m_iSlot; }))
+					tGroup.m_iSlot = F::Groups.NextSlot(); // missing/old config or slot collision - fall back to next free bit (matches legacy positional order for old configs)
 				LoadJson(tChild, "Color", tGroup.m_tColor);
 				LoadJson(tChild, "TagsOverrideColor", tGroup.m_bTagsOverrideColor);
 				LoadJson(tChild, "Targets", tGroup.m_iTargets);
@@ -737,6 +742,7 @@ bool CConfigs::SaveVisual(const std::string& sConfigName, bool bNotify)
 
 				boost::property_tree::ptree tChild;
 				SaveJson(tChild, "Name", tGroup.m_sName);
+				SaveJson(tChild, "Slot", tGroup.m_iSlot);
 				SaveJson(tChild, "Color", tGroup.m_tColor);
 				SaveJson(tChild, "TagsOverrideColor", tGroup.m_bTagsOverrideColor);
 				SaveJson(tChild, "Targets", tGroup.m_iTargets);
@@ -821,6 +827,10 @@ bool CConfigs::LoadVisual(const std::string& sConfigName, bool bNotify)
 			{
 				Group_t tGroup = {};
 				LoadJson(tChild, "Name", tGroup.m_sName);
+				LoadJson(tChild, "Slot", tGroup.m_iSlot);
+				if (tGroup.m_iSlot < 0 || tGroup.m_iSlot >= sizeof(int) * 8
+					|| std::any_of(F::Groups.m_vGroups.begin(), F::Groups.m_vGroups.end(), [&](auto& g) { return g.m_iSlot == tGroup.m_iSlot; }))
+					tGroup.m_iSlot = F::Groups.NextSlot(); // missing/old config or slot collision - fall back to next free bit (matches legacy positional order for old configs)
 				LoadJson(tChild, "Color", tGroup.m_tColor);
 				LoadJson(tChild, "TagsOverrideColor", tGroup.m_bTagsOverrideColor);
 				LoadJson(tChild, "Targets", tGroup.m_iTargets);

@@ -281,19 +281,19 @@ void CRender::LoadStyle()
 	style.ButtonTextAlign = { 0.5f, 0.5f };
 	style.CellPadding = { H::Draw.Scale(4), 0 };
 	style.ChildBorderSize = 0.f;
-	style.ChildRounding = H::Draw.Scale(4);
+	style.ChildRounding = H::Draw.Scale(5);
 	style.FrameBorderSize = 0.f;
 	style.FramePadding = { 0, 0 };
-	style.FrameRounding = H::Draw.Scale(4);
+	style.FrameRounding = H::Draw.Scale(5);
 	style.ItemInnerSpacing = { 0, 0 };
-	style.ItemSpacing = { H::Draw.Scale(8), H::Draw.Scale(Tokens::SectionGutter) }; // Phase 1: wider section gutters
+	style.ItemSpacing = { H::Draw.Scale(8), H::Draw.Scale(Tokens::SectionGutter) };
 	style.PopupBorderSize = 0.f;
-	style.PopupRounding = H::Draw.Scale(4);
+	style.PopupRounding = H::Draw.Scale(5);
 	style.ScrollbarSize = 6.f + H::Draw.Scale(3);
 	style.ScrollbarRounding = 0.f;
 	style.WindowBorderSize = 0.f;
 	style.WindowPadding = { 0, 0 };
-	style.WindowRounding = H::Draw.Scale(4);
+	style.WindowRounding = H::Draw.Scale(5);
 }
 
 void CRender::Initialize(IDirect3DDevice9* pDevice)

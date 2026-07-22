@@ -322,7 +322,6 @@ void CMenu::MenuAimbot(int iTab)
 					FDropdown(Vars::Aimbot::Healing::HealPriority, FDropdownEnum::Left);
 					FDropdown(Vars::Aimbot::Healing::DangerIgnore, FDropdownEnum::Right);
 
-					SubGroup("Auto-use");
 					FToggleRow(Vars::Aimbot::Healing::AutoHeal, FToggleEnum::Left);
 					FToggleRow(Vars::Aimbot::Healing::AutoArrow, FToggleEnum::Right);
 					FToggleRow(Vars::Aimbot::Healing::AutoRepair, FToggleEnum::Left);
@@ -572,6 +571,29 @@ void CMenu::MenuAimbot(int iTab)
 					SameLine(); DebugDummy({ 0, H::Draw.Scale(48) });
 
 					FSliderRow(Vars::Visuals::Hitbox::DrawDuration);
+				} EndSection();
+				if (Section("Trajectory"))
+				{
+					FToggleRow(Vars::Aimbot::Draw::Trajectory);
+					FDropdown(Vars::Aimbot::Draw::TrajectoryTeams);
+					FMDropdown(Vars::Aimbot::Draw::TrajectoryMaterialEnemy);
+					FMDropdown(Vars::Aimbot::Draw::TrajectoryMaterialTeam);
+					FToggleRow(Vars::Aimbot::Draw::TrajectoryBehindOnly, FToggleEnum::Left);
+					FToggleRow(Vars::Aimbot::Draw::TrajectoryIgnoreZ, FToggleEnum::Right);
+
+					SubGroup("Lead");
+					FSliderRow(Vars::Aimbot::Draw::TrajectoryLeadScale, FSliderEnum::Left);
+					FSliderRow(Vars::Aimbot::Draw::TrajectoryOffset, FSliderEnum::Right);
+					FSliderRow(Vars::Aimbot::Draw::TrajectoryMaxTime, FSliderEnum::Left);
+					FSliderRow(Vars::Aimbot::Draw::TrajectoryMinDistance, FSliderEnum::Right);
+					FSliderRow(Vars::Aimbot::Draw::TrajectoryFOV);
+
+					SubGroup("Glow");
+					FToggleRow(Vars::Aimbot::Draw::TrajectoryGlow);
+					FColorPicker(Vars::Colors::TrajectoryGlowEnemy);
+					FColorPicker(Vars::Colors::TrajectoryGlowTeam);
+					FSliderRow(Vars::Aimbot::Draw::TrajectoryGlowStencil, FSliderEnum::Left);
+					FSliderRow(Vars::Aimbot::Draw::TrajectoryGlowBlur, FSliderEnum::Right);
 				} EndSection();
 			}
 			/* Column 2 */
@@ -915,6 +937,7 @@ void CMenu::MenuVisuals(int iTab)
 					if (FButton("Create", FButtonEnum::Fit | FButtonEnum::SameLine, { 0, 40 }))
 					{
 						F::Groups.m_vGroups.emplace_back(sStaticName);
+						F::Groups.m_vGroups.back().m_iSlot = F::Groups.NextSlot();
 						sStaticName.clear();
 
 						iCurrentGroup = F::Groups.m_vGroups.size() - 1;
@@ -924,7 +947,14 @@ void CMenu::MenuVisuals(int iTab)
 			}
 			PopDisabled();
 
-			FDropdown(Vars::ESP::ActiveGroups, FDropdownEnum::Right | FDropdownEnum::Multi);
+			{
+				// Bit values keyed by each group's stable slot (not its position in
+				// m_vGroups) so reordering/duplicating groups can't remap keybinds.
+				std::vector<int> vSlotValues;
+				for (auto& tGroup : F::Groups.m_vGroups)
+					vSlotValues.push_back(1 << tGroup.m_iSlot);
+				FDropdown(Vars::ESP::ActiveGroups, Vars::ESP::ActiveGroups.m_vValues, vSlotValues, FDropdownEnum::Right | FDropdownEnum::Multi);
+			}
 
 			PushStyleColor(ImGuiCol_Text, F::Render.Inactive.Value);
 			SetCursorPos({ H::Draw.Scale(13), H::Draw.Scale(80) });
@@ -986,7 +1016,7 @@ void CMenu::MenuVisuals(int iTab)
 				// text + icons
 				float flTextWidth = flWidth - H::Draw.Scale(36);
 				SetCursorPos(vOriginalPos + ImVec2(H::Draw.Scale(9), H::Draw.Scale(7)));
-				PushTransparent(!(Vars::ESP::ActiveGroups.Value & 1 << iGroup), true);
+				PushTransparent(!(Vars::ESP::ActiveGroups.Value & 1 << tGroup.m_iSlot), true);
 				{
 					FText(TruncateText(tGroup.m_sName, flTextWidth).c_str());
 				}
@@ -1036,6 +1066,7 @@ void CMenu::MenuVisuals(int iTab)
 				{
 					it = F::Groups.m_vGroups.insert(it + 1, tGroup);
 					it->m_sName += " duplicate";
+					it->m_iSlot = F::Groups.NextSlot();
 				}
 				else
 					++it;
@@ -1066,7 +1097,7 @@ void CMenu::MenuVisuals(int iTab)
 					Divider(H::Draw.Scale(8), H::Draw.Scale(-1));
 					PushTransparent(!(tGroup.m_iTargets & TargetsEnum::Players));
 					{
-						FDropdown("Players", &tGroup.m_iPlayers, { "Scout", "Soldier", "Pyro", "Demoman", "Heavy", "Engineer", "Medic", "Sniper", "Spy", "##Divider", "Invulnerable", "Crits", "Invisible", "Disguise", "Hurt" }, {}, FDropdownEnum::Multi, 0, "All");
+						FDropdown("Players", &tGroup.m_iPlayers, { "Scout", "Soldier", "Pyro", "Demoman", "Heavy", "Engineer", "Medic", "Sniper", "Spy", "##Divider", "Invulnerable", "Crits", "Invisible", "Disguise", "Hurt", "Crit Heals" }, {}, FDropdownEnum::Multi, 0, "All");
 					}
 					PopTransparent();
 					PushTransparent(!(tGroup.m_iTargets & TargetsEnum::Buildings));
@@ -1341,7 +1372,7 @@ void CMenu::MenuVisuals(int iTab)
 						FSliderRow(Vars::Visuals::UI::RearViewGlowBlur);
 						PushTransparent(!(Vars::Visuals::UI::RearViewGlowStencil.Value || Vars::Visuals::UI::RearViewGlowBlur.Value));
 						{
-							FColorPicker(Vars::Visuals::UI::RearViewGlowColor);
+							FColorPicker(Vars::Visuals::UI::RearViewGlowColor, FColorPickerEnum::Full);
 						}
 						PopTransparent();
 					}
@@ -1370,12 +1401,10 @@ void CMenu::MenuVisuals(int iTab)
 					// would interleave them (OffsetX beside Pitch) and break the grouping.
 					{
 						StackedSliders tStacked;
-						SubGroup("Offset");
 						FSliderRow(Vars::Visuals::Viewmodel::OffsetX);
 						FSliderRow(Vars::Visuals::Viewmodel::OffsetY);
 						FSliderRow(Vars::Visuals::Viewmodel::OffsetZ);
 
-						SubGroup("Rotation");
 						FSliderRow(Vars::Visuals::Viewmodel::Pitch);
 						FSliderRow(Vars::Visuals::Viewmodel::Yaw);
 						FSliderRow(Vars::Visuals::Viewmodel::Roll);
@@ -1533,20 +1562,27 @@ void CMenu::MenuVisuals(int iTab)
 	// Menu
 	case 3:
 	{
-		// Settings is promoted out of the table: it carries the full theme colour list,
-		// which needs the whole window width to lay its pickers out two-up.
+		// The theme colour list used to be one giant Section() carrying every
+		// sub-group as a SubGroup() heading -- a single tall column the user had to
+		// scroll through. Split into one panel per sub-group, laid across the
+		// standard 2-column table used by every other tab, so it reads as a grid
+		// of cards instead of one long list.
+		if (BeginTable("MenuThemeTable", 2))
 		{
+			/* Column 1 */
+			TableNextColumn();
 			{
-				if (Section("Settings", 8))
+				if (Section("Theme"))
 				{
 					FColorPicker(Vars::Menu::Theme::Accent, FColorPickerEnum::Left);
 					FColorPicker(Vars::Menu::Theme::Background, FColorPickerEnum::Right);
 					FColorPicker(Vars::Menu::Theme::Active, FColorPickerEnum::Left);
 					FColorPicker(Vars::Menu::Theme::Inactive, FColorPickerEnum::Right);
-
-					// Every picker below drives exactly one surface; leaving one at alpha 0
-					// keeps its derived value.
-					SubGroup("Base ramp");
+				} EndSection();
+				// Every picker below drives exactly one surface; leaving one at alpha 0
+				// keeps its derived value.
+				if (Section("Base ramp"))
+				{
 					FToggleRow(Vars::Menu::Theme::BackgroundOverride);
 					PushTransparent(!Vars::Menu::Theme::BackgroundOverride.Value);
 					{
@@ -1557,13 +1593,9 @@ void CMenu::MenuVisuals(int iTab)
 						FColorPicker(Vars::Menu::Theme::Background2, FColorPickerEnum::Left);
 					}
 					PopTransparent();
-
-					SubGroup("Window");
-					FColorPicker(Vars::Menu::Theme::WindowBackground, FColorPickerEnum::Left);
-					FColorPicker(Vars::Menu::Theme::NavBackground, FColorPickerEnum::Right);
-					FColorPicker(Vars::Menu::Theme::NavDivider, FColorPickerEnum::Left);
-
-					SubGroup("Panels");
+				} EndSection();
+				if (Section("Panels"))
+				{
 					FColorPicker(Vars::Menu::Theme::PanelBackground, FColorPickerEnum::Left);
 					FColorPicker(Vars::Menu::Theme::PanelHeader, FColorPickerEnum::Right);
 					FColorPicker(Vars::Menu::Theme::PanelBorder, FColorPickerEnum::Left);
@@ -1572,17 +1604,43 @@ void CMenu::MenuVisuals(int iTab)
 					FColorPicker(Vars::Menu::Theme::RowDivider, FColorPickerEnum::Right);
 					FColorPicker(Vars::Menu::Theme::SubGroupText, FColorPickerEnum::Left);
 					FColorPicker(Vars::Menu::Theme::SubGroupRule, FColorPickerEnum::Right);
-
-					SubGroup("Collapsed panels");
+				} EndSection();
+				if (Section("Tabs"))
+				{
+					FColorPicker(Vars::Menu::Theme::TabActive, FColorPickerEnum::Left);
+					FColorPicker(Vars::Menu::Theme::TabInactive, FColorPickerEnum::Right);
+					FColorPicker(Vars::Menu::Theme::TabBar, FColorPickerEnum::Left);
+				} EndSection();
+				if (Section("General"))
+				{
+					FSDropdown(Vars::Menu::CheatTitle, FDropdownEnum::Left);
+					FSDropdown(Vars::Menu::CheatTag, FDropdownEnum::Right);
+					FKeybind(Vars::Menu::PrimaryKey, FButtonEnum::Left, { Vars::Menu::SecondaryKey[DEFAULT_BIND], VK_LBUTTON, VK_RBUTTON });
+					FKeybind(Vars::Menu::SecondaryKey, FButtonEnum::Right | FButtonEnum::SameLine, { Vars::Menu::PrimaryKey[DEFAULT_BIND], VK_LBUTTON, VK_RBUTTON });
+				} EndSection();
+			}
+			/* Column 2 */
+			TableNextColumn();
+			{
+				if (Section("Window"))
+				{
+					FColorPicker(Vars::Menu::Theme::WindowBackground, FColorPickerEnum::Left);
+					FColorPicker(Vars::Menu::Theme::NavBackground, FColorPickerEnum::Right);
+					FColorPicker(Vars::Menu::Theme::NavDivider, FColorPickerEnum::Left);
+				} EndSection();
+				if (Section("Collapsed panels"))
+				{
 					FColorPicker(Vars::Menu::Theme::PanelCollapsedHeader, FColorPickerEnum::Left);
 					FColorPicker(Vars::Menu::Theme::PanelCollapsedBackground, FColorPickerEnum::Right);
 					FColorPicker(Vars::Menu::Theme::PanelCollapsedTitle, FColorPickerEnum::Left);
-
-					SubGroup("Text");
+				} EndSection();
+				if (Section("Text"))
+				{
 					FColorPicker(Vars::Menu::Theme::TextDim, FColorPickerEnum::Left);
 					FColorPicker(Vars::Menu::Theme::TextDisabled, FColorPickerEnum::Right);
-
-					SubGroup("Accent variants");
+				} EndSection();
+				if (Section("Accent variants"))
+				{
 					FToggleRow(Vars::Menu::Theme::AccentOverride);
 					PushTransparent(!Vars::Menu::Theme::AccentOverride.Value);
 					{
@@ -1590,8 +1648,9 @@ void CMenu::MenuVisuals(int iTab)
 						FColorPicker(Vars::Menu::Theme::AccentWashed, FColorPickerEnum::Right);
 					}
 					PopTransparent();
-
-					SubGroup("Controls");
+				} EndSection();
+				if (Section("Controls"))
+				{
 					FColorPicker(Vars::Menu::Theme::ControlBackground, FColorPickerEnum::Left);
 					FColorPicker(Vars::Menu::Theme::ControlHovered, FColorPickerEnum::Right);
 					FColorPicker(Vars::Menu::Theme::SwitchOn, FColorPickerEnum::Left);
@@ -1602,23 +1661,15 @@ void CMenu::MenuVisuals(int iTab)
 					FColorPicker(Vars::Menu::Theme::SliderTrack, FColorPickerEnum::Right);
 					FColorPicker(Vars::Menu::Theme::SliderKnob, FColorPickerEnum::Left);
 					FColorPicker(Vars::Menu::Theme::SliderValueText, FColorPickerEnum::Right);
-
-					SubGroup("Tabs");
-					FColorPicker(Vars::Menu::Theme::TabActive, FColorPickerEnum::Left);
-					FColorPicker(Vars::Menu::Theme::TabInactive, FColorPickerEnum::Right);
-					FColorPicker(Vars::Menu::Theme::TabBar, FColorPickerEnum::Left);
-
-					SubGroup("Popups");
+				} EndSection();
+				if (Section("Popups"))
+				{
 					FColorPicker(Vars::Menu::Theme::PopupBackground, FColorPickerEnum::Left);
 					FColorPicker(Vars::Menu::Theme::TooltipBackground, FColorPickerEnum::Right);
 					FColorPicker(Vars::Menu::Theme::TooltipText, FColorPickerEnum::Left);
-
-					FSDropdown(Vars::Menu::CheatTitle, FDropdownEnum::Left);
-					FSDropdown(Vars::Menu::CheatTag, FDropdownEnum::Right);
-					FKeybind(Vars::Menu::PrimaryKey, FButtonEnum::Left, { Vars::Menu::SecondaryKey[DEFAULT_BIND], VK_LBUTTON, VK_RBUTTON });
-					FKeybind(Vars::Menu::SecondaryKey, FButtonEnum::Right | FButtonEnum::SameLine, { Vars::Menu::PrimaryKey[DEFAULT_BIND], VK_LBUTTON, VK_RBUTTON });
 				} EndSection();
 			}
+			EndTable();
 		}
 
 		if (BeginTable("MenuTable", 2))
@@ -1703,7 +1754,6 @@ void CMenu::MenuMisc(int iTab)
 			{
 				if (Section("Movement"))
 				{
-					SubGroup("Strafing", true);
 					FDropdown(Vars::Misc::Movement::AutoStrafe);
 					PushTransparent(Vars::Misc::Movement::AutoStrafe.Value != Vars::Misc::Movement::AutoStrafeEnum::Directional);
 					{

@@ -12,6 +12,7 @@
 #include "../Features/Ticks/Ticks.h"
 #include "../Features/Visuals/Visuals.h"
 #include "../Features/Visuals/FakeAngle/FakeAngle.h"
+#include "../Features/Aimbot/TrajectoryGhost/TrajectoryGhost.h"
 #include "../Features/Spectate/Spectate.h"
 #include "../Features/AntiCheatCompatibility/AntiCheatCompatibility.h"
 
@@ -63,6 +64,7 @@ MAKE_HOOK(CHLClient_CreateMove, U::Memory.GetVirtual(I::Client, 21), void,
 		F::AntiAim.Run(pLocal, pWeapon, pCmd, *pSendPacket);
 		F::AntiCheatCompatibility.CreateMove(pCmd, pSendPacket);
 		F::Visuals.CreateMove(pLocal, pWeapon);
+		F::TrajectoryGhost.Run(pLocal, pWeapon);
 		F::Visuals.LocalAnimations(pLocal, pWeapon, pCmd, *pSendPacket);
 	F::EnginePrediction.End(pLocal, pCmd);
 		F::Resolver.CreateMove();

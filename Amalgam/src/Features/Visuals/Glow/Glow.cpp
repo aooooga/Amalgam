@@ -5,6 +5,7 @@
 #include "../FakeAngle/FakeAngle.h"
 #include "../FlexFOV/FlexFOV.h"
 #include "../../Backtrack/Backtrack.h"
+#include "../../Aimbot/TrajectoryGhost/TrajectoryGhost.h"
 
 #include <algorithm>
 #include <cmath>
@@ -226,6 +227,27 @@ void CGlow::Store(CTFPlayer* pLocal)
 		&& F::Groups.GetGroup(TargetsEnum::FakeAngle, pGroup) && pGroup->m_tGlow())
 	{	// fakeangle
 		m_mEntities[pGroup->m_tGlow].emplace_back(pLocal, GetGlowColor(pLocal, pGroup->m_tGlow, pLocal), 1);
+	}
+
+	if (F::TrajectoryGhost.Active() && Vars::Aimbot::Draw::TrajectoryGlow.Value)
+	{	// trajectory ghost glow (translated bones handled in RenderTrajectory)
+		Glow_t tGlow = {};
+		tGlow.Stencil = Vars::Aimbot::Draw::TrajectoryGlowStencil.Value;
+		tGlow.Blur = Vars::Aimbot::Draw::TrajectoryGlowBlur.Value;
+		if (tGlow())
+		{
+			for (auto pEntity : H::Entities.GetGroup(EntityEnum::PlayerAll))
+			{
+				auto pPlayer = pEntity->As<CTFPlayer>();
+				Vec3 vDelta;
+				if (F::TrajectoryGhost.ShouldRender(pLocal, pPlayer, vDelta))
+				{
+					const bool bEnemy = pPlayer->m_iTeamNum() != pLocal->m_iTeamNum();
+					const Color_t tColor = bEnemy ? Vars::Colors::TrajectoryGlowEnemy.Value : Vars::Colors::TrajectoryGlowTeam.Value;
+					m_mEntities[tGlow].emplace_back(pPlayer, tColor, TRAJECTORY_GHOST_FLAG);
+				}
+			}
+		}
 	}
 }
 
@@ -570,6 +592,26 @@ void CGlow::RenderFakeAngle(const DrawModelState_t& pState, const ModelRenderInf
 	static auto IVModelRender_DrawModelExecute = U::Hooks.m_mHooks["IVModelRender_DrawModelExecute"];
 	IVModelRender_DrawModelExecute->Call<void>(I::ModelRender, pState, pInfo, F::FakeAngle.aBones);
 }
+void CGlow::RenderTrajectory(const DrawModelState_t& pState, const ModelRenderInfo_t& pInfo, matrix3x4* pBoneToWorld)
+{
+	static auto IVModelRender_DrawModelExecute = U::Hooks.m_mHooks["IVModelRender_DrawModelExecute"];
+
+	const int nBones = pState.m_pStudioHdr ? pState.m_pStudioHdr->numbones : 0;
+	Vec3 vDelta;
+	if (!pBoneToWorld || nBones < 1 || nBones > MAXSTUDIOBONES
+		|| !F::TrajectoryGhost.GetDelta(pInfo.entity_index, vDelta))
+		return IVModelRender_DrawModelExecute->Call<void>(I::ModelRender, pState, pInfo, pBoneToWorld);
+
+	static matrix3x4 s_aBones[MAXSTUDIOBONES];
+	memcpy(s_aBones, pBoneToWorld, sizeof(matrix3x4) * nBones);
+	for (int i = 0; i < nBones; i++)
+	{
+		s_aBones[i][0][3] += vDelta.x;
+		s_aBones[i][1][3] += vDelta.y;
+		s_aBones[i][2][3] += vDelta.z;
+	}
+	IVModelRender_DrawModelExecute->Call<void>(I::ModelRender, pState, pInfo, s_aBones);
+}
 void CGlow::RenderHandler(const DrawModelState_t& pState, const ModelRenderInfo_t& pInfo, matrix3x4* pBoneToWorld)
 {
 	if (!m_iFlags)
@@ -577,6 +619,8 @@ void CGlow::RenderHandler(const DrawModelState_t& pState, const ModelRenderInfo_
 		static auto IVModelRender_DrawModelExecute = U::Hooks.m_mHooks["IVModelRender_DrawModelExecute"];
 		IVModelRender_DrawModelExecute->Call<void>(I::ModelRender, pState, pInfo, pBoneToWorld);
 	}
+	else if (m_iFlags & TRAJECTORY_GHOST_FLAG)
+		RenderTrajectory(pState, pInfo, pBoneToWorld);
 	else
 	{
 		if (pInfo.entity_index != I::EngineClient->GetLocalPlayer())

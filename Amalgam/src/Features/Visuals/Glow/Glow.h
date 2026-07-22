@@ -22,6 +22,7 @@ private:
 
 	void RenderBacktrack(const DrawModelState_t& pState, const ModelRenderInfo_t& pInfo);
 	void RenderFakeAngle(const DrawModelState_t& pState, const ModelRenderInfo_t& pInfo);
+	void RenderTrajectory(const DrawModelState_t& pState, const ModelRenderInfo_t& pInfo, matrix3x4* pBoneToWorld);
 
 	// (Re)creates the screen glow buffers + their materials at the current
 	// GlowResolution scale; early-outs when nothing changed. At exactly screen

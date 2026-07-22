@@ -2,6 +2,7 @@
 
 #include "../Features/Visuals/Chams/Chams.h"
 #include "../Features/Visuals/Glow/Glow.h"
+#include "../Features/Aimbot/TrajectoryGhost/TrajectoryGhost.h"
 #include "../Features/Visuals/CameraWindow/CameraWindow.h"
 #include "../Features/Visuals/FlexFOV/FlexFOV.h"
 #include "../Features/Visuals/Visuals.h"
@@ -20,6 +21,7 @@ MAKE_HOOK(CClientModeShared_DoPostScreenSpaceEffects, U::Memory.GetVirtual(I::Cl
 	if (SDK::CleanScreenshot() || G::Unload)
 		return CALL_ORIGINAL(rcx, pSetup);
 	
+	F::Materials.DrainRetired();
 	F::Visuals.ProjectileTrace(H::Entities.GetLocal(), H::Entities.GetWeapon());
 	// Before the FlexFOV early-returns (like ProjectileTrace) so the arc also renders
 	// into the capture faces and survives the composite. The scene-stripped
@@ -43,6 +45,7 @@ MAKE_HOOK(CClientModeShared_DoPostScreenSpaceEffects, U::Memory.GetVirtual(I::Cl
 		if (!I::EngineVGui->IsGameUIVisible() && F::Materials.m_bLoaded)
 		{
 			F::Chams.RenderMain();
+			F::TrajectoryGhost.RenderMain();
 			F::Glow.RenderOnFlexFace();
 		}
 		return CALL_ORIGINAL(rcx, pSetup);
@@ -53,6 +56,7 @@ MAKE_HOOK(CClientModeShared_DoPostScreenSpaceEffects, U::Memory.GetVirtual(I::Cl
 		return CALL_ORIGINAL(rcx, pSetup);
 
 	F::Chams.RenderMain();
+	F::TrajectoryGhost.RenderMain();
 	F::Glow.RenderFirst();
 	return CALL_ORIGINAL(rcx, pSetup);
 }

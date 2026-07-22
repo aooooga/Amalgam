@@ -36,11 +36,11 @@ struct WidgetWindow_t
 // at the call site). Tunes section gutters, inner rhythm and subgroup spacing.
 namespace Tokens
 {
-	constexpr float SectionGutter   = 16.f; // vertical gap between section cards
-	constexpr float SubGroupTop     = 16.f; // extra gap above a subgroup label
-	constexpr float SubGroupBottom  = 8.f;  // gap below a subgroup label/rule
+	constexpr float SectionGutter   = 12.f; // vertical gap between section cards
+	constexpr float SubGroupTop     = 6.f; // extra gap above a subgroup label
+	constexpr float SubGroupBottom  = 6.f;  // gap below a subgroup label/rule
 	constexpr float SubGroupInset   = 2.f;  // horizontal inset of subgroup label
-	constexpr float SubGroupRuleGap = 8.f;  // gap between label and hairline rule
+	constexpr float SubGroupRuleGap = 6.f;  // gap between label and hairline rule
 }
 
 //#define ALTERNATE_FULL_SLIDER
@@ -739,10 +739,49 @@ namespace ImGui
 
 	static std::unordered_map<uint32_t, float> mLastHeights = {};
 	static std::vector<uint32_t> vStoredLabels = {};
-	static std::unordered_map<uint32_t, bool> mCollapsed = {}; // session-persistent collapse state
+	static std::unordered_map<uint32_t, bool> mCollapsed = {}; // persisted to Vars::Menu::CollapsedPanels, see HydrateCollapsedPanels/PersistCollapsedPanels below
 	static std::vector<bool> vStoredCollapsed = {};
+
+	// mCollapsed used to be purely in-memory, so it reset on every DLL reload/config
+	// load even though the header still says "session-persistent". Mirror it into a
+	// hidden config var (comma-separated collapsed hashes) so it round-trips through
+	// SaveConfig/LoadConfig like everything else.
+	inline void HydrateCollapsedPanels()
+	{
+		static bool bHydrated = false;
+		if (bHydrated)
+			return;
+		bHydrated = true;
+
+		const std::string& sSaved = Vars::Menu::CollapsedPanels.Value;
+		size_t iStart = 0;
+		while (iStart < sSaved.size())
+		{
+			size_t iEnd = sSaved.find(',', iStart);
+			if (iEnd == std::string::npos)
+				iEnd = sSaved.size();
+			if (iEnd > iStart)
+				mCollapsed[uint32_t(std::stoul(sSaved.substr(iStart, iEnd - iStart)))] = true;
+			iStart = iEnd + 1;
+		}
+	}
+	inline void PersistCollapsedPanels()
+	{
+		std::string sOut;
+		for (auto& [uHash, bValue] : mCollapsed)
+		{
+			if (!bValue)
+				continue;
+			if (!sOut.empty())
+				sOut += ',';
+			sOut += std::to_string(uHash);
+		}
+		Vars::Menu::CollapsedPanels.Value = sOut;
+	}
+
 	inline bool Section(const char* sLabel, float flPaddingMod = 0.f, float flMinHeight = 28.f, bool bForceHeight = false)
 	{
+		HydrateCollapsedPanels();
 		uint32_t uHash = FNV1A::Hash32(sLabel);
 		vStoredLabels.push_back(uHash);
 		ResetSliderColumns(); // each panel starts a fresh slider row
@@ -812,7 +851,10 @@ namespace ImGui
 			if (!bForceHeight && IsWindowHovered()
 				&& IsMouseWithin(vDrawPos.x, vDrawPos.y, GetWindowSize().x - H::Draw.Scale(56), H::Draw.Scale(28))
 				&& IsMouseClicked(ImGuiMouseButton_Left))
+			{
 				mCollapsed[uHash] = !bCollapsed;
+				PersistCollapsedPanels();
+			}
 
 			SetCursorPos(vOriginalPos); DebugDummy({ 0, H::Draw.Scale(20 + flPaddingMod) });
 		}

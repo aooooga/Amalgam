@@ -16,6 +16,12 @@ struct Material_t
 	bool m_bBlockOccluded = false;
 };
 
+struct RetiredMaterial_t
+{
+	IMaterial* m_pMaterial;
+	int m_iFrame;
+};
+
 class CMaterials
 {
 public:
@@ -25,6 +31,7 @@ public:
 
 	IMaterial* Create(char const* szName, KeyValues* pKV);
 	void Remove(IMaterial* pMaterial);
+	void DrainRetired(bool bAll = false);
 	void StoreStruct(const std::string& sName, const std::string& sVMT, bool bLocked = false);
 
 	void SetColor(Material_t* pMaterial, Color_t tColor);
@@ -37,6 +44,7 @@ public:
 
 	std::unordered_map<uint32_t, Material_t> m_mMaterials = {};
 	std::unordered_mapset<IMaterial*> m_mMatList = {};
+	std::vector<RetiredMaterial_t> m_vRetired = {};
 
 	bool m_bLoaded = false;
 };

@@ -72,7 +72,8 @@ static inline bool ShouldTargetPlayer(Group_t& tGroup, int iBit, CBaseEntity* pE
 				|| tGroup.m_iPlayers & PlayerEnum::Crits && !pPlayer->IsCritBoosted()
 				|| tGroup.m_iPlayers & PlayerEnum::Invisible && !pPlayer->IsInvisible()
 				|| tGroup.m_iPlayers & PlayerEnum::Disguise && !pPlayer->InCond(TF_COND_DISGUISED)
-				|| tGroup.m_iPlayers & PlayerEnum::Hurt && pPlayer->m_iHealth() >= pPlayer->GetMaxHealth())
+				|| tGroup.m_iPlayers & PlayerEnum::Hurt && pPlayer->m_iHealth() >= pPlayer->GetMaxHealth()
+				|| tGroup.m_iPlayers & PlayerEnum::CritHeals && !pPlayer->IsCritHealed())
 				return false;
 		}
 	}
@@ -419,7 +420,7 @@ bool CGroups::GetGroup(CBaseEntity* pEntity, CTFPlayer* pLocal, Group_t*& pGroup
 	{
 		auto& tGroup = m_vGroups[i];
 
-		if (!(Vars::ESP::ActiveGroups.Value & 1 << i))
+		if (!(Vars::ESP::ActiveGroups.Value & 1 << tGroup.m_iSlot))
 			continue;
 
 		if (!ShouldTarget(tGroup, pEntity, pLocal, bModels))
@@ -441,7 +442,7 @@ bool CGroups::GetGroup(int iType, Group_t*& pGroup, CBaseEntity* pEntity)
 	{
 		auto& tGroup = m_vGroups[i];
 
-		if (!(Vars::ESP::ActiveGroups.Value & 1 << i))
+		if (!(Vars::ESP::ActiveGroups.Value & 1 << tGroup.m_iSlot))
 			continue;
 
 		if (!(tGroup.m_iTargets & iType) || pEntity && (tGroup.m_iConditions & ConditionsEnum::Dormant ? !pEntity->IsDormant() : pEntity->IsDormant()))
@@ -463,7 +464,7 @@ bool CGroups::GetGroup(int iType)
 	{
 		auto& tGroup = m_vGroups[i];
 
-		if (!(Vars::ESP::ActiveGroups.Value & 1 << i))
+		if (!(Vars::ESP::ActiveGroups.Value & 1 << tGroup.m_iSlot))
 			continue;
 
 		if (!(tGroup.m_iTargets & iType))
@@ -505,4 +506,22 @@ void CGroups::Move(int i1, int i2)
 {
 	m_vGroups.insert(std::next(m_vGroups.begin(), i2 + (i1 < i2 ? 1 : 0)), m_vGroups[i1]);
 	m_vGroups.erase(std::next(m_vGroups.begin(), i1 + (i1 > i2 ? 1 : 0)));
+}
+
+int CGroups::NextSlot()
+{
+	bool bUsed[sizeof(int) * 8] = {};
+	for (auto& tGroup : m_vGroups)
+	{
+		if (tGroup.m_iSlot >= 0 && tGroup.m_iSlot < sizeof(int) * 8)
+			bUsed[tGroup.m_iSlot] = true;
+	}
+
+	for (int i = 0; i < sizeof(int) * 8; i++)
+	{
+		if (!bUsed[i])
+			return i;
+	}
+
+	return -1;
 }

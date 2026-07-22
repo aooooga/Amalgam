@@ -167,6 +167,7 @@ void CCore::Unload()
 	F::EnginePrediction.Unload();
 	H::ConVars.Restore();
 	F::Materials.UnloadMaterials();
+	F::Materials.DrainRetired(true);
 
 	if (m_bFailed2)
 	{

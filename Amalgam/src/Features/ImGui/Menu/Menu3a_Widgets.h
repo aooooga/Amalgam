@@ -186,7 +186,7 @@ namespace ImGui
 				snprintf(szBuf, sizeof(szBuf), fmt ? fmt : "%i", int(tVal));
 			else
 				snprintf(szBuf, sizeof(szBuf), fmt ? fmt : "%g", double(tVal));
-			return FCalcTextSize(szBuf, F::Render.FontBold).x;
+			return FCalcTextSize(szBuf, F::Render.FontRegular).x;
 		};
 		T tMid = T(double(tMin) + (double(tMax) - double(tMin)) * 0.5);
 		return std::max({ Measure(tMin), Measure(tMax), Measure(tMid) });
@@ -221,11 +221,22 @@ namespace ImGui
 		// what this row needs to show its label in full, unpaired-clipping free
 		float flNeeds = flLabelPx + flValPx + H::Draw.Scale(30) + H::Draw.Scale(50);
 
+		// Pairing is opt-in: the caller must pass Left/Right to signal "this row has
+		// a partner". Without that, the row is never halved, no matter how narrow its
+		// content is -- otherwise a lone slider that happens to measure short (e.g.
+		// "Scale" with a "1.00" value) gets crammed into the left column with nothing
+		// beside it, which reads as a layout bug even though the content fit the math.
+		bool bPairIntent = (iFlags & (FSliderEnum::Left | FSliderEnum::Right)) != 0;
+
 		bool bFull;
 		if (g_SliderColumn)
 		{
 			// committed: we are the right half of a row already opened as paired
 			bFull = false;
+		}
+		else if (!bPairIntent)
+		{
+			bFull = true;
 		}
 		else
 		{
@@ -312,7 +323,7 @@ namespace ImGui
 			snprintf(szVal, sizeof(szVal), fmt ? fmt : "%i", int(tVal));
 		else
 			snprintf(szVal, sizeof(szVal), fmt ? fmt : "%g", double(tVal));
-		PushFont(F::Render.FontBold);
+		PushFont(F::Render.FontRegular);
 		float flvw = CalcTextSize(szVal).x;
 		ImColor tValCol = F::Render.SliderValueText; tValCol.Value.w *= flAlpha;
 		dl->AddText({ vDraw.x + flW - flvw, flMidY - GetFontSize() / 2.f }, tValCol, szVal);

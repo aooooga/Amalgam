@@ -2,6 +2,7 @@
 
 #include "../Features/Visuals/Chams/Chams.h"
 #include "../Features/Visuals/Glow/Glow.h"
+#include "../Features/Aimbot/TrajectoryGhost/TrajectoryGhost.h"
 #include "../Features/Visuals/Materials/Materials.h"
 #include "../Features/Visuals/CameraWindow/CameraWindow.h"
 #include "../Features/Visuals/FlexFOV/FlexFOV.h"
@@ -98,6 +99,8 @@ MAKE_HOOK(IVModelRender_DrawModelExecute, U::Memory.GetVirtual(I::ModelRender, 1
 		return F::Chams.RenderHandler(pState, pInfo, pBoneToWorld);
 	if (F::Glow.m_bRendering)
 		return F::Glow.RenderHandler(pState, pInfo, pBoneToWorld);
+	if (F::TrajectoryGhost.m_bRendering)
+		return F::TrajectoryGhost.RenderHandler(pState, pInfo, pBoneToWorld);
 
 	if (auto it = F::Chams.m_mEntities.find(pInfo.entity_index); it != F::Chams.m_mEntities.end())
 	{

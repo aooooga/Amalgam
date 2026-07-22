@@ -222,6 +222,7 @@ public:
 	bool IsUbered();
 	bool IsCritBoosted();
 	bool IsMiniCritBoosted();
+	bool IsCritHealed();
 	bool IsMarked();
 	bool CanAttack(bool bCloak = true, bool bLocal = true);
 	float GetCritMult();

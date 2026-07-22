@@ -27,8 +27,35 @@ void CMaterials::Remove(IMaterial* pMaterial)
 		m_mMatList.erase(pMaterial);
 
 	pMaterial->DecrementReferenceCount();
-	pMaterial->DeleteIfUnreferenced();
-	pMaterial = nullptr;
+
+	// don't DeleteIfUnreferenced() here: the queued material system runs a
+	// couple frames behind, so a material we're removing (e.g. live-editing
+	// in the menu) can still be referenced by in-flight queued draw calls.
+	// Deleting it out from under the render thread corrupts the heap (see
+	// crash_log.txt entries from CMaterials::EditMaterial -> Remove). Retire
+	// it instead and let DrainRetired() delete it once it's safely aged out.
+	m_vRetired.emplace_back(pMaterial, I::GlobalVars->framecount);
+}
+
+void CMaterials::DrainRetired(bool bAll)
+{
+	if (m_vRetired.empty())
+		return;
+
+	// the queued material system runs at most a couple of frames behind; 16
+	// frames is a comfortable margin before really destroying anything
+	constexpr int iSafeAge = 16;
+	const int iFrame = I::GlobalVars->framecount;
+	for (auto it = m_vRetired.begin(); it != m_vRetired.end();)
+	{
+		if (!bAll && unsigned(iFrame - it->m_iFrame) < iSafeAge)
+		{
+			++it;
+			continue;
+		}
+		it->m_pMaterial->DeleteIfUnreferenced();
+		it = m_vRetired.erase(it);
+	}
 }
 
 

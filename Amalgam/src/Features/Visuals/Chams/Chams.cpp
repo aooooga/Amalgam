@@ -357,7 +357,23 @@ void CChams::Store(CTFPlayer* pLocal)
 // RenderMain() draws this same frame.
 void CChams::UpdateTarget()
 {
-	m_iTargetedEntity = GetCrosshairTarget(H::Entities.GetLocal());
+	auto pLocal = H::Entities.GetLocal();
+
+	// m_vEntities holds raw entity pointers and is only ever (re)built by Store()
+	// at FRAME_NET_UPDATE_END. Net updates stop the instant the client leaves a
+	// match, but FRAME_RENDER_START keeps firing while the level tears down, so
+	// by the time this runs those pointers can already be freed - dereferencing
+	// one below (or in RenderMain, which reads the same list later this frame)
+	// is an access violation on disconnect. Drop the stale set instead.
+	if (!pLocal || !I::EngineClient->IsInGame())
+	{
+		m_vEntities.clear();
+		m_mEntities.clear();
+		m_iTargetedEntity = m_iTargetedPart = 0;
+		return;
+	}
+
+	m_iTargetedEntity = GetCrosshairTarget(pLocal);
 
 	for (auto& tInfo : m_vEntities)
 	{

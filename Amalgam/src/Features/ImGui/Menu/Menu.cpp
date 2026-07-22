@@ -333,11 +333,10 @@ void CMenu::MenuAimbot(int iTab)
 					FToggleRow(Vars::Aimbot::Healing::HealRadiusHeal);
 					FSliderRow(Vars::Aimbot::Healing::HealRadiusVertices, FSliderEnum::Left);
 					FSliderRow(Vars::Aimbot::Healing::HealRadiusRounding, FSliderEnum::Right);
-					FSliderRow(Vars::Aimbot::Healing::HealRadiusGlowSize, FSliderEnum::Left);
-					FSliderRow(Vars::Aimbot::Healing::HealRadiusGlowLayers, FSliderEnum::Right);
+					FSliderRow(Vars::Aimbot::Healing::HealRadiusHeight);
 
-					// each range gets its own popup: the ring's edge, its fill and the
-					// glow around it (ignore Z left, Z-buffered right)
+					// each range gets its own popup: the ring's edge and fill (ignore Z
+					// left, Z-buffered right), then the standard glow block
 					FText("Connect", { 5, 5 });
 					if (FPopupButton("Connect", { 0, -5 }))
 					{
@@ -345,8 +344,14 @@ void CMenu::MenuAimbot(int iTab)
 						FColorPicker(Vars::Colors::HealRadiusConnect, FColorPickerEnum::Right);
 						FColorPicker(Vars::Colors::HealRadiusConnectFillIgnoreZ, FColorPickerEnum::Left);
 						FColorPicker(Vars::Colors::HealRadiusConnectFill, FColorPickerEnum::Right);
-						FColorPicker(Vars::Colors::HealRadiusConnectGlowIgnoreZ, FColorPickerEnum::Left);
-						FColorPicker(Vars::Colors::HealRadiusConnectGlow, FColorPickerEnum::Right);
+
+						Divider();
+						{
+							auto& tGlow = Vars::Aimbot::Healing::HealRadiusGlowConnect[DEFAULT_BIND];
+							FSlider("Stencil scale## HealRadiusConnect", &tGlow.Stencil, 0, 10, 1, "%i", FSliderEnum::Left | FSliderEnum::Min);
+							FSlider("Blur scale## HealRadiusConnect", &tGlow.Blur, 0.f, 10.f, 1.f, "%g", FSliderEnum::Right | FSliderEnum::Min | FSliderEnum::Precision);
+							FColorPicker("Glow color## HealRadiusConnect", &tGlow.Color, FColorPickerEnum::Left);
+						}
 
 						EndPopup();
 					}
@@ -358,8 +363,14 @@ void CMenu::MenuAimbot(int iTab)
 						FColorPicker(Vars::Colors::HealRadiusDisconnect, FColorPickerEnum::Right);
 						FColorPicker(Vars::Colors::HealRadiusDisconnectFillIgnoreZ, FColorPickerEnum::Left);
 						FColorPicker(Vars::Colors::HealRadiusDisconnectFill, FColorPickerEnum::Right);
-						FColorPicker(Vars::Colors::HealRadiusDisconnectGlowIgnoreZ, FColorPickerEnum::Left);
-						FColorPicker(Vars::Colors::HealRadiusDisconnectGlow, FColorPickerEnum::Right);
+
+						Divider();
+						{
+							auto& tGlow = Vars::Aimbot::Healing::HealRadiusGlowDisconnect[DEFAULT_BIND];
+							FSlider("Stencil scale## HealRadiusDisconnect", &tGlow.Stencil, 0, 10, 1, "%i", FSliderEnum::Left | FSliderEnum::Min);
+							FSlider("Blur scale## HealRadiusDisconnect", &tGlow.Blur, 0.f, 10.f, 1.f, "%g", FSliderEnum::Right | FSliderEnum::Min | FSliderEnum::Precision);
+							FColorPicker("Glow color## HealRadiusDisconnect", &tGlow.Color, FColorPickerEnum::Left);
+						}
 
 						EndPopup();
 					}

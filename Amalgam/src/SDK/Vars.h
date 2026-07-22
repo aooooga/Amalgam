@@ -321,14 +321,10 @@ NAMESPACE_BEGIN(Vars)
 		CVar(HealRadiusConnectIgnoreZ, VA_LIST("Radius edge ignore Z## Connect", "Heal radius connect ignore Z color"), Color_t(50, 255, 50, 255), VISUAL);
 		CVar(HealRadiusConnectFill, VA_LIST("Radius fill## Connect", "Heal radius connect fill color"), Color_t(50, 255, 50, 0), VISUAL);
 		CVar(HealRadiusConnectFillIgnoreZ, VA_LIST("Radius fill ignore Z## Connect", "Heal radius connect fill ignore Z color"), Color_t(50, 255, 50, 0), VISUAL);
-		CVar(HealRadiusConnectGlow, VA_LIST("Radius glow## Connect", "Heal radius connect glow color"), Color_t(50, 255, 50, 0), VISUAL);
-		CVar(HealRadiusConnectGlowIgnoreZ, VA_LIST("Radius glow ignore Z## Connect", "Heal radius connect glow ignore Z color"), Color_t(50, 255, 50, 120), VISUAL);
 		CVar(HealRadiusDisconnect, VA_LIST("Radius edge## Disconnect", "Heal radius disconnect color"), Color_t(255, 50, 50, 0), VISUAL);
 		CVar(HealRadiusDisconnectIgnoreZ, VA_LIST("Radius edge ignore Z## Disconnect", "Heal radius disconnect ignore Z color"), Color_t(255, 50, 50, 255), VISUAL);
 		CVar(HealRadiusDisconnectFill, VA_LIST("Radius fill## Disconnect", "Heal radius disconnect fill color"), Color_t(255, 50, 50, 0), VISUAL);
 		CVar(HealRadiusDisconnectFillIgnoreZ, VA_LIST("Radius fill ignore Z## Disconnect", "Heal radius disconnect fill ignore Z color"), Color_t(255, 50, 50, 0), VISUAL);
-		CVar(HealRadiusDisconnectGlow, VA_LIST("Radius glow## Disconnect", "Heal radius disconnect glow color"), Color_t(255, 50, 50, 0), VISUAL);
-		CVar(HealRadiusDisconnectGlowIgnoreZ, VA_LIST("Radius glow ignore Z## Disconnect", "Heal radius disconnect glow ignore Z color"), Color_t(255, 50, 50, 120), VISUAL);
 		CVar(SentryRangeEnemy, "Enemy edge color", Color_t(255, 100, 80, 255), VISUAL);
 		CVar(SentryRangeEnemyIgnoreZ, "Enemy edge ignore Z color", Color_t(255, 100, 80, 60), VISUAL);
 		CVar(SentryRangeTeam, "Team edge color", Color_t(80, 160, 255, 255), VISUAL);
@@ -536,10 +532,14 @@ NAMESPACE_BEGIN(Vars)
 			// primitive limit
 			CVar(HealRadiusVertices, VA_LIST("Vertices", "Heal radius vertices"), 48, VISUAL | SLIDER_CLAMP, 8, 64);
 			CVar(HealRadiusRounding, VA_LIST("Rounding", "Heal radius rounding"), 2, VISUAL | SLIDER_CLAMP, 0, 8);
-			// the glow is the ring redrawn in concentric offset copies that fade out,
-			// so its width costs layers - the engine gives no line thickness
-			CVar(HealRadiusGlowSize, VA_LIST("Glow size", "Heal radius glow size"), 0.f, VISUAL | SLIDER_MIN | SLIDER_PRECISION, 0.f, 32.f, 1.f, "%gu");
-			CVar(HealRadiusGlowLayers, VA_LIST("Glow layers", "Heal radius glow layers"), 4, VISUAL | SLIDER_CLAMP, 1, 8);
+			CVar(HealRadiusHeight, VA_LIST("Height", "Heal radius height"), 0.f, VISUAL | SLIDER_CLAMP | SLIDER_PRECISION, 0.f, 80.f, 2.f, "%gu");
+			// Same Glow_t the model glows take, so the menu block and the stencil /
+			// blur scales read identically. The engine's glow pipeline only consumes
+			// model silhouettes, so for a debug-overlay ring the two scales drive
+			// concentric offset copies instead: stencil is the solid outline's width,
+			// blur the soft falloff past it. See RenderRadiusGlow.
+			CVar(HealRadiusGlowConnect, VA_LIST("Connect glow", "Heal radius connect glow"), (Glow_t{ .Color = Color_t(50, 255, 50, 255) }), VISUAL);
+			CVar(HealRadiusGlowDisconnect, VA_LIST("Disconnect glow", "Heal radius disconnect glow"), (Glow_t{ .Color = Color_t(255, 50, 50, 255) }), VISUAL);
 		NAMESPACE_END(Healing)
 
 		NAMESPACE_BEGIN(Draw)

@@ -217,11 +217,16 @@ struct HealRingCache_t
 	std::vector<Vec3> m_vOutward = {};  // per-vertex unit vector away from the centre, for the glow
 	float m_flRadius = 0.f;
 
-	void Build(const Vec3& vOrigin, float flRadius, int iVertices, int iRounding)
+	void Build(const Vec3& vOrigin, float flRadius, int iVertices, int iRounding, float flHeight)
 	{
 		m_flRadius = flRadius;
 		m_vPoints = SplashTrace(vOrigin, flRadius, { 0, 0, 1 }, true, iVertices);
 		RoundRingHeights(m_vPoints, iRounding);
+		if (flHeight)
+		{
+			for (auto& vPoint : m_vPoints)
+				vPoint.z += flHeight;
+		}
 
 		m_vOutward.resize(m_vPoints.size());
 		for (size_t i = 0; i < m_vPoints.size(); i++)
@@ -251,32 +256,46 @@ static void RenderRadiusDisc(const Vec3& vCenter, const std::vector<Vec3>& vPoin
 	}
 }
 
-// Haloes the ring. The engine gives no line thickness, so the glow is the ring
-// redrawn as concentric copies stepped outwards and inwards along each vertex's
-// own outward vector, fading to nothing at the full width. Copies are offset in
-// the ground plane rather than in Z so the halo stays flush with the surface the
-// ring is draped over.
-static void RenderRadiusGlow(const HealRingCache_t& tRing, float flSize, int iLayers, const Color_t& tColor, bool bZBuffer)
+// Haloes the ring from the same Glow_t the model glows use, so the menu block
+// and the scales behind it are the ones every other glow has.
+//
+// The engine's glow pipeline (CGlow) is a stencil-and-blur pass over model
+// silhouettes - it has nothing to consume for a debug-overlay line, and the
+// engine offers no line thickness either. So the two scales are honoured
+// geometrically: the ring is redrawn as concentric copies stepped along each
+// vertex's own outward vector, solid out to the stencil width and fading over
+// the blur width past it. Copies step in the ground plane, not in Z, so the halo
+// stays flush with the surface the ring is draped over.
+static void RenderRadiusGlow(const HealRingCache_t& tRing, const Glow_t& tGlow, bool bZBuffer)
 {
-	if (tRing.m_vPoints.size() < 2 || flSize <= 0.f || iLayers < 1 || !tColor.a)
+	constexpr float flScaleUnits = 2.f; // world units per point of stencil / blur scale
+	constexpr int iMaxLayers = 8;       // per side; the copies are full ring draws
+
+	const float flSolid = tGlow.Stencil * flScaleUnits, flFade = tGlow.Blur * flScaleUnits;
+	const float flWidth = flSolid + flFade;
+	if (tRing.m_vPoints.size() < 2 || flWidth <= 0.f || !tGlow.Color.a)
 		return;
+
+	const int iLayers = std::min(iMaxLayers, std::max(1, int(std::ceil(flWidth / flScaleUnits))));
 
 	static std::vector<Vec3> vOffset = {}; // reused, this runs per pass
 	vOffset.resize(tRing.m_vPoints.size());
 
 	for (int j = 1; j <= iLayers; j++)
 	{
-		const float flFrac = float(j) / iLayers;
-		Color_t tLayer = tColor;
-		tLayer.a = byte(tColor.a * (1.f - flFrac) / iLayers);
+		const float flStep = flWidth * j / iLayers;
+
+		Color_t tLayer = tGlow.Color;
+		// solid across the stencil width, then a linear falloff over the blur
+		const float flAlpha = flStep <= flSolid || flFade <= 0.f ? 1.f : 1.f - (flStep - flSolid) / flFade;
+		tLayer.a = byte(tGlow.Color.a * std::max(0.f, flAlpha) / iLayers);
 		if (!tLayer.a)
 			continue;
 
 		for (int iSign = -1; iSign <= 1; iSign += 2)
 		{
-			const float flStep = flSize * flFrac * iSign;
 			for (size_t i = 0; i < tRing.m_vPoints.size(); i++)
-				vOffset[i] = tRing.m_vPoints[i] + tRing.m_vOutward[i] * flStep;
+				vOffset[i] = tRing.m_vPoints[i] + tRing.m_vOutward[i] * (flStep * iSign);
 
 			H::Draw.RenderPath(vOffset, tLayer, bZBuffer, Vars::Visuals::Path::StyleEnum::Line);
 		}
@@ -315,11 +334,13 @@ void CVisuals::DrawHealRadius()
 
 	static Vec3 vLastOrigin = {};
 	static int iLastFrame = -1, iLastVertices = 0, iLastRounding = 0;
+	static float flLastHeight = 0.f;
 
 	const float flRange = pWeapon->GetRange();
 	const Vec3 vOrigin = pLocal->m_vecOrigin();
 	const int iVertices = Vars::Aimbot::Healing::HealRadiusVertices.Value;
 	const int iRounding = Vars::Aimbot::Healing::HealRadiusRounding.Value;
+	const float flHeight = Vars::Aimbot::Healing::HealRadiusHeight.Value;
 
 	if (iLastFrame != I::GlobalVars->framecount)
 	{
@@ -327,25 +348,26 @@ void CVisuals::DrawHealRadius()
 
 		// a ring traced per vertex is not cheap, and a medic is nearly always
 		// drifting by fractions of a unit - only retrace on real movement
-		const bool bShape = iLastVertices != iVertices || iLastRounding != iRounding
+		const bool bShape = iLastVertices != iVertices || iLastRounding != iRounding || flLastHeight != flHeight
 			|| vOrigin.DistTo(vLastOrigin) > flHealRadiusMoveEpsilon;
 		if (bShape)
 		{
 			vLastOrigin = vOrigin;
 			iLastVertices = iVertices;
 			iLastRounding = iRounding;
+			flLastHeight = flHeight;
 		}
 
 		if (!bConnect)
 			tConnect.Clear();
 		else if (bShape || tConnect.m_flRadius != flRange)
-			tConnect.Build(vLastOrigin, flRange, iVertices, iRounding);
+			tConnect.Build(vLastOrigin, flRange, iVertices, iRounding, flHeight);
 
 		const float flStickRange = flRange * flMedigunStickMult;
 		if (!bDisconnect)
 			tDisconnect.Clear();
 		else if (bShape || tDisconnect.m_flRadius != flStickRange)
-			tDisconnect.Build(vLastOrigin, flStickRange, iVertices, iRounding);
+			tDisconnect.Build(vLastOrigin, flStickRange, iVertices, iRounding, flHeight);
 	}
 
 	// Scene-stripped (replaced) main pass: the composite paints over anything
@@ -353,17 +375,15 @@ void CVisuals::DrawHealRadius()
 	if (F::FlexFOV.m_bReplacingView)
 		return;
 
-	// the cached rings belong to vLastOrigin, which is where the discs fan from
-	const Vec3& vCenter = vLastOrigin;
-	const float flGlowSize = Vars::Aimbot::Healing::HealRadiusGlowSize.Value;
-	const int iGlowLayers = Vars::Aimbot::Healing::HealRadiusGlowLayers.Value;
+	// the cached rings belong to vLastOrigin, which is where the discs fan from,
+	// lifted with them so the fill stays flat against the ring
+	const Vec3 vCenter = vLastOrigin + Vec3(0, 0, flLastHeight);
 
-	// each range takes its glow, fill and edge, ignore-Z variant first. The glow
-	// goes down before the line it haloes, and the fill before both.
+	// each range takes its edge and fill, ignore-Z variant first, plus its glow.
+	// The glow goes down before the line it haloes, and the fill before both.
 	auto fnDraw = [&](const HealRingCache_t& tRing,
 		const Color_t& tEdge, const Color_t& tEdgeNoZ,
-		const Color_t& tFill, const Color_t& tFillNoZ,
-		const Color_t& tGlow, const Color_t& tGlowNoZ)
+		const Color_t& tFill, const Color_t& tFillNoZ, const Glow_t& tGlow)
 	{
 		if (tRing.m_vPoints.empty())
 			return;
@@ -371,8 +391,8 @@ void CVisuals::DrawHealRadius()
 		RenderRadiusDisc(vCenter, tRing.m_vPoints, tFillNoZ, false);
 		RenderRadiusDisc(vCenter, tRing.m_vPoints, tFill, true);
 
-		RenderRadiusGlow(tRing, flGlowSize, iGlowLayers, tGlowNoZ, false);
-		RenderRadiusGlow(tRing, flGlowSize, iGlowLayers, tGlow, true);
+		// through walls, like the model glows it shares its options with
+		RenderRadiusGlow(tRing, tGlow, false);
 
 		if (tEdgeNoZ.a)
 			H::Draw.RenderPath(tRing.m_vPoints, tEdgeNoZ, false, Vars::Visuals::Path::StyleEnum::Line);
@@ -383,11 +403,11 @@ void CVisuals::DrawHealRadius()
 	fnDraw(tConnect,
 		Vars::Colors::HealRadiusConnect.Value, Vars::Colors::HealRadiusConnectIgnoreZ.Value,
 		Vars::Colors::HealRadiusConnectFill.Value, Vars::Colors::HealRadiusConnectFillIgnoreZ.Value,
-		Vars::Colors::HealRadiusConnectGlow.Value, Vars::Colors::HealRadiusConnectGlowIgnoreZ.Value);
+		Vars::Aimbot::Healing::HealRadiusGlowConnect.Value);
 	fnDraw(tDisconnect,
 		Vars::Colors::HealRadiusDisconnect.Value, Vars::Colors::HealRadiusDisconnectIgnoreZ.Value,
 		Vars::Colors::HealRadiusDisconnectFill.Value, Vars::Colors::HealRadiusDisconnectFillIgnoreZ.Value,
-		Vars::Colors::HealRadiusDisconnectGlow.Value, Vars::Colors::HealRadiusDisconnectGlowIgnoreZ.Value);
+		Vars::Aimbot::Healing::HealRadiusGlowDisconnect.Value);
 }
 
 // Interp-path trajectory data, computed once per frame and re-drawn per render

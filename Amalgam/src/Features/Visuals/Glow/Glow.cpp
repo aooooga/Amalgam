@@ -229,23 +229,27 @@ void CGlow::Store(CTFPlayer* pLocal)
 		m_mEntities[pGroup->m_tGlow].emplace_back(pLocal, GetGlowColor(pLocal, pGroup->m_tGlow, pLocal), 1);
 	}
 
-	if (F::TrajectoryGhost.Active() && Vars::Aimbot::Draw::TrajectoryGlow.Value)
-	{	// trajectory ghost glow (translated bones handled in RenderTrajectory)
-		Glow_t tGlow = {};
-		tGlow.Stencil = Vars::Aimbot::Draw::TrajectoryGlowStencil.Value;
-		tGlow.Blur = Vars::Aimbot::Draw::TrajectoryGlowBlur.Value;
-		if (tGlow())
+	if (F::TrajectoryGhost.Active())
+	{	// trajectory ghost glow (translated bones handled in RenderTrajectory);
+		// enemy and team each carry a full Glow_t (shape + flat/distance/health).
+		const Glow_t& tEnemy = Vars::Aimbot::Draw::TrajectoryGlowEnemy.Value;
+		const Glow_t& tTeam = Vars::Aimbot::Draw::TrajectoryGlowTeam.Value;
+		const bool bEnemyOn = tEnemy();
+		const bool bTeamOn = tTeam();
+		if (bEnemyOn || bTeamOn)
 		{
 			for (auto pEntity : H::Entities.GetGroup(EntityEnum::PlayerAll))
 			{
 				auto pPlayer = pEntity->As<CTFPlayer>();
 				Vec3 vDelta;
-				if (F::TrajectoryGhost.ShouldRender(pLocal, pPlayer, vDelta))
-				{
-					const bool bEnemy = pPlayer->m_iTeamNum() != pLocal->m_iTeamNum();
-					const Color_t tColor = bEnemy ? Vars::Colors::TrajectoryGlowEnemy.Value : Vars::Colors::TrajectoryGlowTeam.Value;
-					m_mEntities[tGlow].emplace_back(pPlayer, tColor, TRAJECTORY_GHOST_FLAG);
-				}
+				if (!F::TrajectoryGhost.ShouldRender(pLocal, pPlayer, vDelta))
+					continue;
+
+				const bool bEnemy = pPlayer->m_iTeamNum() != pLocal->m_iTeamNum();
+				if (bEnemy && bEnemyOn)
+					m_mEntities[tEnemy].emplace_back(pPlayer, GetGlowColor(pPlayer, tEnemy, pLocal), TRAJECTORY_GHOST_FLAG);
+				else if (!bEnemy && bTeamOn)
+					m_mEntities[tTeam].emplace_back(pPlayer, GetGlowColor(pPlayer, tTeam, pLocal), TRAJECTORY_GHOST_FLAG);
 			}
 		}
 	}

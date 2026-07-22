@@ -145,8 +145,10 @@ bool CTFPlayer::IsCritHealed()
 {
 	// healing ramps from 24 hp/s to a max of 72 hp/s (3x, "crit heal") once the
 	// target has gone 10-15s without taking damage; eligible regardless of
-	// whether a healer is currently active
-	return I::GlobalVars->curtime - m_flLastDamageTime() >= 10.f;
+	// whether a healer is currently active. m_flLastDamageTime is server-only
+	// (not networked), so we use the client-side health-drop clock tracked in
+	// CEntities::Store instead.
+	return I::GlobalVars->curtime - H::Entities.GetLastDamageTime(entindex()) >= 10.f;
 }
 
 bool CTFPlayer::IsMarked()

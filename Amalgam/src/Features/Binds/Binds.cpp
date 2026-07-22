@@ -40,6 +40,7 @@ static inline void LoopVars(int iBind, std::vector<BaseVar*>& vVars = G::Vars)
 		else Set(Vec3, iBind)
 		else Set(DragBox_t, iBind)
 		else Set(WindowBox_t, iBind)
+		else Set(Glow_t, iBind)
 	}
 }
 

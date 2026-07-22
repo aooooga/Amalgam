@@ -576,8 +576,6 @@ void CMenu::MenuAimbot(int iTab)
 				{
 					FToggleRow(Vars::Aimbot::Draw::Trajectory);
 					FDropdown(Vars::Aimbot::Draw::TrajectoryTeams);
-					FMDropdown(Vars::Aimbot::Draw::TrajectoryMaterialEnemy);
-					FMDropdown(Vars::Aimbot::Draw::TrajectoryMaterialTeam);
 					FToggleRow(Vars::Aimbot::Draw::TrajectoryBehindOnly, FToggleEnum::Left);
 					FToggleRow(Vars::Aimbot::Draw::TrajectoryIgnoreZ, FToggleEnum::Right);
 
@@ -588,12 +586,29 @@ void CMenu::MenuAimbot(int iTab)
 					FSliderRow(Vars::Aimbot::Draw::TrajectoryMinDistance, FSliderEnum::Right);
 					FSliderRow(Vars::Aimbot::Draw::TrajectoryFOV);
 
-					SubGroup("Glow");
-					FToggleRow(Vars::Aimbot::Draw::TrajectoryGlow);
-					FColorPicker(Vars::Colors::TrajectoryGlowEnemy);
-					FColorPicker(Vars::Colors::TrajectoryGlowTeam);
-					FSliderRow(Vars::Aimbot::Draw::TrajectoryGlowStencil, FSliderEnum::Left);
-					FSliderRow(Vars::Aimbot::Draw::TrajectoryGlowBlur, FSliderEnum::Right);
+					SubGroup("Enemy");
+					FMDropdown(Vars::Aimbot::Draw::TrajectoryMaterialEnemy);
+					{
+						auto& tGlow = Vars::Aimbot::Draw::TrajectoryGlowEnemy[DEFAULT_BIND];
+						FSlider("Stencil scale## TrajectoryEnemy", &tGlow.Stencil, 0, 10, 1, "%i", FSliderEnum::Left | FSliderEnum::Min);
+						FSlider("Blur scale## TrajectoryEnemy", &tGlow.Blur, 0.f, 10.f, 1.f, "%g", FSliderEnum::Right | FSliderEnum::Min | FSliderEnum::Precision);
+						FColorPicker("Enemy color", &tGlow.Color, &tGlow.DistanceColor, FColorPickerEnum::Left);
+						FToggle("Health color## TrajectoryEnemy", &tGlow.HealthColor, FToggleEnum::Right);
+						if (tGlow.HealthColor)
+							FGlowGradient("TrajectoryEnemyHealthGradient", tGlow.Stops);
+					}
+
+					SubGroup("Team");
+					FMDropdown(Vars::Aimbot::Draw::TrajectoryMaterialTeam);
+					{
+						auto& tGlow = Vars::Aimbot::Draw::TrajectoryGlowTeam[DEFAULT_BIND];
+						FSlider("Stencil scale## TrajectoryTeam", &tGlow.Stencil, 0, 10, 1, "%i", FSliderEnum::Left | FSliderEnum::Min);
+						FSlider("Blur scale## TrajectoryTeam", &tGlow.Blur, 0.f, 10.f, 1.f, "%g", FSliderEnum::Right | FSliderEnum::Min | FSliderEnum::Precision);
+						FColorPicker("Team color", &tGlow.Color, &tGlow.DistanceColor, FColorPickerEnum::Left);
+						FToggle("Health color## TrajectoryTeam", &tGlow.HealthColor, FToggleEnum::Right);
+						if (tGlow.HealthColor)
+							FGlowGradient("TrajectoryTeamHealthGradient", tGlow.Stops);
+					}
 				} EndSection();
 			}
 			/* Column 2 */

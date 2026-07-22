@@ -157,17 +157,31 @@ void CTrajectoryGhost::RenderMain()
 		if (vLayers.empty())
 			continue;
 
+		// The team's glow config doubles as the ghost's colour config: its health
+		// gradient (when Health colour is on) tints the material fill too, so the
+		// ghost matches the glow and the ESP tab's health colouring.
+		const Glow_t& tGlow = bEnemy ? Vars::Aimbot::Draw::TrajectoryGlowEnemy.Value : Vars::Aimbot::Draw::TrajectoryGlowTeam.Value;
+		const float flDistance = pLocal->GetAbsOrigin().DistTo(pPlayer->GetAbsOrigin());
+		float flHealthFrac = -1.f;
+		if (const float flMax = pPlayer->GetMaxHealth(); flMax > 0.f)
+			flHealthFrac = std::clamp(float(pPlayer->m_iHealth()) / flMax, 0.f, 1.f);
+		const bool bHealth = tGlow.HealthColor && flHealthFrac >= 0.f && !tGlow.Stops.empty();
+
 		m_pActive = &tGhost;
 		const float flOldInvis = pPlayer->m_flInvisibility();
 		pPlayer->m_flInvisibility() = 0.f;
 
 		for (auto& [sName, tColor] : vLayers)
 		{
+			// Per-layer flat/distance colour, overridden by the health gradient
+			// when the team's Health colour is enabled.
+			const Color_t cFill = bHealth ? EvalGlowStops(tGlow.Stops, flHealthFrac) : tColor.GetColor(flDistance);
+
 			auto pMaterial = F::Materials.GetMaterial(FNV1A::Hash32(sName.c_str()));
-			F::Materials.SetColor(pMaterial, tColor.Color);
+			F::Materials.SetColor(pMaterial, cFill);
 			I::ModelRender->ForcedMaterialOverride(pMaterial ? pMaterial->m_pMaterial : nullptr);
-			I::RenderView->SetColorModulation(tColor.Color);
-			I::RenderView->SetBlend(tColor.Color.a / 255.f);
+			I::RenderView->SetColorModulation(cFill);
+			I::RenderView->SetBlend(cFill.a / 255.f);
 
 			m_bActiveIgnoreZ = tColor.IgnoreZ || Vars::Aimbot::Draw::TrajectoryIgnoreZ.Value;
 			m_bRendering = true;

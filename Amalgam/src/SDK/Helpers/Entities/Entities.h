@@ -40,6 +40,8 @@ private:
 	std::array<Vec3, MAX_PLAYERS> m_aOldAngles = {}, m_aEyeAngles = {};
 	std::array<bool, MAX_PLAYERS> m_aLagCompensation = {};
 	std::array<Vec3, MAX_PLAYERS> m_aAvgVelocities = {};
+	std::array<int, MAX_PLAYERS> m_aLastHealth = {};
+	std::array<float, MAX_PLAYERS> m_aLastDamageTime = {}; // client-side proxy: curtime of the last observed health drop (m_flLastDamageTime isn't networked)
 	std::array<std::deque<VelFixRecord>, MAX_PLAYERS> m_aOrigins = {};
 	std::array<uint32_t, MAX_EDICTS> m_aModels = {};
 
@@ -79,6 +81,7 @@ public:
 	Vec3 GetDeltaAngles(uint16_t iIndex);
 	bool GetLagCompensation(uint16_t iIndex);
 	void SetLagCompensation(uint16_t iIndex, bool bLagComp);
+	float GetLastDamageTime(uint16_t iIndex);
 	Vec3* GetAvgVelocity(uint16_t iIndex);
 	void SetAvgVelocity(uint16_t iIndex, Vec3 vAvgVelocity);
 	std::deque<VelFixRecord>* GetOrigins(uint16_t iIndex);

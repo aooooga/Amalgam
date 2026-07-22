@@ -514,6 +514,7 @@ bool CConfigs::SaveConfig(const std::string& sConfigName, bool bNotify)
 				else Save(Gradient_t, tSub)
 				else Save(DragBox_t, tSub)
 				else Save(WindowBox_t, tSub)
+				else Save(Glow_t, tSub)
 			}
 			tWrite.put_child("Vars", tSub);
 		}
@@ -633,6 +634,7 @@ bool CConfigs::LoadConfig(const std::string& sConfigName, bool bNotify)
 				else Load(Gradient_t, *tSub)
 				else Load(DragBox_t, *tSub)
 				else Load(WindowBox_t, *tSub)
+				else Load(Glow_t, *tSub)
 			}
 		}
 		else
@@ -730,6 +732,7 @@ bool CConfigs::SaveVisual(const std::string& sConfigName, bool bNotify)
 				else SaveMisc(Gradient_t, tSub)
 				else SaveMisc(DragBox_t, tSub)
 				else SaveMisc(WindowBox_t, tSub)
+				else SaveMisc(Glow_t, tSub)
 			}
 			tWrite.put_child("Vars", tSub);
 		}
@@ -816,6 +819,7 @@ bool CConfigs::LoadVisual(const std::string& sConfigName, bool bNotify)
 				else LoadMisc(Gradient_t, *tSub)
 				else LoadMisc(DragBox_t, *tSub)
 				else LoadMisc(WindowBox_t, *tSub)
+				else LoadMisc(Glow_t, *tSub)
 			}
 		}
 		else
@@ -928,6 +932,7 @@ void CConfigs::ResetConfig(const std::string& sConfigName, bool bNotify)
 			else Reset(Gradient_t)
 			else Reset(DragBox_t)
 			else Reset(WindowBox_t)
+			else Reset(Glow_t)
 		}
 
 		SaveConfig(sConfigName, false);
@@ -981,6 +986,7 @@ void CConfigs::ResetVisual(const std::string& sConfigName, bool bNotify)
 			else Reset(Gradient_t)
 			else Reset(DragBox_t)
 			else Reset(WindowBox_t)
+			else Reset(Glow_t)
 		}
 
 		SaveVisual(sConfigName, false);

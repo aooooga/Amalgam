@@ -253,6 +253,17 @@ void CEntities::Store()
 		m_aGroups[EntityEnum::PlayerAll].push_back(pPlayer);
 		m_aGroups[pPlayer->m_iTeamNum() != m_pLocal->m_iTeamNum() ? EntityEnum::PlayerEnemy : EntityEnum::PlayerTeam].push_back(pPlayer);
 		ManageDormancy(pPlayer);
+
+		{	// client-side crit-heal timing: reset the "last damage" clock on real damage, on death, and on (re)spawn.
+			// overheal decays one point at a time while the player stays above max health, so ignore those small
+			// shrinks; anything larger, or a drop that reaches/goes below max health, is treated as real damage.
+			int iHealth = pPlayer->m_iHealth(), iOld = m_aLastHealth[n], iMax = pPlayer->GetMaxHealth();
+			bool bDecayOnly = iHealth > iMax && iOld - iHealth <= 3;
+			bool bDamage = iOld && iHealth < iOld && !bDecayOnly;
+			if (!pPlayer->IsAlive() || !iOld || bDamage)
+				m_aLastDamageTime[n] = I::GlobalVars->curtime;
+			m_aLastHealth[n] = iHealth;
+		}
 		
 		if (n != I::EngineClient->GetLocalPlayer())
 		{
@@ -338,6 +349,8 @@ void CEntities::Clear(bool bShutdown)
 		m_aEyeAngles = {};
 		m_aLagCompensation = {};
 		m_aAvgVelocities = {};
+		m_aLastHealth = {};
+		m_aLastDamageTime = {};
 		m_aOrigins = {};
 		m_aModels = {};
 		s_mDormancy.clear();
@@ -515,6 +528,7 @@ Vec3 CEntities::GetEyeAngles(uint16_t iIndex) { return iIndex < MAX_PLAYERS ? m_
 Vec3 CEntities::GetDeltaAngles(uint16_t iIndex) { return iIndex < MAX_PLAYERS ? m_aEyeAngles[iIndex].DeltaAngle(m_aOldAngles[iIndex]) / GetLagTime(iIndex) * (F::Backtrack.GetReal() + TICKS_TO_TIME(F::Backtrack.GetAnticipatedChoke())) : Vec3(); }
 bool CEntities::GetLagCompensation(uint16_t iIndex) { return iIndex < MAX_PLAYERS ? m_aLagCompensation[iIndex] : false; }
 void CEntities::SetLagCompensation(uint16_t iIndex, bool bLagComp) { if (iIndex < MAX_PLAYERS) m_aLagCompensation[iIndex] = bLagComp; }
+float CEntities::GetLastDamageTime(uint16_t iIndex) { return iIndex < MAX_PLAYERS ? m_aLastDamageTime[iIndex] : 0.f; }
 Vec3* CEntities::GetAvgVelocity(uint16_t iIndex) { return iIndex < MAX_PLAYERS && iIndex != I::EngineClient->GetLocalPlayer() ? &m_aAvgVelocities[iIndex] : nullptr; }
 void CEntities::SetAvgVelocity(uint16_t iIndex, Vec3 vAvgVelocity) { if (iIndex < MAX_PLAYERS) m_aAvgVelocities[iIndex] = vAvgVelocity; }
 std::deque<VelFixRecord>* CEntities::GetOrigins(uint16_t iIndex) { return iIndex < MAX_PLAYERS ? &m_aOrigins[iIndex] : nullptr; }

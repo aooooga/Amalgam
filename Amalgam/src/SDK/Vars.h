@@ -278,8 +278,6 @@ NAMESPACE_BEGIN(Vars)
 
 		CVar(Local, "Local color", Color_t(255, 255, 255), VISUAL);
 		CVar(FOVCircle, "FOV circle color", Color_t(255, 255, 255, 100), VISUAL);
-		CVar(TrajectoryGlowEnemy, "Trajectory glow enemy color", Color_t(255, 120, 120, 255), VISUAL);
-		CVar(TrajectoryGlowTeam, "Trajectory glow team color", Color_t(120, 255, 140, 255), VISUAL);
 		CVar(SpellFootstep, "Spell footstep color", Color_t(255, 255, 255, 255), VISUAL);
 
 		CVar(WorldModulation, VA_LIST("World modulation", "World modulation color"), Color_t(255, 255, 255, 255), VISUAL);
@@ -533,9 +531,11 @@ NAMESPACE_BEGIN(Vars)
 			CVar(TrajectoryFOV, "Trajectory FOV", 0.f, VISUAL | SLIDER_MIN | SLIDER_PRECISION, 0.f, 180.f, 5.f);
 			CVar(TrajectoryBehindOnly, "Trajectory behind only", false, VISUAL);
 			CVar(TrajectoryIgnoreZ, "Trajectory ignore Z", false, VISUAL);
-			CVar(TrajectoryGlow, "Trajectory glow", false, VISUAL);
-			CVar(TrajectoryGlowStencil, "Trajectory glow width", 3, VISUAL | SLIDER_CLAMP, 0, 20);
-			CVar(TrajectoryGlowBlur, "Trajectory glow blur", 0.f, VISUAL | SLIDER_CLAMP | SLIDER_PRECISION, 0.f, 10.f, 0.5f);
+			// Full glow config per team (shape + flat/distance/health colour), like
+			// the ESP tab's group glow. The health gradient here also tints the
+			// material ghost when Health colour is enabled.
+			CVar(TrajectoryGlowEnemy, "Enemy glow", (Glow_t{ .Color = Color_t(255, 120, 120, 255) }), VISUAL);
+			CVar(TrajectoryGlowTeam, "Team glow", (Glow_t{ .Color = Color_t(120, 255, 140, 255) }), VISUAL);
 		NAMESPACE_END(Draw)
 	NAMESPACE_END(Aimbot)
 	

@@ -329,18 +329,41 @@ void CMenu::MenuAimbot(int iTab)
 					FToggleRow(Vars::Aimbot::Healing::AutoVaccinator, FToggleEnum::Left);
 					FToggleRow(Vars::Aimbot::Healing::ActivateOnVoice, FToggleEnum::Right);
 
-					FDropdown(Vars::Aimbot::Healing::HealRadius, FDropdownEnum::None, -10);
-					FColorPicker(Vars::Colors::HealRadiusConnectIgnoreZ, FColorPickerEnum::SameLine, { 0, H::Draw.Scale(30) }, { H::Draw.Scale(10), H::Draw.Scale(10) });
-					FColorPicker(Vars::Colors::HealRadiusConnect, FColorPickerEnum::SameLine, { H::Draw.Scale(-10), H::Draw.Scale(-10) }, { H::Draw.Scale(10), H::Draw.Scale(10) });
-					FColorPicker(Vars::Colors::HealRadiusConnectTopIgnoreZ, FColorPickerEnum::SameLine, { H::Draw.Scale(-10), H::Draw.Scale(-10) }, { H::Draw.Scale(10), H::Draw.Scale(10) });
-					FColorPicker(Vars::Colors::HealRadiusConnectTop, FColorPickerEnum::SameLine, { H::Draw.Scale(-10), H::Draw.Scale(-10) }, { H::Draw.Scale(10), H::Draw.Scale(10) });
-					SameLine(); DebugDummy({ 0, H::Draw.Scale(48) });
-					FSliderRow(Vars::Aimbot::Healing::HealRadiusHeight, FSliderEnum::None);
-					FColorPicker(Vars::Colors::HealRadiusDisconnectIgnoreZ, FColorPickerEnum::SameLine, { 0, H::Draw.Scale(30) }, { H::Draw.Scale(10), H::Draw.Scale(10) });
-					FColorPicker(Vars::Colors::HealRadiusDisconnect, FColorPickerEnum::SameLine, { H::Draw.Scale(-10), H::Draw.Scale(-10) }, { H::Draw.Scale(10), H::Draw.Scale(10) });
-					FColorPicker(Vars::Colors::HealRadiusDisconnectTopIgnoreZ, FColorPickerEnum::SameLine, { H::Draw.Scale(-10), H::Draw.Scale(-10) }, { H::Draw.Scale(10), H::Draw.Scale(10) });
-					FColorPicker(Vars::Colors::HealRadiusDisconnectTop, FColorPickerEnum::SameLine, { H::Draw.Scale(-10), H::Draw.Scale(-10) }, { H::Draw.Scale(10), H::Draw.Scale(10) });
-					SameLine(); DebugDummy({ 0, H::Draw.Scale(48) });
+					FDropdown(Vars::Aimbot::Healing::HealRadius);
+
+					// each range gets its own popup: height, then the ring and the
+					// cylinder's top / bottom gradient stops (ignore Z left, Z right)
+					FText("Connect", { 5, 5 });
+					if (FPopupButton("Connect", { 0, -5 }))
+					{
+						FSliderRow(Vars::Aimbot::Healing::HealRadiusConnectHeight);
+
+						Divider();
+						FColorPicker(Vars::Colors::HealRadiusConnectIgnoreZ, FColorPickerEnum::Left);
+						FColorPicker(Vars::Colors::HealRadiusConnect, FColorPickerEnum::Right);
+						FColorPicker(Vars::Colors::HealRadiusConnectTopIgnoreZ, FColorPickerEnum::Left);
+						FColorPicker(Vars::Colors::HealRadiusConnectTop, FColorPickerEnum::Right);
+						FColorPicker(Vars::Colors::HealRadiusConnectBottomIgnoreZ, FColorPickerEnum::Left);
+						FColorPicker(Vars::Colors::HealRadiusConnectBottom, FColorPickerEnum::Right);
+
+						EndPopup();
+					}
+
+					FText("Disconnect", { 5, 5 });
+					if (FPopupButton("Disconnect", { 0, -5 }))
+					{
+						FSliderRow(Vars::Aimbot::Healing::HealRadiusDisconnectHeight);
+
+						Divider();
+						FColorPicker(Vars::Colors::HealRadiusDisconnectIgnoreZ, FColorPickerEnum::Left);
+						FColorPicker(Vars::Colors::HealRadiusDisconnect, FColorPickerEnum::Right);
+						FColorPicker(Vars::Colors::HealRadiusDisconnectTopIgnoreZ, FColorPickerEnum::Left);
+						FColorPicker(Vars::Colors::HealRadiusDisconnectTop, FColorPickerEnum::Right);
+						FColorPicker(Vars::Colors::HealRadiusDisconnectBottomIgnoreZ, FColorPickerEnum::Left);
+						FColorPicker(Vars::Colors::HealRadiusDisconnectBottom, FColorPickerEnum::Right);
+
+						EndPopup();
+					}
 				} EndSection();
 				if (Vars::Debug::Options.Value)
 				{

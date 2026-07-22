@@ -275,25 +275,35 @@ void CVisuals::DrawHealRadius()
 	if (F::FlexFOV.m_bReplacingView)
 		return;
 
-	const float flHeight = iValue & Vars::Aimbot::Healing::HealRadiusEnum::Cylinder ? Vars::Aimbot::Healing::HealRadiusHeight.Value : 0.f;
-	auto fnDraw = [&](const std::vector<Vec3>& vPoints, const Color_t& tColor, const Color_t& tColorIgnoreZ, const Color_t& tTop, const Color_t& tTopIgnoreZ)
+	const bool bCylinder = iValue & Vars::Aimbot::Healing::HealRadiusEnum::Cylinder;
+	auto fnDraw = [&](const std::vector<Vec3>& vPoints, float flHeight,
+		const Color_t& tRing, const Color_t& tRingIgnoreZ,
+		const Color_t& tTop, const Color_t& tTopIgnoreZ,
+		const Color_t& tBottom, const Color_t& tBottomIgnoreZ)
 	{
 		if (vPoints.empty())
 			return;
 
-		if (tColorIgnoreZ.a)
-			H::Draw.RenderPath(vPoints, tColorIgnoreZ, false, Vars::Visuals::Path::StyleEnum::Line);
-		if (tColor.a)
-			H::Draw.RenderPath(vPoints, tColor, true, Vars::Visuals::Path::StyleEnum::Line);
+		if (tRingIgnoreZ.a)
+			H::Draw.RenderPath(vPoints, tRingIgnoreZ, false, Vars::Visuals::Path::StyleEnum::Line);
+		if (tRing.a)
+			H::Draw.RenderPath(vPoints, tRing, true, Vars::Visuals::Path::StyleEnum::Line);
 
-		RenderRadiusCylinder(vPoints, flHeight, tColorIgnoreZ, tTopIgnoreZ, false);
-		RenderRadiusCylinder(vPoints, flHeight, tColor, tTop, true);
+		if (!bCylinder)
+			return;
+
+		RenderRadiusCylinder(vPoints, flHeight, tBottomIgnoreZ, tTopIgnoreZ, false);
+		RenderRadiusCylinder(vPoints, flHeight, tBottom, tTop, true);
 	};
 
-	fnDraw(vConnect, Vars::Colors::HealRadiusConnect.Value, Vars::Colors::HealRadiusConnectIgnoreZ.Value,
-		Vars::Colors::HealRadiusConnectTop.Value, Vars::Colors::HealRadiusConnectTopIgnoreZ.Value);
-	fnDraw(vDisconnect, Vars::Colors::HealRadiusDisconnect.Value, Vars::Colors::HealRadiusDisconnectIgnoreZ.Value,
-		Vars::Colors::HealRadiusDisconnectTop.Value, Vars::Colors::HealRadiusDisconnectTopIgnoreZ.Value);
+	fnDraw(vConnect, Vars::Aimbot::Healing::HealRadiusConnectHeight.Value,
+		Vars::Colors::HealRadiusConnect.Value, Vars::Colors::HealRadiusConnectIgnoreZ.Value,
+		Vars::Colors::HealRadiusConnectTop.Value, Vars::Colors::HealRadiusConnectTopIgnoreZ.Value,
+		Vars::Colors::HealRadiusConnectBottom.Value, Vars::Colors::HealRadiusConnectBottomIgnoreZ.Value);
+	fnDraw(vDisconnect, Vars::Aimbot::Healing::HealRadiusDisconnectHeight.Value,
+		Vars::Colors::HealRadiusDisconnect.Value, Vars::Colors::HealRadiusDisconnectIgnoreZ.Value,
+		Vars::Colors::HealRadiusDisconnectTop.Value, Vars::Colors::HealRadiusDisconnectTopIgnoreZ.Value,
+		Vars::Colors::HealRadiusDisconnectBottom.Value, Vars::Colors::HealRadiusDisconnectBottomIgnoreZ.Value);
 }
 
 // Interp-path trajectory data, computed once per frame and re-drawn per render

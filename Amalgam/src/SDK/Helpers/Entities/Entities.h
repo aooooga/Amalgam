@@ -12,6 +12,10 @@ Enum(Entity,
 	Invalid, GroupsMax
 )
 
+// parked far enough in the past that a player we've never seen damaged reads as long-since-hit,
+// which is how the game behaves out of spawn (crit heals are available immediately).
+#define NEVER_DAMAGED -1000.f
+
 struct DormantData
 {
 	Vec3 m_vLocation;
@@ -40,8 +44,10 @@ private:
 	std::array<Vec3, MAX_PLAYERS> m_aOldAngles = {}, m_aEyeAngles = {};
 	std::array<bool, MAX_PLAYERS> m_aLagCompensation = {};
 	std::array<Vec3, MAX_PLAYERS> m_aAvgVelocities = {};
-	std::array<int, MAX_PLAYERS> m_aLastHealth = {};
-	std::array<float, MAX_PLAYERS> m_aLastDamageTime = {}; // client-side proxy: curtime of the last observed health drop (m_flLastDamageTime isn't networked)
+	std::array<int, MAX_PLAYERS> m_aLastHealth = {}, m_aLastMaxHealth = {};
+	std::array<float, MAX_PLAYERS> m_aLastHealthTime = {};
+	std::array<bool, MAX_PLAYERS> m_aHealthResync = {}; // baseline is stale (dormancy gap / first sighting), don't infer damage from it
+	std::array<float, MAX_PLAYERS> m_aLastDamageTime = {}; // curtime of the last known damage (m_flLastDamageTime isn't networked); NEVER_DAMAGED until seen
 	std::array<std::deque<VelFixRecord>, MAX_PLAYERS> m_aOrigins = {};
 	std::array<uint32_t, MAX_EDICTS> m_aModels = {};
 
@@ -82,6 +88,7 @@ public:
 	bool GetLagCompensation(uint16_t iIndex);
 	void SetLagCompensation(uint16_t iIndex, bool bLagComp);
 	float GetLastDamageTime(uint16_t iIndex);
+	void ReportDamage(int iIndex);
 	Vec3* GetAvgVelocity(uint16_t iIndex);
 	void SetAvgVelocity(uint16_t iIndex, Vec3 vAvgVelocity);
 	std::deque<VelFixRecord>* GetOrigins(uint16_t iIndex);

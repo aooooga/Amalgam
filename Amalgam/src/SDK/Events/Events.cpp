@@ -50,6 +50,11 @@ void CEventListener::FireGameEvent(IGameEvent* pEvent)
 	auto pLocal = H::Entities.GetLocal();
 	auto uHash = FNV1A::Hash32(pEvent->GetName());
 
+	// authoritative damage clock for the crit-heal ramp - fires for every damage instance regardless of PVS
+	// or of healing masking the health drop. kept ahead of the demo early-out so it tracks in demos too.
+	if (uHash == FNV1A::Hash32Const("player_hurt"))
+		H::Entities.ReportDamage(I::EngineClient->GetPlayerForUserID(pEvent->GetInt("userid")));
+
 	F::Output.Event(pEvent, uHash, pLocal);
 	if (I::EngineClient->IsPlayingDemo())
 		return;

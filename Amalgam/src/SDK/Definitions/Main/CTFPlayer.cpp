@@ -143,11 +143,10 @@ bool CTFPlayer::IsMiniCritBoosted()
 
 bool CTFPlayer::IsCritHealed()
 {
-	// healing ramps from 24 hp/s to a max of 72 hp/s (3x, "crit heal") once the
-	// target has gone 10-15s without taking damage; eligible regardless of
-	// whether a healer is currently active. m_flLastDamageTime is server-only
-	// (not networked), so we use the client-side health-drop clock tracked in
-	// CEntities::Store instead.
+	// healing ramps linearly from 1x to 3x ("crit heal") between 10s and 15s since the target last
+	// took damage, eligible regardless of whether a healer is currently active. we flag the *start*
+	// of the ramp (10s) deliberately - knowing early beats knowing at the 15s cap. m_flLastDamageTime
+	// is server-only (not networked), so CEntities tracks the clock from player_hurt events.
 	return I::GlobalVars->curtime - H::Entities.GetLastDamageTime(entindex()) >= 10.f;
 }
 

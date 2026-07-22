@@ -254,15 +254,44 @@ void CEntities::Store()
 		m_aGroups[pPlayer->m_iTeamNum() != m_pLocal->m_iTeamNum() ? EntityEnum::PlayerEnemy : EntityEnum::PlayerTeam].push_back(pPlayer);
 		ManageDormancy(pPlayer);
 
-		{	// client-side crit-heal timing: reset the "last damage" clock on real damage, on death, and on (re)spawn.
-			// overheal decays one point at a time while the player stays above max health, so ignore those small
-			// shrinks; anything larger, or a drop that reaches/goes below max health, is treated as real damage.
-			int iHealth = pPlayer->m_iHealth(), iOld = m_aLastHealth[n], iMax = pPlayer->GetMaxHealth();
-			bool bDecayOnly = iHealth > iMax && iOld - iHealth <= 3;
-			bool bDamage = iOld && iHealth < iOld && !bDecayOnly;
-			if (!pPlayer->IsAlive() || !iOld || bDamage)
-				m_aLastDamageTime[n] = I::GlobalVars->curtime;
-			m_aLastHealth[n] = iHealth;
+		{	// client-side crit-heal timing. player_hurt (ReportDamage) is the authoritative signal - it fires for
+			// every damage instance regardless of PVS and regardless of whether healing outpaced it, which the
+			// health watcher below cannot see. the watcher only exists to catch damage the event stream missed.
+			int iHealth = pPlayer->m_iHealth(), iMax = pPlayer->GetMaxHealth();
+			int iOld = m_aLastHealth[n], iOldMax = m_aLastMaxHealth[n];
+			bool bDormant = pPlayer->IsDormant();
+
+			if (!pPlayer->IsAlive())
+			{	// a fresh spawn is not "recently damaged" as far as the medigun ramp is concerned, so clear the
+				// clock on death rather than stamping it - stamping it blacked the flag out for 10s after respawn.
+				m_aLastDamageTime[n] = NEVER_DAMAGED;
+				m_aHealthResync[n] = true;
+			}
+			else if (m_aHealthResync[n] || bDormant || !iOld || iMax != iOldMax)
+			{	// no usable baseline: first sighting, a dormancy gap, or a max-health change (weapon switch)
+				// clamping health down. resync silently instead of inferring damage from it.
+				// CTFPlayer::Spawn zeroes m_flLastDamageTime server-side, so a player we're seeing alive for the
+				// first time starts eligible - unless a player_hurt already landed after our last pass.
+				if (!iOld && m_aLastDamageTime[n] <= m_aLastHealthTime[n])
+					m_aLastDamageTime[n] = NEVER_DAMAGED;
+				m_aHealthResync[n] = bDormant;
+			}
+			else if (iHealth < iOld)
+			{	// CTFPlayerShared drains (GetMaxBuffedHealth() - GetMaxHealth()) over tf_boost_drain_time while
+				// health is above max, stopping exactly at max. so a shrink is decay only while it both lands
+				// at/above max and fits the drain budget for the elapsed time (doubled for slack, since
+				// per-item "shorter overheal time" attributes scale the drain up). anything else is damage.
+				static auto tf_boost_drain_time = H::ConVars.FindVar("tf_boost_drain_time");
+				static auto tf_max_health_boost = H::ConVars.FindVar("tf_max_health_boost");
+				float flDrainTime = tf_boost_drain_time ? tf_boost_drain_time->GetFloat() : 15.f;
+				float flBoostMult = tf_max_health_boost ? tf_max_health_boost->GetFloat() : 1.5f;
+				float flElapsed = std::max(I::GlobalVars->curtime - m_aLastHealthTime[n], 0.f);
+				float flBudget = std::max(2.f, float(iMax) * std::max(flBoostMult - 1.f, 0.f) / std::max(flDrainTime, 1.f) * flElapsed * 2.f);
+				if (!(iOld > iMax && iHealth >= iMax && float(iOld - iHealth) <= flBudget))
+					m_aLastDamageTime[n] = I::GlobalVars->curtime;
+			}
+
+			m_aLastHealth[n] = iHealth, m_aLastMaxHealth[n] = iMax, m_aLastHealthTime[n] = I::GlobalVars->curtime;
 		}
 		
 		if (n != I::EngineClient->GetLocalPlayer())
@@ -350,7 +379,10 @@ void CEntities::Clear(bool bShutdown)
 		m_aLagCompensation = {};
 		m_aAvgVelocities = {};
 		m_aLastHealth = {};
-		m_aLastDamageTime = {};
+		m_aLastMaxHealth = {};
+		m_aLastHealthTime = {};
+		m_aHealthResync = {};
+		m_aLastDamageTime.fill(NEVER_DAMAGED);
 		m_aOrigins = {};
 		m_aModels = {};
 		s_mDormancy.clear();
@@ -528,7 +560,8 @@ Vec3 CEntities::GetEyeAngles(uint16_t iIndex) { return iIndex < MAX_PLAYERS ? m_
 Vec3 CEntities::GetDeltaAngles(uint16_t iIndex) { return iIndex < MAX_PLAYERS ? m_aEyeAngles[iIndex].DeltaAngle(m_aOldAngles[iIndex]) / GetLagTime(iIndex) * (F::Backtrack.GetReal() + TICKS_TO_TIME(F::Backtrack.GetAnticipatedChoke())) : Vec3(); }
 bool CEntities::GetLagCompensation(uint16_t iIndex) { return iIndex < MAX_PLAYERS ? m_aLagCompensation[iIndex] : false; }
 void CEntities::SetLagCompensation(uint16_t iIndex, bool bLagComp) { if (iIndex < MAX_PLAYERS) m_aLagCompensation[iIndex] = bLagComp; }
-float CEntities::GetLastDamageTime(uint16_t iIndex) { return iIndex < MAX_PLAYERS ? m_aLastDamageTime[iIndex] : 0.f; }
+float CEntities::GetLastDamageTime(uint16_t iIndex) { return iIndex < MAX_PLAYERS ? m_aLastDamageTime[iIndex] : NEVER_DAMAGED; }
+void CEntities::ReportDamage(int iIndex) { if (iIndex > 0 && iIndex < MAX_PLAYERS) m_aLastDamageTime[iIndex] = I::GlobalVars->curtime; }
 Vec3* CEntities::GetAvgVelocity(uint16_t iIndex) { return iIndex < MAX_PLAYERS && iIndex != I::EngineClient->GetLocalPlayer() ? &m_aAvgVelocities[iIndex] : nullptr; }
 void CEntities::SetAvgVelocity(uint16_t iIndex, Vec3 vAvgVelocity) { if (iIndex < MAX_PLAYERS) m_aAvgVelocities[iIndex] = vAvgVelocity; }
 std::deque<VelFixRecord>* CEntities::GetOrigins(uint16_t iIndex) { return iIndex < MAX_PLAYERS ? &m_aOrigins[iIndex] : nullptr; }

@@ -330,7 +330,9 @@ void CMenu::MenuAimbot(int iTab)
 					FToggleRow(Vars::Aimbot::Healing::ActivateOnVoice, FToggleEnum::Right);
 
 					FDropdown(Vars::Aimbot::Healing::HealRadius);
-					FSliderRow(Vars::Aimbot::Healing::HealRadiusVertices);
+					FToggleRow(Vars::Aimbot::Healing::HealRadiusHeal);
+					FSliderRow(Vars::Aimbot::Healing::HealRadiusVertices, FSliderEnum::Left);
+					FSliderRow(Vars::Aimbot::Healing::HealRadiusRounding, FSliderEnum::Right);
 
 					// each range gets its own popup: height, then the ring's edge and
 					// fill, then the cylinder's bottom / top gradient stops for edge

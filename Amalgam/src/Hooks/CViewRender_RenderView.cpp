@@ -4,6 +4,7 @@
 #include "../Features/Visuals/Chams/Chams.h"
 #include "../Features/Visuals/FlexFOV/FlexFOV.h"
 #include "../Features/Visuals/RearView/RearView.h"
+#include "../Utils/Perf/Tracker.h"
 
 // CViewRender::ViewDrawScene - the 3D scene portion of RenderView. Located via
 // its VPROF node string ("CViewRender::ViewDrawScene", single xref).
@@ -116,6 +117,15 @@ MAKE_HOOK(CViewRender_RenderView, U::Memory.GetVirtual(I::ViewRender, 6), void,
 	// here (main pass + face captures + aux views) is one frame's worth.
 	F::FlexFOV.SnapshotProfFrame();
 
+	// Same boundary for the process tracker. RenderView is the one call
+	// guaranteed once per rendered frame in game, so a frame's worth of tracker
+	// data is [this entry, the next) - it carries the previous frame's render
+	// plus this frame's CreateMove/net-update work, which is exactly one frame's
+	// cost either way. Enabling here means the toggle takes effect from the next
+	// zone onward, never mid-frame.
+	Perf::Tracker.SetEnabled(Vars::Debug::ProcessTracker.Value || Vars::Debug::AutoVprof.Value);
+	Perf::Tracker.EndFrame();
+
 	// A clean screenshot (and unload) must always render the plain view with no
 	// composite/overlays; do that and bail before any capture work.
 	if (SDK::CleanScreenshot() || G::Unload)
@@ -152,7 +162,9 @@ MAKE_HOOK(CViewRender_RenderView, U::Memory.GetVirtual(I::ViewRender, 6), void,
 	// frame of latency on the whole world view: mouse motion showed up a frame
 	// late, on top of whatever the engine already owes. Capturing first makes the
 	// faces, the composite, W2S and the viewmodel all this frame's.
-	F::FlexFOV.CaptureGlobe(rcx, tView);
+	// The extra scene passes. Their inclusive time is mostly engine rendering we
+	// asked for, so read inclms here against vprof's scene nodes.
+	PROF_CALL("FlexFOV::CaptureGlobe", Perf::GROUP_SCENE, F::FlexFOV.CaptureGlobe(rcx, tView));
 
 	F::FlexFOV.m_flSceneMs = 0.f;
 	F::FlexFOV.m_bSceneSkipped = false;
@@ -176,6 +188,6 @@ MAKE_HOOK(CViewRender_RenderView, U::Memory.GetVirtual(I::ViewRender, 6), void,
 	}
 	F::FlexFOV.m_flMainPassMs = float((SDK::PlatFloatTime() - flMainStart) * 1000.0);
 
-	F::CameraWindow.RenderView(rcx, tView);
-	F::RearView.Capture(rcx, tView);
+	PROF_CALL("CameraWindow::RenderView", Perf::GROUP_SCENE, F::CameraWindow.RenderView(rcx, tView));
+	PROF_CALL("RearView::Capture", Perf::GROUP_SCENE, F::RearView.Capture(rcx, tView));
 }

@@ -16,6 +16,7 @@
 #include "../../World/World.h"
 #include "../../Simulation/ProjectileSimulation/ProjectileSimulation.h"
 #include "../../Debug/AutoVprof/AutoVprof.h"
+#include "../../../Utils/Perf/Tracker.h"
 
 // Phase 4 help system: curated descriptions for the genuinely cryptic options.
 // Keyed by ConfigVar address (compile-checked) so no Vars.h line needs touching.
@@ -3900,6 +3901,14 @@ void CMenu::MenuSettings(int iTab)
 			FToggleRow(Vars::Debug::AutoVprof);
 			if (Vars::Debug::AutoVprof.Value)
 				FText(std::format("Reports -> Amalgam/vprof/  |  build {}", F::AutoVprof.GetBuildID()).c_str());
+
+			// Amalgam's own profiler. Auto vprof turns it on regardless while it
+			// captures, so the toggle only matters for the live overlay.
+			FToggleRow(Vars::Debug::ProcessTracker, FToggleEnum::Left);
+			FToggleRow(Vars::Debug::ProcessTrackerOverlay, FToggleEnum::Right);
+			if (Vars::Debug::ProcessTracker.Value || Vars::Debug::ProcessTrackerOverlay.Value)
+				FText(std::format("Amalgam {:.2f}ms/frame  |  tracker overhead {:.3f}ms",
+					Perf::Tracker.OverlayTotalMs(), Perf::Tracker.OverheadMs()).c_str());
 		} EndSection();
 		if (Vars::Debug::Options.Value && I::EngineClient->IsConnected())
 		{

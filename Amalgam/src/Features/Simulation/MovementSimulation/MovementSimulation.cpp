@@ -1,6 +1,7 @@
 #include "MovementSimulation.h"
 
 #include "../../EnginePrediction/EnginePrediction.h"
+#include "../../../Utils/Perf/Tracker.h"
 #include <numeric>
 
 void CMovementSimulation::Store(MoveStorage& tMoveStorage)
@@ -679,6 +680,12 @@ void CMovementSimulation::RunTick(MoveStorage& tMoveStorage, bool bPath, RunTick
 {
 	if (tMoveStorage.m_bFailed || !tMoveStorage.m_pPlayer || !tMoveStorage.m_pPlayer->IsPlayer())
 		return;
+
+	// One simulated tick. Billed to the caller (aimbot projectile solve, ghost,
+	// backtrack) so the report shows who is running how many ticks per frame -
+	// the number that historically drove this feature's cost.
+	PROF_CHARGE(Perf::COUNTER_SIMTICK);
+	PROF_ZONE("MoveSim::RunTick", Perf::GROUP_CREATEMOVE);
 
 	// make sure frametime and prediction vars are right
 	I::Prediction->m_bInPrediction = true;

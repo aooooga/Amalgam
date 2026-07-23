@@ -5,6 +5,7 @@
 #include "../../../Utils/Math/Math.h"
 #include "../../../Utils/Timer/Timer.h"
 #include "../../../Features/ImGui/Render.h"
+#include "../../../Utils/Perf/Tracker.h"
 
 MAKE_SIGNATURE(CHudBaseDeathNotice_GetIcon, "client.dll", "40 53 48 81 EC ? ? ? ? 48 8B DA", 0x0);
 MAKE_SIGNATURE(RenderLine, "engine.dll", "48 89 5C 24 ? 48 89 74 24 ? 44 89 44 24", 0x0);
@@ -496,6 +497,8 @@ void CDraw::RenderLine(const Vec3& vStart, const Vec3& vEnd, Color_t tColor, boo
 	if (!tColor.a)
 		return;
 
+	PROF_CHARGE(Perf::COUNTER_PRIMITIVE);
+
 	S::RenderLine.Call<void>(std::ref(vStart), std::ref(vEnd), tColor, bZBuffer);
 }
 
@@ -593,6 +596,11 @@ void CDraw::RenderTriangle(const Vector& vPoint1, const Vector& vPoint2, const V
 {
 	if (!tColor.a)
 		return;
+
+	// The engine's immediate-mode mesh path dies past ~10k primitives in a pass
+	// (see the render-primitive volume crash), so the count matters as much as
+	// the time - the counter makes the per-frame volume visible per feature.
+	PROF_CHARGE(Perf::COUNTER_PRIMITIVE);
 
 	S::RenderTriangle.Call<void>(std::ref(vPoint1), std::ref(vPoint2), std::ref(vPoint3), tColor, bZBuffer);
 }

@@ -47,6 +47,12 @@ No automated tests. To test: build the DLL, then inject it into a running TF2 in
 
 ## Performance analysis
 
+Amalgam ships two paired tools. The **process tracker** (`Perf::Tracker`,
+`Amalgam/src/Utils/Perf/Tracker.h`, Debug → Process tracker / Tracker overlay) profiles
+Amalgam's own code — per-feature zones plus counters (traces, bone setups, model draws) charged
+to the feature that requested them — and writes `#amalgam*` sections into the vprof reports, so
+one file shows both where the CPU went and which of our features asked for it.
+
 Amalgam has a built-in **Auto vprof** tool (`F::AutoVprof`, Debug → Auto vprof) that captures TF2's `vprof` profiler across live rounds and writes cleaned, LLM-facing reports to `Team Fortress 2/Amalgam/vprof/` (`matches/<map>_<ts>.txt`, per-map `<map>.txt` rollups, `builds.txt` inventory). When asked to analyze or optimize runtime performance, read `.claude/skills/add-feature/references/performance.md` — it covers the report formats, how to read the numbers, and the **Claude-curated build-exclusion workflow** (the user has no in-game control over exclusions; Claude edits `excluded_builds.txt` to drop stale builds from rollups).
 
 ## Runtime behavior

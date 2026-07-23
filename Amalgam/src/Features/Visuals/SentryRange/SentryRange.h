@@ -92,6 +92,7 @@ class CSentryRange
 		bool m_bDisabled = false;
 		bool m_bPlayerInside = false;
 		bool m_bDraw = false; // beyond MaxDistance: cache kept, no budget spent
+		bool m_bFrozen = false; // sentry picked up: keep drawing where it stood, spend nothing
 	};
 	struct RetiredMesh_t // deferred destroy: queued draws may still reference the mesh
 	{
@@ -111,9 +112,9 @@ class CSentryRange
 	IMaterial* m_pEdgeMaterialIgnoreZ = nullptr;
 
 	Vec3 GetSentryEye(CObjectSentrygun* pSentry);
-	int TraceCell(SentryCache_t& tCache, int i);         // full trace of one cell; returns traces used
-	int RefineCell(SentryCache_t& tCache, int gx, int gy); // fill from coarse block, tracing only if uneven
-	int StepCell(SentryCache_t& tCache, bool& bWrapped); // advance the phase machine one cell; returns traces used
+	int TraceCell(SentryCache_t& tCache, int gx, int gy); // full trace of one cell; returns traces used (0 = outside the range circle, free)
+	int RefineBlock(SentryCache_t& tCache, int bx, int by, int& nWork); // fill a whole coarse block, tracing only the cells it can't explain
+	int StepCell(SentryCache_t& tCache, bool& bWrapped, int& nWork); // advance the phase machine; returns traces used, adds written cells to nWork
 	size_t RemainingWork(const SentryCache_t& tCache) const;
 	void BuildDrawList(SentryCache_t& tCache); // cell grid -> merged fill chunks + boundary edges
 	void GetColors(const SentryCache_t& tCache, Color_t& tFill, Color_t& tFillIgnoreZ, Color_t& tEdge, Color_t& tEdgeIgnoreZ);

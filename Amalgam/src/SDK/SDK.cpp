@@ -5,6 +5,7 @@
 #include "../Features/EnginePrediction/EnginePrediction.h"
 #include "../Features/Ticks/Ticks.h"
 #include "../Features/Visuals/FlexFOV/FlexFOV.h"
+#include "../Utils/Perf/Tracker.h"
 
 #pragma warning (disable : 6385)
 
@@ -214,6 +215,10 @@ double SDK::PlatFloatTime()
 
 bool SDK::W2S(const Vec3& vOrigin, Vec3& vScreen, bool bAlways)
 {
+	// Charged to whichever zone is open, so a report can say "ESP::Draw did
+	// 3,400 projections a frame" without W2S needing a zone of its own.
+	PROF_CHARGE(Perf::COUNTER_W2S);
+
 	// While the FlexFOV composite owns the screen, the on-screen view is the
 	// nonlinear Panini/Mercator warp - which can't be expressed as the linear
 	// m_mWorldToProjection matrix. Route every overlay through the forward flex
@@ -334,6 +339,12 @@ bool SDK::IsOnScreen(CBaseEntity* pEntity, bool bShouldGetOwner)
 
 void SDK::Trace(const Vec3& vStart, const Vec3& vEnd, unsigned int nMask, ITraceFilter* pFilter, CGameTrace* pTrace)
 {
+	// Charge before opening the zone so the trace is billed to the *caller*
+	// (Aimbot, Backtrack, ...) rather than to SDK::Trace itself; the zone then
+	// carries the time, which is why callers' self time excludes their traces.
+	PROF_CHARGE(Perf::COUNTER_TRACE);
+	PROF_ZONE("SDK::Trace", Perf::GROUP_ENGINE);
+
 	Ray_t ray;
 	ray.Init(vStart, vEnd);
 	I::EngineTrace->TraceRay(ray, nMask, pFilter, pTrace);
@@ -346,6 +357,9 @@ void SDK::Trace(const Vec3& vStart, const Vec3& vEnd, unsigned int nMask, ITrace
 
 void SDK::TraceHull(const Vec3& vStart, const Vec3& vEnd, const Vec3& vHullMin, const Vec3& vHullMax, unsigned int nMask, ITraceFilter* pFilter, CGameTrace* pTrace)
 {
+	PROF_CHARGE(Perf::COUNTER_TRACE); // billed to the caller, as in SDK::Trace
+	PROF_ZONE("SDK::TraceHull", Perf::GROUP_ENGINE);
+
 	Ray_t ray;
 	ray.Init(vStart, vEnd, vHullMin, vHullMax);
 	I::EngineTrace->TraceRay(ray, nMask, pFilter, pTrace);

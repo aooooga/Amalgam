@@ -26,14 +26,16 @@ and the build-exclusion file syntax. Reports live in
 2. **Establish the current picture.**
    Read the per-map rollups for the maps with recent data, plus the newest 1–2 match reports
    per map. Note: fps avg / 1% low trend, top nodes by **selfms** (that's the ranking that
-   matters), and recurring spike contributors. Check memory (`MEMORY.md` perf entries) for
+   matters), and how the `#heavy` (5%-low) ranking differs from the overall one — that
+   difference is what drives the lows. Check memory (`MEMORY.md` perf entries) for
    prior baselines and the standing optimization backlog before re-deriving conclusions.
 
 3. **Pick targets by expected ms saved, not by how easy the code looks.**
    - Amalgam-owned nodes (hooks, feature code) are directly fixable.
    - Engine nodes (DrawModel, SetupBones, traces) are fixable only by making Amalgam call
      them less: cull, cache, gate by distance/visibility/game-state, reduce per-frame work.
-   - Spike contributors matter for 1% lows even when their average selfms is modest.
+   - A node whose `#heavy` selfms far exceeds its overall selfms matters for the lows even
+     when its average is modest.
    - Skip anything under ~0.05 selfms unless several such wins stack.
 
 4. **Check whether cost is user-config-dependent.** The user plays aimbot-off /
@@ -51,7 +53,7 @@ and the build-exclusion file syntax. Reports live in
    - Exclude the superseded builds in `excluded_builds.txt` so the next rollup measures the
      new build cleanly.
    - The verification itself happens next session: compare the new build's rollup selfms for
-     the targeted nodes (and fps/1% lows) against the recorded baseline, then update the
+     the targeted nodes (and fps/5% lows) against the recorded baseline, then update the
      memory to verified/regressed.
 
 ## Rules of thumb
@@ -62,3 +64,5 @@ and the build-exclusion file syntax. Reports live in
 - A node vanishing from the top-40 is a win; a node's calls/f dropping with flat selfms means
   the per-call cost went up — investigate before celebrating.
 - Never issue two `vprof_*` console commands in one frame (engine defers them into one slot).
+- Use 5% lows as your most important baseline — Those are the heavy moments in the match the 
+  player will feel bad the performance the most, and will need good performance greatly.

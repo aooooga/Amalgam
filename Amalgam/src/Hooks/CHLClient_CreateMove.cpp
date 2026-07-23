@@ -15,6 +15,7 @@
 #include "../Features/Aimbot/TrajectoryGhost/TrajectoryGhost.h"
 #include "../Features/Spectate/Spectate.h"
 #include "../Features/AntiCheatCompatibility/AntiCheatCompatibility.h"
+#include "../Utils/Perf/Tracker.h"
 
 static no_inline void UpdateInfo(CTFPlayer* pLocal, CTFWeaponBase* pWeapon, CUserCmd* pCmd)
 {
@@ -47,27 +48,32 @@ MAKE_HOOK(CHLClient_CreateMove, U::Memory.GetVirtual(I::Client, 21), void,
 	bool* pSendPacket = reinterpret_cast<bool*>(uintptr_t(_AddressOfReturnAddress()) + 0x20);
 	CUserCmd* pCmd = &I::Input->m_pCommands[sequence_number % MULTIPLAYER_BACKUP];
 
-	I::Prediction->Update(I::ClientState->m_nDeltaTick, I::ClientState->m_nDeltaTick > 0, I::ClientState->last_command_ack, I::ClientState->lastoutgoingcommand + I::ClientState->chokedcommands);
+	// Everything below is Amalgam's input path; the tracker bills it per feature
+	// (see Utils/Perf/Tracker.h). The zone opens after the engine's own
+	// CreateMove and prediction update so their cost stays theirs.
+	PROF_ZONE("CreateMove (all)", Perf::GROUP_CREATEMOVE);
 
-	UpdateInfo(pLocal, pWeapon, pCmd);
-		F::Spectate.CreateMove(pCmd);
-		F::Backtrack.CreateMove(pCmd);
-		F::Misc.RunPre(pLocal, pCmd);
-	F::Ticks.Start(pLocal, pCmd);
-		F::Aimbot.Run(pLocal, pWeapon, pCmd);
-	F::Ticks.End(pLocal, pCmd);
-		F::CritHack.Run(pLocal, pWeapon, pCmd);
-		F::NoSpread.Run(pLocal, pWeapon, pCmd);
-		F::Misc.RunPost(pLocal, pCmd);
-		F::PacketManip.Run(pLocal, pWeapon, pCmd, pSendPacket);
-		F::Ticks.CreateMove(pLocal, pWeapon, pCmd, pSendPacket);
-		F::AntiAim.Run(pLocal, pWeapon, pCmd, *pSendPacket);
-		F::AntiCheatCompatibility.CreateMove(pCmd, pSendPacket);
-		F::Visuals.CreateMove(pLocal, pWeapon);
-		F::TrajectoryGhost.Run(pLocal, pWeapon);
-		F::Visuals.LocalAnimations(pLocal, pWeapon, pCmd, *pSendPacket);
-	F::EnginePrediction.End(pLocal, pCmd);
-		F::Resolver.CreateMove();
-		F::NoSpreadHitscan.AskForPlayerPerf();
+	PROF_CALL("IPrediction::Update", Perf::GROUP_ENGINE, I::Prediction->Update(I::ClientState->m_nDeltaTick, I::ClientState->m_nDeltaTick > 0, I::ClientState->last_command_ack, I::ClientState->lastoutgoingcommand + I::ClientState->chokedcommands));
+
+	PROF_CALL("CreateMove::UpdateInfo", Perf::GROUP_CREATEMOVE, UpdateInfo(pLocal, pWeapon, pCmd));
+		PROF_CALL("Spectate::CreateMove", Perf::GROUP_CREATEMOVE, F::Spectate.CreateMove(pCmd));
+		PROF_CALL("Backtrack::CreateMove", Perf::GROUP_CREATEMOVE, F::Backtrack.CreateMove(pCmd));
+		PROF_CALL("Misc::RunPre", Perf::GROUP_CREATEMOVE, F::Misc.RunPre(pLocal, pCmd));
+	PROF_CALL("Ticks::Start", Perf::GROUP_CREATEMOVE, F::Ticks.Start(pLocal, pCmd));
+		PROF_CALL("Aimbot::Run", Perf::GROUP_CREATEMOVE, F::Aimbot.Run(pLocal, pWeapon, pCmd));
+	PROF_CALL("Ticks::End", Perf::GROUP_CREATEMOVE, F::Ticks.End(pLocal, pCmd));
+		PROF_CALL("CritHack::Run", Perf::GROUP_CREATEMOVE, F::CritHack.Run(pLocal, pWeapon, pCmd));
+		PROF_CALL("NoSpread::Run", Perf::GROUP_CREATEMOVE, F::NoSpread.Run(pLocal, pWeapon, pCmd));
+		PROF_CALL("Misc::RunPost", Perf::GROUP_CREATEMOVE, F::Misc.RunPost(pLocal, pCmd));
+		PROF_CALL("PacketManip::Run", Perf::GROUP_CREATEMOVE, F::PacketManip.Run(pLocal, pWeapon, pCmd, pSendPacket));
+		PROF_CALL("Ticks::CreateMove", Perf::GROUP_CREATEMOVE, F::Ticks.CreateMove(pLocal, pWeapon, pCmd, pSendPacket));
+		PROF_CALL("AntiAim::Run", Perf::GROUP_CREATEMOVE, F::AntiAim.Run(pLocal, pWeapon, pCmd, *pSendPacket));
+		PROF_CALL("AntiCheatCompat::CreateMove", Perf::GROUP_CREATEMOVE, F::AntiCheatCompatibility.CreateMove(pCmd, pSendPacket));
+		PROF_CALL("Visuals::CreateMove", Perf::GROUP_CREATEMOVE, F::Visuals.CreateMove(pLocal, pWeapon));
+		PROF_CALL("TrajectoryGhost::Run", Perf::GROUP_CREATEMOVE, F::TrajectoryGhost.Run(pLocal, pWeapon));
+		PROF_CALL("Visuals::LocalAnimations", Perf::GROUP_CREATEMOVE, F::Visuals.LocalAnimations(pLocal, pWeapon, pCmd, *pSendPacket));
+	PROF_CALL("EnginePrediction::End", Perf::GROUP_ENGINE, F::EnginePrediction.End(pLocal, pCmd));
+		PROF_CALL("Resolver::CreateMove", Perf::GROUP_CREATEMOVE, F::Resolver.CreateMove());
+		PROF_CALL("NoSpreadHitscan::AskForPerf", Perf::GROUP_CREATEMOVE, F::NoSpreadHitscan.AskForPlayerPerf());
 	G::Choking = !*pSendPacket, G::LastUserCmd = pCmd;
 }

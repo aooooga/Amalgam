@@ -918,6 +918,8 @@
     <ClCompile Include="src\Features\AntiCheatCompatibility\AntiCheatCompatibility.cpp" />
     <ClCompile Include="src\Features\Debug\Debug.cpp" />
     <ClCompile Include="src\Features\Debug\AutoVprof\AutoVprof.cpp" />
+    <ClCompile Include="src\Features\Debug\ProcessTracker\TrackerOverlay.cpp" />
+    <ClCompile Include="src\Utils\Perf\Tracker.cpp" />
     <ClCompile Include="src\Features\Output\Output.cpp" />
     <ClCompile Include="src\Features\Misc\AutoQueue\AutoQueue.cpp" />
     <ClCompile Include="src\Features\Backtrack\Backtrack.cpp" />
@@ -1238,6 +1240,9 @@
     <ClInclude Include="src\Features\AntiCheatCompatibility\AntiCheatCompatibility.h" />
     <ClInclude Include="src\Features\Debug\Debug.h" />
     <ClInclude Include="src\Features\Debug\AutoVprof\AutoVprof.h" />
+    <ClInclude Include="src\Features\Debug\ProcessTracker\TrackerOverlay.h" />
+    <ClInclude Include="src\Utils\Perf\Tracker.h" />
+    <ClInclude Include="src\Utils\Perf\Perf.h" />
     <ClInclude Include="src\Features\ImGui\Easings\Easings.h" />
     <ClInclude Include="src\Features\Output\Output.h" />
     <ClInclude Include="src\Features\Misc\AutoQueue\AutoQueue.h" />

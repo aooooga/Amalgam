@@ -1,6 +1,7 @@
 #include "AutoVprof.h"
 
 #include "../../../SDK/Definitions/Interfaces/ICVar.h"
+#include "../../../Utils/Perf/Tracker.h"
 
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -29,16 +30,22 @@ extern "C" IMAGE_DOS_HEADER __ImageBase;
 // ---- tunables -----------------------------------------------------------------
 static constexpr double INTERVAL = 1.0;        // seconds of accumulation per report dump
 static constexpr double DUMP_TIMEOUT = 0.75;   // max wait for a report to appear in the log
-static constexpr double SPIKE_FACTOR = 2.0;    // frame > factor * EMA => spike
-static constexpr double SPIKE_FLOOR_MS = 8.0;  // ...and above this absolute floor
-static constexpr int    MAX_SNAPSHOTS = 3;     // retained spike snapshots per match
 static constexpr int    TOP_N = 30;            // nodes kept in per-match report
-static constexpr int    SNAPSHOT_TOP = 8;      // nodes kept per spike snapshot
 static constexpr double PRUNE_PCT = 0.1;       // drop nodes below this % of frame time
 static constexpr int    ROLLUP_N = 5;          // matches averaged in the per-map rollup
 static constexpr int    INTERVAL_TOP = 48;     // nodes retained per interval for 5%-low re-agg
 static constexpr int    HEAVY_TOP = 15;        // nodes in the per-match #heavy (5% low) section
 static constexpr double HEAVY_FRAC = 0.05;     // fraction of frames the heavy section covers
+// Joining a server mid-round means teamplay_round_start already fired, so the
+// event-driven start never happens and the whole session captures nothing. After
+// this long in game with no round event, start capturing anyway.
+static constexpr double MIDJOIN_DELAY = 20.0;
+// ...but don't leave junk files behind for a few seconds of capture.
+static constexpr double MIN_MATCH_SEC = 10.0;
+// Rollup budget for the tracker's rows — these files are read several at a time,
+// so the rollup keeps a shorter list than the per-match report.
+static constexpr int AMALGAM_TOP = 15;
+static constexpr int AMALGAM_HEAVY_TOP = 8;
 
 // vprof_generate_report node line = <name (may contain spaces)> then 10 numeric columns:
 //   0 Calls  1 Calls/Frame  2 Time+Child  3 Pct(incl)  4 Time  5 Pct(self)
@@ -274,6 +281,12 @@ void CAutoVprof::DisableVprof()
 void CAutoVprof::StartMatch()
 {
 	EnsurePaths();
+
+	// A match still active here means its teardown never reached us; write it
+	// before its data is overwritten by the new one.
+	if (m_bMatchActive)
+		FinishMatch();
+
 	ResetMatch();
 
 	m_bMatchActive = true;
@@ -288,6 +301,11 @@ void CAutoVprof::StartMatch()
 	if (auto pCVar = I::CVar->FindVar("con_logfile"))
 		pCVar->SetValue(CAPTURE_NAME);
 
+	// The process tracker records over exactly the same live frames, so its
+	// `#amalgam` sections in the report describe the same match the vprof nodes
+	// above them do.
+	Perf::Tracker.BeginMatch();
+
 	// Enable vprof once for the whole match; per-interval we only reset.
 	UnlockVprof();
 	EnableVprof();
@@ -298,8 +316,6 @@ void CAutoVprof::EnterLive()
 	m_iIntervalFrames = 0;
 	m_iWindowFrames = 0;
 	m_flWindowSumMs = 0.0;
-	m_flWindowWorstMs = 0.0;
-	m_bWindowSpike = false;
 
 	// NB: issue ONLY vprof_reset here. vprof_* are deferred commands sharing one global
 	// slot (executed once/frame in PreUpdateProfile); issuing a second deferred vprof
@@ -308,6 +324,7 @@ void CAutoVprof::EnterLive()
 	I::EngineClient->ClientCmd_Unrestricted("vprof_reset\n");
 	m_flNextDumpTime = SDK::PlatFloatTime() + INTERVAL;
 	m_ePhase = EPhase::Live;
+	Perf::Tracker.SetLive(true);
 }
 
 void CAutoVprof::RequestDump(EAfter eAfter)
@@ -360,7 +377,7 @@ void CAutoVprof::PollDump()
 	{
 		auto vNodes = ParseInterval(sSection);
 		double flAvgMs = m_iWindowFrames ? m_flWindowSumMs / m_iWindowFrames : 0.0;
-		ApplyInterval(vNodes, m_iIntervalFrames, m_bWindowSpike, m_flWindowWorstMs, flAvgMs);
+		ApplyInterval(vNodes, m_iIntervalFrames, flAvgMs);
 	}
 	else if (SDK::PlatFloatTime() < m_flDumpDeadline)
 	{
@@ -371,7 +388,7 @@ void CAutoVprof::PollDump()
 	switch (m_eAfter)
 	{
 	case EAfter::Continue: EnterLive(); break;
-	case EAfter::Pause:    m_ePhase = EPhase::Idle; break; // leave vprof on; just stop dumping
+	case EAfter::Pause:    m_ePhase = EPhase::Idle; Perf::Tracker.SetLive(false); break; // leave vprof on; just stop dumping
 	case EAfter::EndMatch: FinishMatch(); break;           // FinishMatch disables vprof
 	}
 }
@@ -382,11 +399,8 @@ void CAutoVprof::ResetMatch()
 	m_iIntervalFrames = 0;
 	m_iWindowFrames = 0;
 	m_flWindowSumMs = 0.0;
-	m_flWindowWorstMs = 0.0;
-	m_bWindowSpike = false;
 	m_mAgg.clear();
 	m_vFrameMs.clear();
-	m_vSpikes.clear();
 	m_vIntervals.clear();
 	m_sMap.clear();
 	m_sMode.clear();
@@ -400,16 +414,67 @@ void CAutoVprof::FinishMatch()
 	if (auto pCVar = I::CVar->FindVar("con_logfile"))
 		pCVar->SetValue("");
 
-	if (m_bMatchActive && !m_vFrameMs.empty() && !m_mAgg.empty())
+	Perf::Tracker.SetLive(false);
+
+	double flDurSec = 0.0;
+	for (float m : m_vFrameMs)
+		flDurSec += m;
+	flDurSec /= 1000.0;
+
+	// The tracker can have usable data even when the vprof side came back empty
+	// (a short round, a dropped dump), so write the file if either half has
+	// something to say.
+	if (m_bMatchActive && flDurSec >= MIN_MATCH_SEC && (!m_mAgg.empty() || Perf::Tracker.HasMatchData()))
 	{
 		WriteMatch();
 		LoadExclusions(); // re-read fresh so Claude's edits apply without re-injecting
 		UpdateRollup();
 		UpdateManifest();
 	}
+	Perf::Tracker.EndMatch();
 
 	ResetMatch();
 	m_bMatchActive = false;
+	m_bAutoLive = false;
+}
+
+// ---- finalize paths -----------------------------------------------------------
+// A match's data is in memory only until FinishMatch writes it, and the one path
+// that used to reach it - the client_disconnect game event - is not reliably
+// delivered to the client that is itself leaving. Anything that ends a match now
+// goes through one of these instead.
+
+// IBaseClientDLL::LevelShutdown: the engine's own teardown. Runs on disconnect,
+// map change and quit, before the interfaces we write with go away.
+void CAutoVprof::LevelShutdown()
+{
+	if (!m_bMatchActive)
+		return;
+
+	m_bLiveRequested = false;
+	FinishMatch();
+}
+
+// Menu paint: a match left active while out of game means no teardown reached us
+// (or one ran before we were hooked). Cheap enough to check every menu frame.
+void CAutoVprof::FlushOrphaned()
+{
+	if (!m_bMatchActive || I::EngineClient->IsInGame())
+		return;
+
+	m_bLiveRequested = false;
+	FinishMatch();
+}
+
+// DLL unload (F11, host shutdown/restart). Last chance: after this the hooks are
+// gone and the capture is lost.
+void CAutoVprof::Shutdown()
+{
+	if (!m_bMatchActive)
+		return;
+
+	m_bLiveRequested = false;
+	FinishMatch();
 }
 
 // ---- parsing / aggregation ----------------------------------------------------
@@ -461,7 +526,7 @@ std::vector<VprofNode_t> CAutoVprof::ParseInterval(const std::string& sText)
 	return vOut;
 }
 
-void CAutoVprof::ApplyInterval(const std::vector<VprofNode_t>& vNodes, long long iFrames, bool bSpike, double flWorstMs, double flAvgMs)
+void CAutoVprof::ApplyInterval(const std::vector<VprofNode_t>& vNodes, long long iFrames, double flAvgMs)
 {
 	long long w = iFrames > 0 ? iFrames : 1;
 	for (const auto& n : vNodes)
@@ -486,19 +551,6 @@ void CAutoVprof::ApplyInterval(const std::vector<VprofNode_t>& vNodes, long long
 		if (static_cast<int>(tI.m_vNodes.size()) > INTERVAL_TOP)
 			tI.m_vNodes.resize(INTERVAL_TOP);
 		m_vIntervals.push_back(std::move(tI));
-	}
-
-	if (bSpike && static_cast<int>(m_vSpikes.size()) < MAX_SNAPSHOTS)
-	{
-		VprofSpike_t tS;
-		tS.m_flWorstMs = flWorstMs;
-		tS.m_flAvgMs = flAvgMs;
-		tS.m_vTopNodes = vNodes;
-		std::sort(tS.m_vTopNodes.begin(), tS.m_vTopNodes.end(),
-			[](const VprofNode_t& a, const VprofNode_t& b) { return a.SelfMs() > b.SelfMs(); });
-		if (static_cast<int>(tS.m_vTopNodes.size()) > SNAPSHOT_TOP)
-			tS.m_vTopNodes.resize(SNAPSHOT_TOP);
-		m_vSpikes.push_back(std::move(tS));
 	}
 }
 
@@ -633,18 +685,10 @@ void CAutoVprof::WriteMatch()
 		for (const auto& r : vHeavy)
 			f << r.selfMs << " " << r.name << "\n";
 
-		f.precision(1);
-		f << "#spikes count=" << m_vSpikes.size() << "\n";
-		for (const auto& s : m_vSpikes)
-		{
-			f << "worst=" << s.m_flWorstMs << " avg=" << s.m_flAvgMs << " nodes=";
-			for (size_t i = 0; i < s.m_vTopNodes.size(); i++)
-			{
-				if (i) f << ",";
-				f << s.m_vTopNodes[i].m_sName << ":" << std::setprecision(2) << s.m_vTopNodes[i].SelfMs() << std::setprecision(1);
-			}
-			f << "\n";
-		}
+		// The other half of the report: the same match, measured from inside
+		// Amalgam. Everything above is the engine's view (including the work we
+		// caused); everything below attributes it to our own code.
+		Perf::Tracker.WriteMatchSections(f);
 	}
 	catch (...) {}
 }
@@ -654,7 +698,16 @@ void CAutoVprof::UpdateRollup()
 {
 	struct Node { double selfPct; double selfMs; std::string name; };
 	struct HNode { double selfMs; std::string name; };
-	struct Rec { std::string build; double fps1 = 0, fps5 = 0, fpsAvg = 0; std::vector<Node> nodes; std::vector<HNode> heavyNodes; std::vector<std::string> spikeNodes; std::string fname; };
+	// Amalgam-side rows, from the tracker's sections of each match file.
+	struct ANode { double selfMs; double calls; std::string name; };
+	struct Rec
+	{
+		std::string build; double fps1 = 0, fps5 = 0, fpsAvg = 0;
+		std::vector<Node> nodes; std::vector<HNode> heavyNodes;
+		double amSelfMs = 0, amShare = 0, amOverhead = 0; bool amPresent = false;
+		std::vector<ANode> amZones, amHeavy;
+		std::string fname;
+	};
 
 	std::vector<Rec> vAll;
 	std::string sPrefix = m_sMap + "_";
@@ -673,14 +726,39 @@ void CAutoVprof::UpdateRollup()
 			r.fname = fn;
 			std::ifstream f(e.path());
 			std::string sLine;
-			int iSect = 0; // 0 header, 1 nodes, 2 spikes, 3 heavy (5% low)
+			// 0 header, 1 nodes, 3 heavy (5% low),
+				// 4 amalgam zones, 5 amalgam heavy, 6 tracker sections not rolled up
+				int iSect = 0;
 			while (std::getline(f, sLine))
 			{
 				while (!sLine.empty() && sLine.back() == '\r')
 					sLine.pop_back();
 				if (sLine.rfind("#nodes", 0) == 0) { iSect = 1; continue; }
-				if (sLine.rfind("#spikes", 0) == 0) { iSect = 2; continue; }
+				// spike snapshots were dropped from the format; older match files
+				// still carry the section, so it is recognised and skipped
+				if (sLine.rfind("#spikes", 0) == 0) { iSect = 6; continue; }
 				if (sLine.rfind("#heavy", 0) == 0) { iSect = 3; continue; }
+				// longest first: every tracker section starts with "#amalgam"
+				if (sLine.rfind("#amalgam_zones", 0) == 0) { iSect = 4; continue; }
+				if (sLine.rfind("#amalgam_heavy", 0) == 0) { iSect = 5; continue; }
+				if (sLine.rfind("#amalgam_counters", 0) == 0 || sLine.rfind("#amalgam_worst", 0) == 0
+					|| sLine.rfind("#amalgam_groups", 0) == 0) { iSect = 6; continue; }
+				if (sLine.rfind("#amalgam", 0) == 0)
+				{
+					auto grabAm = [&](const char* key) -> double
+					{
+						auto p = sLine.find(key);
+						return p == std::string::npos ? 0.0 : std::strtod(sLine.c_str() + p + std::strlen(key), nullptr);
+					};
+					r.amSelfMs = grabAm("selfms=");
+					r.amShare = grabAm("share=");
+					r.amOverhead = grabAm("overhead=");
+					r.amPresent = true;
+					iSect = 6;
+					continue;
+				}
+				if (!sLine.empty() && sLine[0] == '#')
+					continue; // in-section comment
 
 				if (iSect == 0)
 				{
@@ -724,23 +802,31 @@ void CAutoVprof::UpdateRollup()
 						r.heavyNodes.push_back(std::move(n));
 					}
 				}
-				else if (iSect == 2)
-				{
-					auto p = sLine.find("nodes=");
-					if (p != std::string::npos)
-					{
-						std::string list = sLine.substr(p + 6);
-						std::stringstream ls(list);
-						std::string item;
-						while (std::getline(ls, item, ','))
+				else if (iSect == 4)
+					{	// selfms inclms calls/f peakms group name
+						auto v = Tokenize(sLine);
+						if (v.size() >= 6)
 						{
-							auto c = item.find(':');
-							std::string name = c == std::string::npos ? item : item.substr(0, c);
-							if (!name.empty())
-								r.spikeNodes.push_back(name);
+							ANode n;
+							n.selfMs = std::strtod(v[0].c_str(), nullptr);
+							n.calls = std::strtod(v[2].c_str(), nullptr);
+							for (size_t i = 5; i < v.size(); i++)
+								n.name += (i > 5 ? " " : "") + v[i];
+							r.amZones.push_back(std::move(n));
 						}
 					}
-				}
+					else if (iSect == 5)
+					{	// selfms name
+						auto v = Tokenize(sLine);
+						if (v.size() >= 2)
+						{
+							ANode n;
+							n.selfMs = std::strtod(v[0].c_str(), nullptr);
+							for (size_t i = 1; i < v.size(); i++)
+								n.name += (i > 1 ? " " : "") + v[i];
+							r.amHeavy.push_back(std::move(n));
+						}
+					}
 			}
 			vAll.push_back(std::move(r));
 		}
@@ -769,7 +855,6 @@ void CAutoVprof::UpdateRollup()
 	std::unordered_map<std::string, std::pair<double, double>> mAgg; // name -> (sum self%, sum selfms)
 	std::unordered_map<std::string, double> mHeavy;                  // name -> sum heavy selfms
 	int iHeavyMatches = 0;                                           // matches with a #heavy section
-	std::unordered_map<std::string, int> mSpike;
 	for (auto* r : vUsed)
 	{
 		for (const auto& n : r->nodes)
@@ -782,10 +867,31 @@ void CAutoVprof::UpdateRollup()
 			iHeavyMatches++;
 		for (const auto& n : r->heavyNodes)
 			mHeavy[n.name] += n.selfMs;
-		std::unordered_set<std::string> seen;
-		for (const auto& s : r->spikeNodes)
-			if (seen.insert(s).second)
-				mSpike[s]++;
+	}
+
+	// ---- tracker side: average the Amalgam zones over the same matches ----
+	std::unordered_map<std::string, std::pair<double, double>> mAmZones; // name -> (sum selfms, sum calls)
+	std::unordered_map<std::string, double> mAmHeavy;
+	int iAmMatches = 0, iAmHeavyMatches = 0;
+	double flAmSelfMs = 0.0, flAmShare = 0.0, flAmOverhead = 0.0;
+	for (auto* r : vUsed)
+	{
+		if (!r->amPresent)
+			continue;
+		iAmMatches++;
+		flAmSelfMs += r->amSelfMs;
+		flAmShare += r->amShare;
+		flAmOverhead += r->amOverhead;
+		for (const auto& n : r->amZones)
+		{
+			auto& a = mAmZones[n.name];
+			a.first += n.selfMs;
+			a.second += n.calls;
+		}
+		if (!r->amHeavy.empty())
+			iAmHeavyMatches++;
+		for (const auto& n : r->amHeavy)
+			mAmHeavy[n.name] += n.selfMs;
 	}
 
 	struct ARow { double selfPct; double selfMs; std::string name; };
@@ -796,9 +902,6 @@ void CAutoVprof::UpdateRollup()
 	std::sort(vRows.begin(), vRows.end(), [](const ARow& a, const ARow& b) { return a.selfMs > b.selfMs; });
 	if (static_cast<int>(vRows.size()) > TOP_N)
 		vRows.resize(TOP_N);
-
-	std::vector<std::pair<std::string, int>> vSpk(mSpike.begin(), mSpike.end());
-	std::sort(vSpk.begin(), vSpk.end(), [](auto& a, auto& b) { return a.second > b.second; });
 
 	try
 	{
@@ -831,10 +934,40 @@ void CAutoVprof::UpdateRollup()
 				f << r.selfMs << " " << r.name << "\n";
 		}
 		f.precision(1);
-		f << "#recurring_spikes\n";
-		for (const auto& [name, cnt] : vSpk)
-			f << name << "(" << cnt << "/" << iUsed << ") ";
-		f << "\n";
+
+		// ---- Amalgam's own zones, averaged over the same matches ----
+		if (iAmMatches > 0)
+		{
+			f << std::setprecision(3);
+			f << "#amalgam selfms=" << flAmSelfMs / iAmMatches
+			  << " share=" << std::setprecision(1) << flAmShare / iAmMatches << "%"
+			  << std::setprecision(3) << " overhead=" << flAmOverhead / iAmMatches
+			  << " (avg of " << iAmMatches << ")\n";
+
+			struct AR { double selfMs; double calls; std::string name; };
+			std::vector<AR> vA;
+			for (const auto& [name, a] : mAmZones)
+				vA.push_back({ a.first / iAmMatches, a.second / iAmMatches, name });
+			std::sort(vA.begin(), vA.end(), [](const AR& a, const AR& b) { return a.selfMs > b.selfMs; });
+			if (static_cast<int>(vA.size()) > AMALGAM_TOP)
+				vA.resize(AMALGAM_TOP);
+			f << "#amalgam_zones selfms calls/f name\n";
+			for (const auto& r : vA)
+				f << r.selfMs << " " << std::setprecision(1) << r.calls << " " << std::setprecision(3) << r.name << "\n";
+
+			if (iAmHeavyMatches > 0)
+			{
+				std::vector<AR> vH;
+				for (const auto& [name, ms] : mAmHeavy)
+					vH.push_back({ ms / iAmHeavyMatches, 0.0, name });
+				std::sort(vH.begin(), vH.end(), [](const AR& a, const AR& b) { return a.selfMs > b.selfMs; });
+				if (static_cast<int>(vH.size()) > AMALGAM_HEAVY_TOP)
+					vH.resize(AMALGAM_HEAVY_TOP);
+				f << "#amalgam_heavy selfms name (5%low frames, avg of " << iAmHeavyMatches << ")\n";
+				for (const auto& r : vH)
+					f << r.selfMs << " " << r.name << "\n";
+			}
+		}
 	}
 	catch (...) {}
 }
@@ -910,6 +1043,7 @@ void CAutoVprof::Event(uint32_t uHash)
 	{
 	case FNV1A::Hash32Const("teamplay_round_start"):
 		m_bLiveRequested = true;
+		m_bAutoLive = false; // the real event took over from the mid-join fallback
 		break;
 	case FNV1A::Hash32Const("teamplay_round_win"):
 		m_bLiveRequested = false;
@@ -932,13 +1066,12 @@ void CAutoVprof::Run()
 {
 	if (!Vars::Debug::AutoVprof.Value)
 	{
+		// Toggling the feature off used to discard the capture outright. Write it
+		// instead - FinishMatch also disables vprof and releases con_logfile.
 		if (m_bMatchActive)
 		{
-			DisableVprof();
-			if (auto pCVar = I::CVar->FindVar("con_logfile"))
-				pCVar->SetValue("");
-			ResetMatch();
-			m_bMatchActive = false;
+			m_bLiveRequested = false;
+			FinishMatch();
 		}
 		return;
 	}
@@ -950,16 +1083,26 @@ void CAutoVprof::Run()
 	m_flLastFrame = flNow;
 	if (flDtMs < 0.0 || flDtMs > 1000.0)
 		flDtMs = 0.0; // ignore load hitches / alt-tab
-	if (flDtMs > 0.0)
+
+	// Match-end finalize happens in Event() / LevelShutdown() / FlushOrphaned():
+	// leaving a match stops in-game painting, so this function cannot be relied
+	// on to flush.
+	if (!I::EngineClient->IsInGame())
 	{
-		if (!m_bEMASeeded) { m_flEMAms = flDtMs; m_bEMASeeded = true; }
-		else m_flEMAms = m_flEMAms * 0.9 + flDtMs * 0.1;
+		m_flInGameSince = 0.0;
+		m_bAutoLive = false;
+		return;
 	}
 
-	// Match-end finalize is handled synchronously in Event() (disconnect stops in-game
-	// painting, so Run() can't be relied on to flush).
-	if (!I::EngineClient->IsInGame())
-		return;
+	if (!m_flInGameSince)
+		m_flInGameSince = flNow;
+
+	// Joined a round already in progress: teamplay_round_start fired before we
+	// connected, so nothing would ever start the capture and the entire session
+	// - however long it ran - would produce no report at all. Start anyway once
+	// we've been in game long enough for the join to have settled.
+	if (!m_bLiveRequested && !m_bMatchActive && !m_bAutoLive && flNow - m_flInGameSince > MIDJOIN_DELAY)
+		m_bLiveRequested = m_bAutoLive = true;
 
 	if (m_bLiveRequested && !m_bMatchActive)
 	{
@@ -985,10 +1128,6 @@ void CAutoVprof::Run()
 			m_iIntervalFrames++;
 			m_iWindowFrames++;
 			m_flWindowSumMs += flDtMs;
-			if (flDtMs > m_flWindowWorstMs)
-				m_flWindowWorstMs = flDtMs;
-			if (m_bEMASeeded && flDtMs > SPIKE_FACTOR * m_flEMAms && flDtMs > SPIKE_FLOOR_MS)
-				m_bWindowSpike = true;
 		}
 		if (flNow >= m_flNextDumpTime && m_iIntervalFrames > 0)
 			RequestDump(EAfter::Continue);

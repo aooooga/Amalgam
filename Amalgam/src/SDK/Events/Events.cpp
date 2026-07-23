@@ -56,6 +56,12 @@ void CEventListener::FireGameEvent(IGameEvent* pEvent)
 		H::Entities.ReportDamage(I::EngineClient->GetPlayerForUserID(pEvent->GetInt("userid")));
 
 	F::Output.Event(pEvent, uHash, pLocal);
+
+	// Ahead of the demo early-out: profiling a demo playback is legitimate, and
+	// more importantly the round/match boundaries are what open and close a
+	// capture - missing them there means a demo session records nothing.
+	F::AutoVprof.Event(uHash);
+
 	if (I::EngineClient->IsPlayingDemo())
 		return;
 
@@ -63,7 +69,6 @@ void CEventListener::FireGameEvent(IGameEvent* pEvent)
 	F::AutoHeal.Event(pEvent, uHash);
 	F::Misc.Event(pEvent, uHash);
 	F::Visuals.Event(pEvent, uHash);
-	F::AutoVprof.Event(uHash);
 	switch (uHash)
 	{
 	case FNV1A::Hash32Const("player_hurt"):

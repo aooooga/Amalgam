@@ -890,7 +890,7 @@ NAMESPACE_BEGIN(Vars)
 			CVar(RefreshInterval, VA_LIST("Refresh interval", "Sentry range refresh interval"), 1.f, VISUAL | SLIDER_MIN | SLIDER_PRECISION, 0.25f, 5.f, 0.25f, "%gs");
 			CVar(DisabledAlpha, VA_LIST("Disabled alpha", "Sentry range disabled alpha"), 40.f, VISUAL | SLIDER_CLAMP | SLIDER_PRECISION, 0.f, 100.f, 5.f, "%g%%");
 
-			CVar(TraceBudget, "Sentry range trace budget", 300, NOSAVE | DEBUGVAR | SLIDER_MIN, 16, 2048);
+			CVar(TraceBudget, "Sentry range trace budget", 800, NOSAVE | DEBUGVAR | SLIDER_MIN, 16, 4096);
 			CVar(TargetHeight, "Sentry range target height", 68.f, NOSAVE | DEBUGVAR | SLIDER_MIN | SLIDER_PRECISION, 0.f, 83.f, 1.f);
 		NAMESPACE_END(SentryRange)
 
@@ -1150,5 +1150,9 @@ NAMESPACE_BEGIN(Vars)
 
 		CVar(DrawHitboxes, "Show hitboxes", false, NOSAVE);
 		CVar(AutoVprof, "Auto vprof", false, NOBIND);
+		// Amalgam's own profiler. Auto vprof force-enables it while capturing, so the
+		// reports always pair engine cost with the feature that asked for it.
+		CVar(ProcessTracker, "Process tracker", false, NOBIND);
+		CVar(ProcessTrackerOverlay, "Tracker overlay", false, NOSAVE);
 	NAMESPACE_END(Debug)
 NAMESPACE_END(Vars)

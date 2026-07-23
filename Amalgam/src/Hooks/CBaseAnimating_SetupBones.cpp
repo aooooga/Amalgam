@@ -1,6 +1,7 @@
 #include "../SDK/SDK.h"
 
 #include "../Features/Backtrack/Backtrack.h"
+#include "../Utils/Perf/Tracker.h"
 
 MAKE_SIGNATURE(CBaseAnimating_SetupBones, "client.dll", "48 8B C4 44 89 40 ? 48 89 50 ? 55 53", 0x0);
 
@@ -8,6 +9,13 @@ MAKE_HOOK(CBaseAnimating_SetupBones, S::CBaseAnimating_SetupBones(), bool,
 	void* rcx, matrix3x4* pBoneToWorldOut, int nMaxBones, int boneMask, float currentTime)
 {
 	DEBUG_RETURN(CBaseAnimating_SetupBones, rcx, pBoneToWorldOut, nMaxBones, boneMask, currentTime);
+
+	// Bone setups are the single most expensive thing Amalgam can provoke (every
+	// extra cham/glow/rearview draw can force one). Charged to the open zone so
+	// the report says which pass asked for them; the cache-hit path below simply
+	// never reaches the engine, which is visible as bones charged >> vprof's
+	// SetupBones cost.
+	PROF_CHARGE(Perf::COUNTER_BONES);
 
 	if (!Vars::Misc::Game::SetupBonesOptimization.Value || F::Backtrack.IsSettingUpBones())
 		return CALL_ORIGINAL(rcx, pBoneToWorldOut, nMaxBones, boneMask, currentTime);

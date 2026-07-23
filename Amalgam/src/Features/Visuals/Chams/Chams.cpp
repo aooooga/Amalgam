@@ -19,30 +19,25 @@ void CChams::End()
 	I::ModelRender->ForcedMaterialOverride(m_pOriginalMaterial, m_iOriginalOverride);
 }
 
-void CChams::DrawModel(CBaseEntity* pEntity, const Chams_t& tChams, IMatRenderContext* pRenderContext, int iModel, bool bTwoModel)
+void CChams::DrawModel(CBaseEntity* pEntity, const Chams_t& tChams, const ChamsFacts_t& tFacts, IMatRenderContext* pRenderContext, int iModel, bool bTwoModel)
 {
 	// Held-weapon entities follow each layer's Weapon body-part bit; when no
 	// layer includes it, leave the original weapon model untouched entirely
-	// (no suppression, no cham).
-	const bool bWeaponEntity = pEntity->IsBaseCombatWeapon();
-	if (bWeaponEntity)
-	{
-		const auto HasWeapon = [](const std::vector<std::pair<std::string, MaterialColor_t>>& v)
-		{
-			return std::ranges::any_of(v, [](const auto& tPair) { return tPair.second.BodyParts & BODYPART_WEAPON; });
-		};
-		if (!HasWeapon(tChams.Visible) && !HasWeapon(tChams.Occluded))
-			return;
-	}
+	// (no suppression, no cham). Both this and the layer-set shape below come
+	// from tFacts, resolved once per net update instead of per render pass.
+	const bool bWeaponEntity = tFacts.m_bWeaponEntity;
+	if (bWeaponEntity && !tFacts.m_bWeaponInAny)
+		return;
 
 	if (!m_iFlags && iModel == ModelEnum::Visible)
-		m_mEntities[pEntity->entindex()];
+		m_mEntities.Touch(tFacts.m_iIndex);
 
 	// Local player's distance to the entity, for distance-based material colors.
 	// Resolved lazily: this runs per entity per render pass (x6 under FlexFOV's cube
-	// rig), while distance colors are off by default, so the GetLocal virtual calls
-	// and the sqrt would otherwise be spent for a value nothing reads. -1 means
-	// "unknown", which is what GetColor already falls back to.
+	// rig), while distance colors are off by default, so the origin fetch and the
+	// sqrt would otherwise be spent for a value nothing reads. -1 means "unknown",
+	// which is what GetColor already falls back to. The local player's own origin
+	// is resolved once per pass by RenderMain.
 	float flDistance = -1.f;
 	bool bDistanceValid = false;
 	const auto GetDistance = [&]() -> float
@@ -50,8 +45,8 @@ void CChams::DrawModel(CBaseEntity* pEntity, const Chams_t& tChams, IMatRenderCo
 		if (!bDistanceValid)
 		{
 			bDistanceValid = true;
-			if (auto pLocal = H::Entities.GetLocal())
-				flDistance = pLocal->GetAbsOrigin().DistTo(pEntity->GetAbsOrigin());
+			if (m_bLocalValid)
+				flDistance = m_vLocalOrigin.DistTo(pEntity->GetAbsOrigin());
 		}
 		return flDistance;
 	};
@@ -62,18 +57,37 @@ void CChams::DrawModel(CBaseEntity* pEntity, const Chams_t& tChams, IMatRenderCo
 		return tColor.Distance.Enabled ? tColor.GetColor(GetDistance()) : tColor.Color;
 	};
 
-	bool bOccluded = !tChams.Occluded.empty();
-	bool bSame = tChams.Visible == tChams.Occluded;
+	// The player's held weapon, for layers that carry the Weapon body part.
+	// Resolved on the first such layer and reused: the handle deref is a
+	// networked-property read behind two virtual casts and the layer list is
+	// walked twice per entity per pass.
+	CTFWeaponBase* pHeldWeapon = nullptr;
+	bool bHeldWeaponResolved = false;
+	const auto GetHeldWeapon = [&]() -> CTFWeaponBase*
+	{
+		if (!bHeldWeaponResolved)
+		{
+			bHeldWeaponResolved = true;
+			if (tFacts.m_bPlayer)
+				pHeldWeapon = pEntity->As<CTFPlayer>()->m_hActiveWeapon()->As<CTFWeaponBase>();
+		}
+		return pHeldWeapon;
+	};
+
+	const bool bOccluded = tFacts.m_bOccluded;
+	const bool bSame = tFacts.m_bSame;
 	bTwoModel &= bOccluded && !bSame;
 
-	// Passes that draw nothing return below without touching render state, so
-	// Begin()'s 3 virtual snapshot calls would be pure waste. Skip it up front:
-	// non-two-model Visible with Visible==Occluded, and non-two-model Occluded
-	// with no occluded layers, both early-return before any draw or End().
+	// Passes that draw nothing return here without touching render state.
+	// Non-two-model Visible with Visible==Occluded, and non-two-model Occluded
+	// with no occluded layers, both draw nothing at all.
 	if (!bTwoModel && (iModel == ModelEnum::Visible ? bSame : !bOccluded))
 		return;
 
-	Begin();
+	// Note: the render-state snapshot/restore (Begin/End) is hoisted to
+	// RenderMain - it is identical for every entity in a pass, and doing it per
+	// entity spent six virtual calls per entity per pass restoring state that
+	// the next entity immediately overwrote.
 	switch (iModel)
 	{
 	case ModelEnum::Visible:
@@ -136,12 +150,12 @@ void CChams::DrawModel(CBaseEntity* pEntity, const Chams_t& tChams, IMatRenderCo
 			pEntity->DrawModel(STUDIO_RENDER);
 			// Weapon option: also cham the held weapon with this material and
 			// suppress its original model, like the player's.
-			if (tColor.BodyParts & BODYPART_WEAPON && pEntity->IsPlayer())
+			if (tColor.BodyParts & BODYPART_WEAPON)
 			{
-				if (auto pWeapon = pEntity->As<CTFPlayer>()->m_hActiveWeapon()->As<CTFWeaponBase>())
+				if (auto pWeapon = GetHeldWeapon())
 				{
 					if (iModel == ModelEnum::Visible)
-						m_mEntities[pWeapon->entindex()];
+						m_mEntities.Touch(pWeapon->entindex());
 					pWeapon->DrawModel(STUDIO_RENDER);
 				}
 			}
@@ -215,12 +229,12 @@ void CChams::DrawModel(CBaseEntity* pEntity, const Chams_t& tChams, IMatRenderCo
 			pEntity->DrawModel(STUDIO_RENDER);
 			// Weapon option: also cham the held weapon with this material and
 			// suppress its original model, like the player's.
-			if (tColor.BodyParts & BODYPART_WEAPON && pEntity->IsPlayer())
+			if (tColor.BodyParts & BODYPART_WEAPON)
 			{
-				if (auto pWeapon = pEntity->As<CTFPlayer>()->m_hActiveWeapon()->As<CTFWeaponBase>())
+				if (auto pWeapon = GetHeldWeapon())
 				{
 					if (iModel == ModelEnum::Visible)
-						m_mEntities[pWeapon->entindex()];
+						m_mEntities.Touch(pWeapon->entindex());
 					pWeapon->DrawModel(STUDIO_RENDER);
 				}
 			}
@@ -239,7 +253,6 @@ void CChams::DrawModel(CBaseEntity* pEntity, const Chams_t& tChams, IMatRenderCo
 		pRenderContext->DepthRange(0.f, 1.f);
 	}
 	}
-	End();
 }
 
 
@@ -280,23 +293,81 @@ int CChams::GetCrosshairTarget(CTFPlayer* pLocal)
 }
 
 // Targeted-material layers that apply to the body part under the crosshair;
-// an unknown part matches every layer.
-static std::vector<std::pair<std::string, MaterialColor_t>> FilterTargetLayers(const std::vector<std::pair<std::string, MaterialColor_t>>& vLayers, int iPart)
+// an unknown part matches every layer. Fills a caller-owned vector so the
+// per-frame rebuild reuses its allocation.
+static void FilterTargetLayers(const std::vector<std::pair<std::string, MaterialColor_t>>& vLayers, int iPart, std::vector<std::pair<std::string, MaterialColor_t>>& vOut)
 {
-	std::vector<std::pair<std::string, MaterialColor_t>> vOut;
+	vOut.clear();
 	for (auto& tPair : vLayers)
 	{
 		if (!iPart || tPair.second.BodyParts & iPart)
 			vOut.push_back(tPair);
 	}
-	return vOut;
+}
+
+// A visible set that reproduces the engine's own draw exactly: one "Original"
+// layer, untinted, opaque, no fullbright / Ignore Z / body-part subset. For
+// these the suppress-and-redraw round trip is pure waste - the engine's scene
+// draw IS the visible cham (see OriginalChamsOptimization).
+static bool IsPlainOriginal(const std::vector<std::pair<std::string, MaterialColor_t>>& vVisible)
+{
+	if (vVisible.size() != 1)
+		return false;
+
+	auto& [sName, tColor] = vVisible.front();
+	return FNV1A::Hash32(sName.c_str()) == FNV1A::Hash32Const("Original")
+		&& !tColor.Fullbright && !tColor.IgnoreZ
+		&& (tColor.BodyParts & BODYPART_ALL) == BODYPART_ALL
+		&& !tColor.Distance.Enabled
+		&& tColor.Color == Color_t(255, 255, 255, 255);
+}
+
+// Everything about an entity + cham set that stays constant between render
+// passes, resolved once here (per net update / per frame) instead of on every
+// DrawModel call. See ChamsFacts_t. pChams may be null for entities that only
+// carry a targeted material - the identity fields are still filled in, since
+// the target lookup needs the entindex.
+static ChamsFacts_t MakeFacts(CBaseEntity* pEntity, const Chams_t* pChams)
+{
+	ChamsFacts_t tFacts = {};
+	tFacts.m_iIndex = pEntity->entindex();
+	tFacts.m_bPlayer = pEntity->IsPlayer();
+	tFacts.m_bWeaponEntity = pEntity->IsBaseCombatWeapon();
+	tFacts.m_bUseOwner = tFacts.m_bWeaponEntity || pEntity->IsWearable();
+	if (!pChams)
+		return tFacts;
+
+	const auto HasWeapon = [](const std::vector<std::pair<std::string, MaterialColor_t>>& v)
+	{
+		return std::ranges::any_of(v, [](const auto& tPair) { return tPair.second.BodyParts & BODYPART_WEAPON; });
+	};
+
+	tFacts.m_bOccluded = !pChams->Occluded.empty();
+	tFacts.m_bSame = pChams->Visible == pChams->Occluded;
+	tFacts.m_bWeaponInAny = HasWeapon(pChams->Visible) || HasWeapon(pChams->Occluded);
+	tFacts.m_bPassthrough = IsPlainOriginal(pChams->Visible)
+		&& (pChams->Occluded.empty() || pChams->Occluded != pChams->Visible);
+	return tFacts;
 }
 
 void CChams::Store(CTFPlayer* pLocal)
 {
 	m_vEntities.clear();
+	m_bAnyOccluded = false;
 	if (!pLocal || !F::Groups.GroupsActive())
 		return;
+
+	const auto AddEntity = [&](CBaseEntity* pEntity, Chams_t* pChams, int iFlags, Chams_t* pTargetChams)
+	{
+		ChamsInfo_t tInfo = {};
+		tInfo.m_pEntity = pEntity;
+		tInfo.m_pChams = pChams;
+		tInfo.m_iFlags = iFlags;
+		tInfo.m_pTargetChams = pTargetChams;
+		tInfo.m_tFacts = MakeFacts(pEntity, pChams);
+		m_bAnyOccluded |= tInfo.m_tFacts.m_bOccluded;
+		m_vEntities.push_back(tInfo);
+	};
 
 	for (auto& [pEntity, pGroup] : F::Groups.GetGroup())
 	{
@@ -310,7 +381,7 @@ void CChams::Store(CTFPlayer* pLocal)
 		const bool bTarget = pGroup->m_tTargetChams(false);
 		if ((bChams || bTarget) && !pEntity->IsWearableVM()
 			&& SDK::IsOnScreen(pEntity, pEntity->IsBaseCombatWeapon() || pEntity->IsWearable()))
-			m_vEntities.emplace_back(pEntity, bChams ? &pGroup->m_tChams : nullptr, 0, bTarget ? &pGroup->m_tTargetChams : nullptr);
+			AddEntity(pEntity, bChams ? &pGroup->m_tChams : nullptr, 0, bTarget ? &pGroup->m_tTargetChams : nullptr);
 
 		if (pEntity->IsPlayer() && pEntity != pLocal && pGroup->m_iBacktrack & BacktrackEnum::Enabled && pGroup->m_tBacktrackChams(false)
 			&& (F::Backtrack.GetFakeLatency() || F::Backtrack.GetFakeInterp() > G::Lerp || F::Backtrack.GetWindow()))
@@ -325,7 +396,7 @@ void CChams::Store(CTFPlayer* pLocal)
 					bShowFriendly = true, bShowEnemy = false;
 
 				if (bShowEnemy && pEntity->m_iTeamNum() != pLocal->m_iTeamNum() || bShowFriendly && pEntity->m_iTeamNum() == pLocal->m_iTeamNum())
-					m_vEntities.emplace_back(pEntity, &pGroup->m_tBacktrackChams, pGroup->m_iBacktrack);
+					AddEntity(pEntity, &pGroup->m_tBacktrackChams, pGroup->m_iBacktrack, nullptr);
 			}
 		}
 	}
@@ -334,7 +405,7 @@ void CChams::Store(CTFPlayer* pLocal)
 	if (F::FakeAngle.bDrawChams && F::FakeAngle.bBonesSetup
 		&& F::Groups.GetGroup(TargetsEnum::FakeAngle, pGroup) && pGroup->m_tChams(false))
 	{	// fakeangle
-		m_vEntities.emplace_back(pLocal, &pGroup->m_tChams, 1);
+		AddEntity(pLocal, &pGroup->m_tChams, 1, nullptr);
 	}
 }
 
@@ -368,12 +439,42 @@ void CChams::UpdateTarget()
 	if (!pLocal || !I::EngineClient->IsInGame())
 	{
 		m_vEntities.clear();
-		m_mEntities.clear();
+		m_mEntities.Clear();
 		m_iTargetedEntity = m_iTargetedPart = 0;
+		m_bTargetValid = false;
 		return;
 	}
 
 	m_iTargetedEntity = GetCrosshairTarget(pLocal);
+
+	// The crosshair-targeted entity draws with its group's targeted material on
+	// both the visible and occluded passes (a solid, always-on-top highlight)
+	// instead of its regular chams. Built here, once per frame: only one entity
+	// is ever targeted, and RenderMain runs once per scene pass (six times over
+	// under FlexFOV's cube rig) while this set only depends on the trace above.
+	//
+	// Occluded stays empty: a crosshair target is visible by definition, and the
+	// visible pass honors each layer's Ignore Z (the occluded pass would force
+	// always-on-top regardless of it).
+	m_bTargetValid = false;
+	if (m_iTargetedEntity)
+	{
+		for (auto& tInfo : m_vEntities)
+		{
+			if (!tInfo.m_pTargetChams || tInfo.m_tFacts.m_iIndex != m_iTargetedEntity)
+				continue;
+
+			// Only the layers assigned to the body part under the crosshair.
+			FilterTargetLayers(tInfo.m_pTargetChams->Visible, m_iTargetedPart, m_tTarget.Visible);
+			m_tTarget.Occluded.clear();
+			if (!m_tTarget.Visible.empty())
+			{
+				m_tTargetFacts = MakeFacts(tInfo.m_pEntity, &m_tTarget);
+				m_bTargetValid = true;
+			}
+			break;
+		}
+	}
 
 	for (auto& tInfo : m_vEntities)
 	{
@@ -382,31 +483,64 @@ void CChams::UpdateTarget()
 		if (tInfo.m_iFlags || tInfo.m_pChams || !tInfo.m_pTargetChams)
 			continue;
 
-		const int iIndex = tInfo.m_pEntity->entindex();
-		const bool bDraws = m_iTargetedEntity && iIndex == m_iTargetedEntity
-			&& std::ranges::any_of(tInfo.m_pTargetChams->Visible, [&](const auto& tPair) { return !m_iTargetedPart || tPair.second.BodyParts & m_iTargetedPart; });
-		if (bDraws)
-			m_mEntities[iIndex];
+		const int iIndex = tInfo.m_tFacts.m_iIndex;
+		// Same condition the old per-entity any_of tested: the entity is the
+		// target and at least one of its layers covers the crosshair's body part
+		// (which is exactly what the filtered set above being non-empty means).
+		if (m_bTargetValid && iIndex == m_iTargetedEntity)
+			m_mEntities.Touch(iIndex);
 		else
-			m_mEntities.erase(iIndex);
+			m_mEntities.Erase(iIndex);
 	}
 }
 
-// A visible set that reproduces the engine's own draw exactly: one "Original"
-// layer, untinted, opaque, no fullbright / Ignore Z / body-part subset. For
-// these the suppress-and-redraw round trip is pure waste - the engine's scene
-// draw IS the visible cham (see OriginalChamsOptimization).
-static bool IsPlainOriginal(const std::vector<std::pair<std::string, MaterialColor_t>>& vVisible)
+// SDK::IsOnScreen's screen-bounds test against the camera of the pass being
+// rendered, with a generous margin.
+//
+// Store()'s own on-screen test runs at FRAME_NET_UPDATE_END - up to a whole
+// frame stale, and against the previous frame's camera. Chams redraws are the
+// draws Amalgam owns, and during a fast flick (exactly the moments the 5% lows
+// are made of) a good part of the stored set has already swung out of view.
+// Re-testing here against the live camera skips those redraws outright.
+//
+// The margin (a quarter of the screen on each side) is the safety: the test
+// works off collision bounds, so a model whose geometry reaches past them stays
+// covered, and the failure mode of a wrong answer is one frame of an uncham'd
+// model at the very edge of the screen, not a missing one.
+static bool IsOnScreenLoose(CBaseEntity* pEntity)
 {
-	if (vVisible.size() != 1)
+	const Vec3 vOrigin = pEntity->GetAbsOrigin();
+	const Vec3 vMins = pEntity->m_vecMins(), vMaxs = pEntity->m_vecMaxs();
+	const Vec3 vPoints[] = {
+		Vec3(0.f, 0.f, vMins.z),
+		Vec3(0.f, 0.f, vMaxs.z),
+		Vec3(vMins.x, vMins.y, (vMins.z + vMaxs.z) * 0.5f),
+		Vec3(vMins.x, vMaxs.y, (vMins.z + vMaxs.z) * 0.5f),
+		Vec3(vMaxs.x, vMins.y, (vMins.z + vMaxs.z) * 0.5f),
+		Vec3(vMaxs.x, vMaxs.y, (vMins.z + vMaxs.z) * 0.5f)
+	};
+
+	float flLeft = 0.f, flRight = 0.f, flTop = 0.f, flBottom = 0.f;
+	bool bInit = false;
+	for (int n = 0; n < 6; n++)
+	{
+		Vec3 vScreen;
+		if (!SDK::W2S(vOrigin + vPoints[n], vScreen))
+			continue;
+
+		flLeft = bInit ? std::min(flLeft, vScreen.x) : vScreen.x;
+		flRight = bInit ? std::max(flRight, vScreen.x) : vScreen.x;
+		flTop = bInit ? std::max(flTop, vScreen.y) : vScreen.y;
+		flBottom = bInit ? std::min(flBottom, vScreen.y) : vScreen.y;
+		bInit = true;
+	}
+	if (!bInit) // every corner behind the camera
 		return false;
 
-	auto& [sName, tColor] = vVisible.front();
-	return FNV1A::Hash32(sName.c_str()) == FNV1A::Hash32Const("Original")
-		&& !tColor.Fullbright && !tColor.IgnoreZ
-		&& (tColor.BodyParts & BODYPART_ALL) == BODYPART_ALL
-		&& !tColor.Distance.Enabled
-		&& tColor.Color == Color_t(255, 255, 255, 255);
+	const float flMarginW = H::Draw.m_nScreenW * 0.25f;
+	const float flMarginH = H::Draw.m_nScreenH * 0.25f;
+	return !(flRight < -flMarginW || flLeft > H::Draw.m_nScreenW + flMarginW
+		|| flTop < -flMarginH || flBottom > H::Draw.m_nScreenH + flMarginH);
 }
 
 void CChams::RenderMain()
@@ -421,7 +555,7 @@ void CChams::RenderMain()
 	const bool bSceneMarks = m_bScenePassthrough;
 	m_bScenePassthrough = false;
 
-	m_mEntities.clear();
+	m_mEntities.Clear();
 	if (m_vEntities.empty())
 	{
 		if (bSceneMarks)
@@ -432,31 +566,37 @@ void CChams::RenderMain()
 	if (!bSceneMarks)
 		pRenderContext->ClearBuffers(false, false, true);
 
-	// The crosshair-targeted entity draws with its group's targeted material on
-	// both the visible and occluded passes (a solid, always-on-top highlight)
-	// instead of its regular chams. Built once - only one entity is ever targeted.
-	Chams_t tTarget = {};
-	auto IsTargeted = [&](const ChamsInfo_t& tInfo)
+	// Local player origin for distance-based material colors: one lookup for the
+	// whole pass instead of one per entity that wants a distance.
+	m_bLocalValid = false;
+	if (auto pLocal = H::Entities.GetLocal())
 	{
-		return tInfo.m_pTargetChams && m_iTargetedEntity && tInfo.m_pEntity->entindex() == m_iTargetedEntity;
-	};
+		m_vLocalOrigin = pLocal->GetAbsOrigin();
+		m_bLocalValid = true;
+	}
+
+	// Per-pass visibility, resolved once per entity here rather than inside both
+	// model passes. Two different culls, with deliberately different handling:
+	//
+	// - FlexFOV face capture: the same angular test the glow face pass uses. The
+	//   entity is still registered (suppressing its original) so the suppression
+	//   set stays identical across faces - the composite is assembled from all
+	//   of them, and a face-dependent suppression set would flicker.
+	// - Main view: a fresh screen-bounds test against the live camera (see
+	//   IsOnScreenLoose). Here the entity is skipped outright, registration
+	//   included: an entity this far off screen is one the engine is not drawing
+	//   either, so leaving it unsuppressed costs nothing and fails safe.
+	//
+	// Flagged entries (backtrack ghosts, fakeangle) are exempt from the screen
+	// cull: they draw at record/fake origins, not at the entity's own.
+	const bool bFlexFace = F::FlexFOV.m_bDrawing;
 	for (auto& tInfo : m_vEntities)
 	{
-		if (IsTargeted(tInfo))
-		{
-			// Only the layers assigned to the body part under the crosshair.
-			// Occluded stays empty: a crosshair target is visible by definition,
-			// and the visible pass honors each layer's Ignore Z (the occluded
-			// pass would force always-on-top regardless of it).
-			tTarget.Visible = FilterTargetLayers(tInfo.m_pTargetChams->Visible, m_iTargetedPart);
-			break;
-		}
+		tInfo.m_bCulled = bFlexFace && !F::FlexFOV.FaceCanSee(tInfo.m_pEntity->GetAbsOrigin());
+		tInfo.m_bOffScreen = !bFlexFace && !tInfo.m_iFlags && !IsOnScreenLoose(
+			tInfo.m_tFacts.m_bUseOwner && tInfo.m_pEntity->m_hOwnerEntity().Get()
+				? tInfo.m_pEntity->m_hOwnerEntity().Get() : tInfo.m_pEntity);
 	}
-	auto GetChams = [&](const ChamsInfo_t& tInfo) -> const Chams_t*
-	{
-		// No layer for the targeted part: fall back to the regular chams.
-		return IsTargeted(tInfo) && !tTarget.Visible.empty() ? &tTarget : tInfo.m_pChams;
-	};
 
 	// Passthrough registration: with occluded layers the engine draw must
 	// stencil-mark its visible pixels (mapped value true -> the hook wraps it),
@@ -464,53 +604,63 @@ void CChams::RenderMain()
 	// (matching the redraw path, which draws the weapon alongside its owner).
 	// Without occluded layers nothing tests the mask, so the entity isn't
 	// registered at all and the engine draw needs no help.
-	auto RegisterPassthrough = [&](const ChamsInfo_t& tInfo, const Chams_t& tChams)
+	auto RegisterPassthrough = [&](const ChamsInfo_t& tInfo, const ChamsFacts_t& tFacts, const Chams_t& tChams)
 	{
 		if (tChams.Occluded.empty())
 			return;
 
-		m_mEntities[tInfo.m_pEntity->entindex()] = true;
+		m_mEntities.Add(tFacts.m_iIndex, true);
 		m_bScenePassthrough = true;
-		if (tChams.Visible.front().second.BodyParts & BODYPART_WEAPON && tInfo.m_pEntity->IsPlayer())
+		if (tChams.Visible.front().second.BodyParts & BODYPART_WEAPON && tFacts.m_bPlayer)
 		{
 			if (auto pWeapon = tInfo.m_pEntity->As<CTFPlayer>()->m_hActiveWeapon()->As<CTFWeaponBase>())
-				m_mEntities[pWeapon->entindex()] = true;
+				m_mEntities.Add(pWeapon->entindex(), true);
 		}
 	};
 
+	const bool bOptimization = Vars::Misc::Game::OriginalChamsOptimization.Value;
+
+	// One state snapshot for the whole pass (see DrawModel).
+	Begin();
 	for (int iModel : { ModelEnum::Visible, ModelEnum::Occluded })
 	{
+		// Nothing in the set has occluded layers: the entire occluded pass would
+		// walk every entity just to have each one early-out of it.
+		if (iModel == ModelEnum::Occluded && !m_bAnyOccluded)
+			break;
+
 		for (auto& tInfo : m_vEntities)
 		{
-			const Chams_t* pChams = GetChams(tInfo);
+			// The crosshair-targeted entity uses the filtered targeted material
+			// (built once per frame in UpdateTarget) instead of its regular
+			// chams; with no layer for the targeted part it falls back to them.
+			const bool bTargeted = m_bTargetValid && tInfo.m_pTargetChams && tInfo.m_tFacts.m_iIndex == m_iTargetedEntity;
+			const Chams_t* pChams = bTargeted ? &m_tTarget : tInfo.m_pChams;
 			if (!pChams)
 				continue;
+			const ChamsFacts_t& tFacts = bTargeted ? m_tTargetFacts : tInfo.m_tFacts;
 
 			// Plain-Original visible set: the engine's scene draw already
 			// rendered exactly this image, so skip the visible redraw (and the
 			// suppression that forces it). The Visible == Occluded case keeps
 			// the redraw path: it draws the occluded set always-on-top instead
 			// and must keep suppressing the original.
-			const bool bPassthrough = Vars::Misc::Game::OriginalChamsOptimization.Value
-				&& !tInfo.m_iFlags && IsPlainOriginal(pChams->Visible)
-				&& (pChams->Occluded.empty() || pChams->Occluded != pChams->Visible);
+			const bool bPassthrough = bOptimization && !tInfo.m_iFlags && tFacts.m_bPassthrough;
 
-			// FlexFOV face capture: skip entities this face can't see (the same
-			// angular cull the glow face pass uses) - at wide fov half the cham
-			// set is behind any given face, and each skip saves 2+ model draws.
-			// Still register the entity (DrawModel's side effect) so the
-			// original-model suppression set stays identical across passes.
-			// This MUST stay below the pChams gate: registering an entity chams
-			// never redraws (null pChams, e.g. target-chams-only groups) would
-			// suppress its original model everywhere and turn it invisible.
-			if (F::FlexFOV.m_bDrawing && !F::FlexFOV.FaceCanSee(tInfo.m_pEntity->GetAbsOrigin()))
+			// Both culls MUST stay below the pChams gate: registering an entity
+			// chams never redraws (null pChams, e.g. target-chams-only groups)
+			// would suppress its original model everywhere and turn it invisible.
+			if (tInfo.m_bOffScreen)
+				continue;
+
+			if (tInfo.m_bCulled)
 			{
 				if (!tInfo.m_iFlags && iModel == ModelEnum::Visible)
 				{
 					if (bPassthrough)
-						RegisterPassthrough(tInfo, *pChams);
+						RegisterPassthrough(tInfo, tFacts, *pChams);
 					else
-						m_mEntities[tInfo.m_pEntity->entindex()];
+						m_mEntities.Touch(tFacts.m_iIndex);
 				}
 				continue;
 			}
@@ -518,14 +668,14 @@ void CChams::RenderMain()
 			if (bPassthrough)
 			{
 				if (iModel == ModelEnum::Visible)
-					RegisterPassthrough(tInfo, *pChams);
-				else if (!pChams->Occluded.empty())
-					DrawModel(tInfo.m_pEntity, *pChams, pRenderContext, iModel, true);
+					RegisterPassthrough(tInfo, tFacts, *pChams);
+				else if (tFacts.m_bOccluded)
+					DrawModel(tInfo.m_pEntity, *pChams, tFacts, pRenderContext, iModel, true);
 				continue;
 			}
 
 			if (!tInfo.m_iFlags)
-				DrawModel(tInfo.m_pEntity, *pChams, pRenderContext, iModel, true);
+				DrawModel(tInfo.m_pEntity, *pChams, tFacts, pRenderContext, iModel, true);
 			else
 			{
 				m_iFlags = tInfo.m_iFlags;
@@ -533,13 +683,14 @@ void CChams::RenderMain()
 				auto pPlayer = tInfo.m_pEntity->As<CTFPlayer>();
 				const float flOldInvisibility = pPlayer->m_flInvisibility();
 				pPlayer->m_flInvisibility() = 0.f;
-				DrawModel(tInfo.m_pEntity, *pChams, pRenderContext, iModel, true);
+				DrawModel(tInfo.m_pEntity, *pChams, tFacts, pRenderContext, iModel, true);
 				pPlayer->m_flInvisibility() = flOldInvisibility;
 
 				m_iFlags = false;
 			}
 		}
 	}
+	End();
 
 	pRenderContext->ClearBuffers(false, false, true);
 }

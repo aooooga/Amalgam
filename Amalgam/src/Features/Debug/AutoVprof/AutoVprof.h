@@ -46,19 +46,21 @@ struct VprofInterval_t
 	std::vector<VprofNode_t> m_vNodes;    // parsed nodes, trimmed to the heaviest by self ms
 };
 
-// A retained snapshot of an interval that contained a frametime spike.
-struct VprofSpike_t
-{
-	double m_flWorstMs = 0.0;              // worst single-frame time in the window
-	double m_flAvgMs = 0.0;                // average frame time across the window
-	std::vector<VprofNode_t> m_vTopNodes;  // heaviest nodes during the spike window
-};
-
 class CAutoVprof
 {
 public:
-	void Run();                  // per rendered frame (IEngineVGui_Paint)
+	void Run();                  // per rendered frame (IEngineVGui_Paint, in-game panels)
 	void Event(uint32_t uHash);  // round/match lifecycle events
+
+	// Finalize paths. A match's data lives only in memory until one of these
+	// runs, so every way out of a match needs to reach one:
+	//   LevelShutdown  - the engine's own teardown (disconnect, map change, quit)
+	//   FlushOrphaned  - menu paint; catches a match left active with no teardown
+	//   Shutdown       - DLL unload (F11, host shutdown/restart)
+	// All are idempotent and safe to call when no match is active.
+	void LevelShutdown();
+	void FlushOrphaned();
+	void Shutdown();
 
 	// A "build" is identified by the DLL's link timestamp (YYYYMMDD-HHMM), so every relink
 	// is a distinct, chronologically-sortable id. Exposed read-only for the menu display.
@@ -82,7 +84,7 @@ private:
 
 	// ---- io / parse ----
 	std::vector<VprofNode_t> ParseInterval(const std::string& sText);
-	void ApplyInterval(const std::vector<VprofNode_t>& vNodes, long long iFrames, bool bSpike, double flWorstMs, double flAvgMs);
+	void ApplyInterval(const std::vector<VprofNode_t>& vNodes, long long iFrames, double flAvgMs);
 	void WriteMatch();
 	void UpdateRollup();
 	void UpdateManifest();                       // regenerate builds.txt (build inventory for Claude)
@@ -113,6 +115,8 @@ private:
 
 	// ---- intent flags set by Event() ----
 	bool m_bLiveRequested = false;
+	bool m_bAutoLive = false;        // live was inferred (joined mid-round), not event-driven
+	double m_flInGameSince = 0.0;    // 0 when not in game
 
 	// ---- state machine ----
 	EPhase m_ePhase = EPhase::Idle;
@@ -123,16 +127,12 @@ private:
 	double m_flLastFrame = 0.0;
 	double m_flNextDumpTime = 0.0;
 	double m_flDumpDeadline = 0.0;
-	double m_flEMAms = 0.0;
-	bool m_bEMASeeded = false;
 
 	// ---- capture bookkeeping ----
 	uintmax_t m_iLogOffset = 0;
 	long long m_iIntervalFrames = 0;
-	double m_flWindowWorstMs = 0.0;
 	double m_flWindowSumMs = 0.0;
 	long long m_iWindowFrames = 0;
-	bool m_bWindowSpike = false;
 
 	// ---- match data ----
 	std::string m_sMap = "";
@@ -141,7 +141,6 @@ private:
 	int m_iSlots = 0;
 	std::unordered_map<std::string, VprofAgg_t> m_mAgg;
 	std::vector<float> m_vFrameMs; // live frame times across the whole match
-	std::vector<VprofSpike_t> m_vSpikes;
 	std::vector<VprofInterval_t> m_vIntervals; // all intervals, for 5%-low re-aggregation
 };
 

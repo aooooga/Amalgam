@@ -33,23 +33,26 @@ Vec3 CSentryRange::GetSentryEye(CObjectSentrygun* pSentry)
 // sentry eye with a clear line of sight, the same check FindTarget makes
 // against origin + view offset? Layers that pass are stored for drawing; a
 // cell with none renders as a hole. Returns the number of traces used.
-int CSentryRange::TraceCell(SentryCache_t& tCache, int i)
+int CSentryRange::TraceCell(SentryCache_t& tCache, int gx, int gy)
 {
-	auto& tCell = tCache.m_vCells[i];
-	const Cell_t tOld = tCell;
+	auto& tCell = tCache.m_vCells[size_t(gy) * tCache.m_iDim + gx];
+	const int nOld = tCell.m_iCount;
+	float aOldZ[MAX_LAYERS];
+	for (int j = 0; j < nOld; j++)
+		aOldZ[j] = tCell.m_aLayers[j].m_flZ;
 	tCell.m_iCount = 0;
 
 	const Vec3 vEye = tCache.m_vEye;
-	const float flX = tCache.m_flMinX + (i % tCache.m_iDim + 0.5f) * tCache.m_flStep;
-	const float flY = tCache.m_flMinY + (i / tCache.m_iDim + 0.5f) * tCache.m_flStep;
+	const float flX = tCache.m_flMinX + (gx + 0.5f) * tCache.m_flStep;
+	const float flY = tCache.m_flMinY + (gy + 0.5f) * tCache.m_flStep;
 
 	auto bChanged = [&]
 	{
-		if (tOld.m_iCount != tCell.m_iCount)
+		if (nOld != tCell.m_iCount)
 			return true;
 		for (int j = 0; j < tCell.m_iCount; j++)
 		{
-			if (fabsf(tOld.m_aLayers[j].m_flZ - tCell.m_aLayers[j].m_flZ) > 0.5f)
+			if (fabsf(aOldZ[j] - tCell.m_aLayers[j].m_flZ) > 0.5f)
 				return true;
 		}
 		return false;
@@ -60,7 +63,13 @@ int CSentryRange::TraceCell(SentryCache_t& tCache, int i)
 	const float flDX = flX - vEye.x, flDY = flY - vEye.y;
 	float flVertSqr = SENTRY_RANGE * SENTRY_RANGE - (flDX * flDX + flDY * flDY);
 	if (flVertSqr <= 0.f)
-		return 0; // outside the range circle entirely, and was never lit: no dirtying
+	{
+		// outside the range circle entirely: no traces, and the zero return is the
+		// caller's signal that this cell cost nothing (so it doesn't burn a slot)
+		if (nOld)
+			tCache.m_bListDirty = true;
+		return 0;
+	}
 	float flVert = sqrtf(flVertSqr);
 	const float flHeight = Vars::Visuals::SentryRange::TargetHeight.Value;
 	float flZ = vEye.z + std::min(flVert, 450.f); // capped: floors further above a sentry than this are fringe
@@ -72,6 +81,8 @@ int CSentryRange::TraceCell(SentryCache_t& tCache, int i)
 	{
 		CGameTrace trace = {};
 		SDK::Trace({ flX, flY, flZ }, { flX, flY, flZBottom }, MASK_SHOT, &filter, &trace); nTraces++;
+		if (trace.allsolid)
+			break; // the entire rest of the band is solid rock: nothing can be below
 		if (trace.startsolid)
 		{
 			flZ -= 64.f; // inside a solid (roof, thick floor): step down through it
@@ -110,53 +121,43 @@ int CSentryRange::TraceCell(SentryCache_t& tCache, int i)
 // through to a full trace, so non-uniform regions stay sampled at full
 // resolution. This is what turns a fine grid's cost from O(area) into ~O(boundary):
 // the large all-lit and all-unlit interiors cost nothing.
-int CSentryRange::RefineCell(SentryCache_t& tCache, int gx, int gy)
+// Uniformity is a property of the *block*, not of the cell, so it is decided once
+// here and then applied to all K*K interior cells - the old per-cell version
+// re-read the four corners and re-ran the plane fit up to K*K times over for the
+// same answer, which was the bulk of the refine sweep's cost.
+//
+// nWork counts only the cells that actually cost something (an interpolation or a
+// trace); a uniformly-unlit block that is already clear is free and must not eat
+// the caller's per-frame scan allowance, which is what lets the huge dead regions
+// (outside the range circle, inside walls) sweep past in a single frame.
+int CSentryRange::RefineBlock(SentryCache_t& tCache, int bx, int by, int& nWork)
 {
 	const int iDim = tCache.m_iDim, K = tCache.m_iK;
-	auto& tCell = tCache.m_vCells[size_t(gy) * iDim + gx];
-	const Cell_t tOld = tCell;
-
-	// enclosing coarse block corners (all lattice cells, already traced this pass)
-	const int bx0 = gx / K * K, by0 = gy / K * K;
+	const int bx0 = bx * K, by0 = by * K;
+	if (bx0 >= iDim || by0 >= iDim)
+		return 0; // the lattice has one more line than there are blocks
+	// the block spans corners [bx0, bx0+K] (clamped) and owns cells [bx0, bx0+K-1]
 	const int bx1 = std::min(bx0 + K, iDim - 1), by1 = std::min(by0 + K, iDim - 1);
+	const int xEnd = std::min(bx0 + K - 1, iDim - 1), yEnd = std::min(by0 + K - 1, iDim - 1);
+
 	const Cell_t& c00 = tCache.m_vCells[size_t(by0) * iDim + bx0];
 	const Cell_t& c10 = tCache.m_vCells[size_t(by0) * iDim + bx1];
 	const Cell_t& c01 = tCache.m_vCells[size_t(by1) * iDim + bx0];
 	const Cell_t& c11 = tCache.m_vCells[size_t(by1) * iDim + bx1];
 
-	auto Commit = [&](const Cell_t& tNew)
-	{
-		bool bChanged = tNew.m_iCount != tOld.m_iCount;
-		for (int j = 0; !bChanged && j < tNew.m_iCount; j++)
-			bChanged = fabsf(tNew.m_aLayers[j].m_flZ - tOld.m_aLayers[j].m_flZ) > 0.5f;
-		tCell = tNew;
-		if (bChanged)
-			tCache.m_bListDirty = true;
-		return 0;
-	};
-
-	// a differing layer count means a boundary or a merge runs through the block
-	const int nc = c00.m_iCount;
-	if (c10.m_iCount != nc || c01.m_iCount != nc || c11.m_iCount != nc)
-		return TraceCell(tCache, size_t(gy) * iDim + gx);
-	if (nc == 0)
-		return Commit(Cell_t{}); // uniformly unlit interior
-
-	const float flFX = bx1 > bx0 ? float(gx - bx0) / (bx1 - bx0) : 0.f;
-	const float flFY = by1 > by0 ? float(gy - by0) / (by1 - by0) : 0.f;
-	auto Bilerp = [&](float a, float b, float c, float d)
-	{
-		return (a * (1.f - flFX) + b * flFX) * (1.f - flFY) + (c * (1.f - flFX) + d * flFX) * flFY;
-	};
 	auto Parallel = [](const Vec3& a, const Vec3& b) // unit normals: dot > cos(~8 deg)
 	{
 		return a.x * b.x + a.y * b.y + a.z * b.z > 0.99f;
 	};
 
+	// a differing layer count means a boundary or a merge runs through the block;
+	// otherwise every layer must be one planar, untwisted surface across it
 	constexpr float flTwist = 4.f;
-	Cell_t tNew;
-	tNew.m_iCount = nc;
-	for (int L = 0; L < nc; L++)
+	const int nc = c00.m_iCount;
+	bool bUniform = c10.m_iCount == nc && c01.m_iCount == nc && c11.m_iCount == nc;
+	float aZ[MAX_LAYERS][4] = {};
+	Vec3 aNormal[MAX_LAYERS] = {};
+	for (int L = 0; bUniform && L < nc; L++)
 	{
 		const Layer_t& l00 = c00.m_aLayers[L]; const Layer_t& l10 = c10.m_aLayers[L];
 		const Layer_t& l01 = c01.m_aLayers[L]; const Layer_t& l11 = c11.m_aLayers[L];
@@ -164,31 +165,94 @@ int CSentryRange::RefineCell(SentryCache_t& tCache, int gx, int gy)
 			|| !Parallel(l00.m_vNormal, l10.m_vNormal)
 			|| !Parallel(l00.m_vNormal, l01.m_vNormal)
 			|| !Parallel(l00.m_vNormal, l11.m_vNormal))
-			return TraceCell(tCache, size_t(gy) * iDim + gx);
+		{
+			bUniform = false;
+			break;
+		}
+		aZ[L][0] = l00.m_flZ; aZ[L][1] = l10.m_flZ; aZ[L][2] = l01.m_flZ; aZ[L][3] = l11.m_flZ;
 		Vec3 vN = l00.m_vNormal + l10.m_vNormal + l01.m_vNormal + l11.m_vNormal;
 		const float flLen = sqrtf(vN.x * vN.x + vN.y * vN.y + vN.z * vN.z);
-		tNew.m_aLayers[L] = { Bilerp(l00.m_flZ, l10.m_flZ, l01.m_flZ, l11.m_flZ),
-			flLen > 1e-4f ? Vec3(vN.x / flLen, vN.y / flLen, vN.z / flLen) : Vec3(0, 0, 1) };
+		aNormal[L] = flLen > 1e-4f ? Vec3(vN.x / flLen, vN.y / flLen, vN.z / flLen) : Vec3(0, 0, 1);
 	}
-	return Commit(tNew);
+
+	const float flInvDX = bx1 > bx0 ? 1.f / (bx1 - bx0) : 0.f;
+	const float flInvDY = by1 > by0 ? 1.f / (by1 - by0) : 0.f;
+
+	int nTraces = 0;
+	for (int gy = by0; gy <= yEnd; gy++)
+	{
+		const bool bCoarseY = gy == by0 || gy == iDim - 1;
+		const float flFY = (gy - by0) * flInvDY;
+		Cell_t* pRow = &tCache.m_vCells[size_t(gy) * iDim];
+		for (int gx = bx0; gx <= xEnd; gx++)
+		{
+			if (bCoarseY && (gx == bx0 || gx == iDim - 1))
+				continue; // lattice cell: phase 0 already traced it
+			if (!bUniform)
+			{
+				nTraces += TraceCell(tCache, gx, gy);
+				nWork++;
+				continue;
+			}
+			auto& tCell = pRow[gx];
+			if (!nc)
+			{
+				if (tCell.m_iCount) // uniformly unlit, and it used to be lit
+				{
+					tCell.m_iCount = 0;
+					tCache.m_bListDirty = true;
+					nWork++;
+				}
+				continue; // already clear: free
+			}
+			const float flFX = (gx - bx0) * flInvDX;
+			bool bChanged = tCell.m_iCount != nc;
+			for (int L = 0; L < nc; L++)
+			{
+				const float flZ = (aZ[L][0] * (1.f - flFX) + aZ[L][1] * flFX) * (1.f - flFY)
+					+ (aZ[L][2] * (1.f - flFX) + aZ[L][3] * flFX) * flFY;
+				bChanged |= fabsf(flZ - tCell.m_aLayers[L].m_flZ) > 0.5f;
+				tCell.m_aLayers[L] = { flZ, aNormal[L] };
+			}
+			tCell.m_iCount = nc;
+			if (bChanged)
+				tCache.m_bListDirty = true;
+			nWork++;
+		}
+	}
+	return nTraces;
 }
 
 // Advances the per-cache build one cell and returns the traces it spent. Phase 0
 // fully traces the coarse K-lattice; once that wraps, phase 1 sweeps the whole
 // grid, refining every non-lattice cell (lattice cells are already done) from its
 // coarse block. bWrapped is set on the call that finishes a full two-phase pass.
-int CSentryRange::StepCell(SentryCache_t& tCache, bool& bWrapped)
+// Both phases spin forward over free entries (cells outside the range circle,
+// blocks that are uniformly unlit and already clear) inside a single call rather
+// than burning one caller slot each, so the dead majority of a big grid costs a
+// pointer walk instead of frames.
+int CSentryRange::StepCell(SentryCache_t& tCache, bool& bWrapped, int& nWork)
 {
 	bWrapped = false;
 	const int iDim = tCache.m_iDim, K = tCache.m_iK;
+	const int nCX = tCache.m_iNCX, nCoarse = nCX * tCache.m_iNCY;
+	int nTraces = 0;
 
 	if (tCache.m_iPhase == 0)
 	{
-		const int nCX = tCache.m_iNCX;
-		const int cx = tCache.m_iCursor % nCX, cy = tCache.m_iCursor / nCX;
-		const int gx = std::min(cx * K, iDim - 1), gy = std::min(cy * K, iDim - 1);
-		const int nTraces = TraceCell(tCache, size_t(gy) * iDim + gx);
-		if (++tCache.m_iCursor >= nCX * tCache.m_iNCY)
+		while (tCache.m_iCursor < nCoarse)
+		{
+			const int cx = tCache.m_iCursor % nCX, cy = tCache.m_iCursor / nCX;
+			const int gx = std::min(cx * K, iDim - 1), gy = std::min(cy * K, iDim - 1);
+			tCache.m_iCursor++;
+			nTraces = TraceCell(tCache, gx, gy);
+			if (nTraces) // 0 means the cell is outside the range circle: free, keep going
+			{
+				nWork++;
+				break;
+			}
+		}
+		if (tCache.m_iCursor >= nCoarse)
 		{
 			tCache.m_iCursor = 0;
 			if (K <= 1)
@@ -199,11 +263,17 @@ int CSentryRange::StepCell(SentryCache_t& tCache, bool& bWrapped)
 		return nTraces;
 	}
 
-	// phase 1: refine, skipping the lattice cells traced in phase 0
-	const int gx = tCache.m_iCursor % iDim, gy = tCache.m_iCursor / iDim;
-	const bool bCoarse = (gx % K == 0 || gx == iDim - 1) && (gy % K == 0 || gy == iDim - 1);
-	const int nTraces = bCoarse ? 0 : RefineCell(tCache, gx, gy);
-	if (++tCache.m_iCursor >= iDim * iDim)
+	// phase 1: refine block by block; lattice cells are skipped inside RefineBlock
+	while (tCache.m_iCursor < nCoarse)
+	{
+		const int bx = tCache.m_iCursor % nCX, by = tCache.m_iCursor / nCX;
+		tCache.m_iCursor++;
+		const int nBefore = nWork;
+		nTraces += RefineBlock(tCache, bx, by, nWork);
+		if (nWork != nBefore)
+			break;
+	}
+	if (tCache.m_iCursor >= nCoarse)
 	{
 		tCache.m_iCursor = 0;
 		tCache.m_iPhase = 0;
@@ -217,9 +287,10 @@ int CSentryRange::StepCell(SentryCache_t& tCache, bool& bWrapped)
 size_t CSentryRange::RemainingWork(const SentryCache_t& tCache) const
 {
 	const size_t iGrid = tCache.m_vCells.size();
+	const size_t iBlocks = size_t(tCache.m_iNCX) * tCache.m_iNCY;
 	if (tCache.m_iPhase == 0)
-		return size_t(tCache.m_iNCX) * tCache.m_iNCY - tCache.m_iCursor + iGrid;
-	return iGrid - tCache.m_iCursor;
+		return iBlocks - tCache.m_iCursor + (tCache.m_iK > 1 ? iGrid : 0);
+	return (iBlocks - tCache.m_iCursor) * tCache.m_iK * tCache.m_iK;
 }
 
 // Bakes the cell grid into CPU geometry.
@@ -255,6 +326,31 @@ void CSentryRange::BuildDrawList(SentryCache_t& tCache)
 	const float flStep = tCache.m_flStep, flHalf = flStep * 0.5f;
 	const float flJoin = flStep * 1.25f; // max z gap for neighbor layers to count as the same surface (45 degree slopes join)
 
+	// Every pass below only ever emits from lit cells, so clip the whole bake to
+	// their bounding box: the square grid's dead corners (the range circle alone
+	// leaves >20% dead, an indoor sentry far more) stop being iterated, and the
+	// three per-corner tables - by far the biggest allocations here, and cleared
+	// again on every chunk flush - shrink to the box instead of (iDim+1)^2.
+	int iX0 = iDim, iY0 = iDim, iX1 = -1, iY1 = -1;
+	for (int y = 0; y < iDim; y++)
+	{
+		const Cell_t* pRow = &tCache.m_vCells[size_t(y) * iDim];
+		for (int x = 0; x < iDim; x++)
+		{
+			if (!pRow[x].m_iCount)
+				continue;
+			if (x < iX0) iX0 = x;
+			if (x > iX1) iX1 = x;
+			if (y < iY0) iY0 = y;
+			if (y > iY1) iY1 = y;
+		}
+	}
+	if (iX1 < 0)
+		return; // nothing lit at all
+	// corner lattice spanning the box: cx in [iX0, iX1 + 1], cy in [iY0, iY1 + 1]
+	const int iCW = iX1 - iX0 + 2, iCH = iY1 - iY0 + 2;
+	auto iCorner = [&](int cx, int cy) { return size_t(cy - iY0) * iCW + (cx - iX0); };
+
 	auto flPlaneZ = [](const Layer_t& tLayer, float flDX, float flDY)
 	{
 		return tLayer.m_flZ - (tLayer.m_vNormal.x * flDX + tLayer.m_vNormal.y * flDY) / tLayer.m_vNormal.z;
@@ -278,10 +374,10 @@ void CSentryRange::BuildDrawList(SentryCache_t& tCache)
 	struct BNode_t { float m_flX, m_flY, m_flZSum; int m_nRefs; };
 	std::vector<BNode_t> vNodes;
 	struct BCorner_t { int m_nCount = 0; struct { float m_flZ; int m_iNode; } m_aGroups[4] = {}; };
-	std::vector<BCorner_t> vBCorners(size_t(iDim + 1) * (iDim + 1));
+	std::vector<BCorner_t> vBCorners(size_t(iCW) * iCH);
 	auto iBoundNode = [&](int cx, int cy, float flZ)
 	{
-		auto& tC = vBCorners[size_t(cy) * (iDim + 1) + cx];
+		auto& tC = vBCorners[iCorner(cx, cy)];
 		for (int g = 0; g < tC.m_nCount; g++)
 		{
 			if (fabsf(tC.m_aGroups[g].m_flZ - flZ) < flJoin)
@@ -298,9 +394,9 @@ void CSentryRange::BuildDrawList(SentryCache_t& tCache)
 		return iNode;
 	};
 	std::vector<std::pair<int, int>> vSegs;
-	for (int y = 0; y < iDim; y++)
+	for (int y = iY0; y <= iY1; y++)
 	{
-		for (int x = 0; x < iDim; x++)
+		for (int x = iX0; x <= iX1; x++)
 		{
 			auto& tCell = tCache.m_vCells[size_t(y) * iDim + x];
 			for (int iLayer = 0; iLayer < tCell.m_iCount; iLayer++)
@@ -525,10 +621,10 @@ void CSentryRange::BuildDrawList(SentryCache_t& tCache)
 	// extrapolation. Clustered within flJoin so genuinely separate floors stay
 	// apart. Interior fill corners read this; boundary corners use vSnap instead.
 	struct CHeight_t { int m_nCount = 0; struct { float m_flSum; int m_nCnt; } m_a[6] = {}; };
-	std::vector<CHeight_t> vCH(size_t(iDim + 1) * (iDim + 1));
+	std::vector<CHeight_t> vCH(size_t(iCW) * iCH);
 	auto AddCornerZ = [&](int cx, int cy, float flZ)
 	{
-		auto& tCH = vCH[size_t(cy) * (iDim + 1) + cx];
+		auto& tCH = vCH[iCorner(cx, cy)];
 		for (int g = 0; g < tCH.m_nCount; g++)
 		{
 			if (fabsf(tCH.m_a[g].m_flSum / tCH.m_a[g].m_nCnt - flZ) < flJoin)
@@ -540,9 +636,9 @@ void CSentryRange::BuildDrawList(SentryCache_t& tCache)
 		if (tCH.m_nCount < 6)
 			tCH.m_a[tCH.m_nCount++] = { flZ, 1 };
 	};
-	for (int y = 0; y < iDim; y++)
+	for (int y = iY0; y <= iY1; y++)
 	{
-		for (int x = 0; x < iDim; x++)
+		for (int x = iX0; x <= iX1; x++)
 		{
 			auto& tCell = tCache.m_vCells[size_t(y) * iDim + x];
 			for (int iLayer = 0; iLayer < tCell.m_iCount; iLayer++)
@@ -557,7 +653,7 @@ void CSentryRange::BuildDrawList(SentryCache_t& tCache)
 	}
 	auto flCornerZ = [&](int cx, int cy, float flZ) // shared averaged height of the surface nearest flZ
 	{
-		auto& tCH = vCH[size_t(cy) * (iDim + 1) + cx];
+		auto& tCH = vCH[iCorner(cx, cy)];
 		for (int g = 0; g < tCH.m_nCount; g++)
 		{
 			float flAvg = tCH.m_a[g].m_flSum / tCH.m_a[g].m_nCnt;
@@ -598,7 +694,7 @@ void CSentryRange::BuildDrawList(SentryCache_t& tCache)
 		int m_nCount = 0;
 		struct { float m_flZ; int m_iVert; } m_aGroups[4] = {};
 	};
-	std::vector<Corner_t> vCorners(size_t(iDim + 1) * (iDim + 1));
+	std::vector<Corner_t> vCorners(size_t(iCW) * iCH);
 	auto& vChunks = tCache.m_vFillChunks;
 	vChunks.emplace_back();
 	auto FlushIfFull = [&]
@@ -622,7 +718,7 @@ void CSentryRange::BuildDrawList(SentryCache_t& tCache)
 	};
 	auto iCornerVert = [&](int cx, int cy, float flZ)
 	{
-		auto& tCorner = vCorners[size_t(cy) * (iDim + 1) + cx];
+		auto& tCorner = vCorners[iCorner(cx, cy)];
 		for (int g = 0; g < tCorner.m_nCount; g++)
 		{
 			if (fabsf(tCorner.m_aGroups[g].m_flZ - flZ) < flJoin)
@@ -633,7 +729,7 @@ void CSentryRange::BuildDrawList(SentryCache_t& tCache)
 		// quads meet exactly and never crack into a seam
 		Vec3 vPos = { tCache.m_flMinX + cx * flStep, tCache.m_flMinY + cy * flStep, flZ };
 		bool bBoundary = false;
-		auto& tBC = vBCorners[size_t(cy) * (iDim + 1) + cx];
+		auto& tBC = vBCorners[iCorner(cx, cy)];
 		for (int g = 0; g < tBC.m_nCount; g++)
 		{
 			if (fabsf(tBC.m_aGroups[g].m_flZ - flZ) < flJoin)
@@ -668,9 +764,9 @@ void CSentryRange::BuildDrawList(SentryCache_t& tCache)
 		}
 		return -1;
 	};
-	for (int y = 0; y < iDim; y++)
+	for (int y = iY0; y <= iY1; y++)
 	{
-		for (int x = 0; x < iDim; x++)
+		for (int x = iX0; x <= iX1; x++)
 		{
 			auto& tCell = tCache.m_vCells[size_t(y) * iDim + x];
 			for (int iLayer = 0; iLayer < tCell.m_iCount; iLayer++)
@@ -718,9 +814,9 @@ void CSentryRange::BuildDrawList(SentryCache_t& tCache)
 
 	// pass 2: welded per-cell quads for everything the rects didn't swallow;
 	// corners on a contour land at their snapped position (see iCornerVert)
-	for (int y = 0; y < iDim; y++)
+	for (int y = iY0; y <= iY1; y++)
 	{
-		for (int x = 0; x < iDim; x++)
+		for (int x = iX0; x <= iX1; x++)
 		{
 			auto& tCell = tCache.m_vCells[size_t(y) * iDim + x];
 			for (int iLayer = 0; iLayer < tCell.m_iCount; iLayer++)
@@ -1020,8 +1116,13 @@ void CSentryRange::Update(CTFPlayer* pLocal)
 		if (!pEntity->IsSentrygun())
 			continue;
 		auto pSentry = pEntity->As<CObjectSentrygun>();
-		if (pSentry->m_bCarried() || pSentry->m_bPlacing())
-			continue;
+		// A picked-up sentry's origin follows the carrier, so re-deriving the grid
+		// would drag the carpet around with them (and re-trace it every step).
+		// Instead freeze whatever was already traced at the spot it was built and
+		// leave it there; the origin compare below rebuilds it once it is re-placed.
+		bool bCarried = pSentry->m_bCarried() || pSentry->m_bPlacing();
+		if (bCarried && !m_mCache.contains(pEntity))
+			continue; // nothing built yet: nothing to keep in place
 
 		bool bEnemy = pSentry->m_iTeamNum() != pLocal->m_iTeamNum();
 		bool bLocal = !bEnemy && pSentry->m_hBuilder().Get() == pLocal;
@@ -1039,7 +1140,7 @@ void CSentryRange::Update(CTFPlayer* pLocal)
 
 		auto& tCache = mNewCache[pEntity];
 		auto it = m_mCache.find(pEntity);
-		if (it != m_mCache.end() && it->second.m_vOrigin == vOrigin && fabsf(it->second.m_flEyeZ - vEye.z) < 1.f)
+		if (it != m_mCache.end() && (bCarried || (it->second.m_vOrigin == vOrigin && fabsf(it->second.m_flEyeZ - vEye.z) < 1.f)))
 			tCache = std::move(it->second); // mesh vectors move along; moved-from ends up empty
 		else
 		{
@@ -1063,6 +1164,7 @@ void CSentryRange::Update(CTFPlayer* pLocal)
 			tCache.m_iCursor = 0;
 		}
 
+		tCache.m_bFrozen = bCarried;
 		tCache.m_bEnemy = bEnemy;
 		tCache.m_bLocal = bLocal;
 		tCache.m_bDisabled = bDisabled;
@@ -1087,13 +1189,13 @@ void CSentryRange::Update(CTFPlayer* pLocal)
 	std::vector<SentryCache_t*> vWork = {};
 	for (auto& [pEntity, tCache] : m_mCache)
 	{
-		if (tCache.m_bDraw && !tCache.m_bComplete)
+		if (tCache.m_bDraw && !tCache.m_bComplete && !tCache.m_bFrozen)
 			vWork.push_back(&tCache);
 	}
 	size_t iIncomplete = vWork.size();
 	for (auto& [pEntity, tCache] : m_mCache)
 	{
-		if (tCache.m_bDraw && tCache.m_bComplete
+		if (tCache.m_bDraw && tCache.m_bComplete && !tCache.m_bFrozen
 			&& I::GlobalVars->curtime - tCache.m_flCompleteTime > Vars::Visuals::SentryRange::RefreshInterval.Value)
 			vWork.push_back(&tCache);
 	}
@@ -1108,10 +1210,11 @@ void CSentryRange::Update(CTFPlayer* pLocal)
 		for (size_t i = 0; i < iIncomplete; i++)
 			nPending += RemainingWork(*vWork[i]);
 		if (nPending)
-			nBudget = std::max(nBudget, std::min(6000, int(nPending / 120)));
+			nBudget = std::max(nBudget, std::min(6000, int(nPending / 40)));
 		// refined interior cells cost no traces, so budget alone would let a mostly-
 		// free grid spin its whole area in one frame; cap the cells scanned per frame
-		// too so that stays a brief few-frame settle instead of a hitch.
+		// too so that stays a brief few-frame settle instead of a hitch. Only cells
+		// that were actually written count against it (see StepCell).
 		int nScan = 40000;
 		size_t iEntry = iIncomplete ? m_iSentryCursor % iIncomplete : m_iSentryCursor % vWork.size();
 		for (int nSwitch = 0; nBudget > 0 && nScan > 0 && !vWork.empty(); )
@@ -1119,8 +1222,9 @@ void CSentryRange::Update(CTFPlayer* pLocal)
 			iEntry %= vWork.size();
 			auto& tCache = *vWork[iEntry];
 			bool bWrapped = false;
-			nBudget -= StepCell(tCache, bWrapped);
-			nScan--;
+			int nWork = 0;
+			nBudget -= StepCell(tCache, bWrapped, nWork);
+			nScan -= nWork;
 			if (bWrapped) // full two-phase pass finished
 			{
 				tCache.m_bComplete = true;

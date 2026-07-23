@@ -17,11 +17,9 @@ around (vprof_* are deferred, one-per-frame).
   (pruned < 0.1% self): `self%  selfms  inclms  calls/f  name`; then a `#heavy` section —
   the same self-ms ranking but computed **only over the heaviest ~5% of frames** (the match's
   laggy moments; `selfms name`, top 15) — compare a node's heavy selfms vs its overall selfms
-  to see what disproportionately drives the lows; then up to 3 spike snapshots
-  (`worst=/avg= ms`, top self-ms nodes).
+  to see what disproportionately drives the lows.
 - `<map>.txt` — rolling rollup over the **last 5 non-excluded matches** on that map: fps
-  trend + nodes averaged (`self%  selfms  name`) + `#heavy` averaged 5%-low nodes +
-  recurring spike contributors.
+  trend + nodes averaged (`self%  selfms  name`) + `#heavy` averaged 5%-low nodes.
 - `builds.txt` — **auto-generated build inventory** (do not hand-edit): every build id that
   has recorded matches, with match count, maps, date range, and excluded status.
 - `excluded_builds.txt` — **curated by Claude** (see below).
@@ -33,6 +31,45 @@ around (vprof_* are deferred, one-per-frame).
   Ranking is by this. `self%` looks larger than `selfms/frametime` because its denominator is
   vprof-accounted CPU (~half of wall frame time; the rest is GPU wait / other threads).
 - `inclms` = ms/frame including children. Build id = the DLL's link timestamp (`YYYYMMDD-HHMM`).
+
+## The process tracker — Amalgam's own half of the report
+`Perf::Tracker` (`Utils/Perf/Tracker.h/.cpp`) instruments Amalgam itself: RAII zones (two
+`rdtsc` + a few adds, ~12ns) around every feature call in the aggregator hooks, plus counters
+charged to whichever zone is open. Auto vprof force-enables it while capturing, so **every
+match report has both views**: vprof nodes = where the CPU went (engine included); the
+`#amalgam*` sections = which of our features asked for it.
+
+Toggles: Debug → **Process tracker** (on while Auto vprof runs regardless) and **Tracker
+overlay** (live on-screen ranking, same numbers).
+
+Sections appended to `matches/<map>_<ts>.txt`, after `#heavy`:
+- `#amalgam frames= selfms= frame= share=% overhead= scopes=` — Amalgam's total self ms/frame,
+  the wall frame time it sits in, its share, and the **tracker's own measured overhead**
+  (typically ~0.01ms; if it isn't negligible, discount the rest accordingly).
+- `#amalgam_groups createmove= netupdate= scene= paint= engine= misc=` — ms/frame per phase.
+- `#amalgam_zones selfms inclms calls/f peakms group name` — top 18 by selfms (floor 0.005),
+  plus up to 4 extra rows for cheap zones wrapping a costly subtree (inclms ≥ 0.25). `selfms`
+  **excludes nested zones**, so a caller's self time excludes its traces (`SDK::Trace` is its
+  own zone) and excludes the engine draw (`Engine::DrawModel` is its own zone). `peakms` is
+  the worst single call of the match — that's the spike hunter. Watch `calls/f` on scene
+  zones: it counts scene passes (main view + FlexFOV faces + rearview flanks), the multiplier
+  on everything below it.
+- `#amalgam_heavy frames= thresholdms= avgms= selfms=` then `selfms calls/f name` — the same
+  ranking over frames at/above the match's own 95th-percentile frame time, i.e. the 5% lows.
+- `#amalgam_counters` — `<zone> traces= w2s= bones= modeldraws= matoverrides= simticks=
+  primitives=` per frame, **charged to the caller**; only non-zero fields are emitted, top 8
+  zones. This is the bridge: vprof says SetupBones cost 1.8ms, this says which pass asked for
+  those bone setups.
+Sections are deliberately short — these files get read several at a time, so rows that cannot
+change a decision are pruned. Anything cut is still visible live in the tracker overlay.
+
+The per-map rollup carries averaged `#amalgam` / `#amalgam_zones` (`selfms calls/f name`) /
+`#amalgam_heavy` over the same non-excluded matches.
+
+Reading it: `#amalgam_zones` selfms is directly actionable Amalgam code. A zone with small
+selfms but large `inclms` or large counters is causing engine cost — fix it by calling less
+(cull, cache, gate), and verify against the vprof node it feeds. Zone names come from
+literals at the call sites; adding one is a single `PROF_ZONE("Name", Perf::GROUP_X);` line.
 
 ## Build exclusion is Claude's job (not the user's)
 The user has **no in-game control** over exclusions by design — curating which builds are

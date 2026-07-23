@@ -6,6 +6,7 @@
 #include "../Features/Visuals/Materials/Materials.h"
 #include "../Features/Visuals/CameraWindow/CameraWindow.h"
 #include "../Features/Visuals/FlexFOV/FlexFOV.h"
+#include "../Utils/Perf/Tracker.h"
 
 MAKE_SIGNATURE(CBaseAnimating_InternalDrawModel, "client.dll", "48 8B C4 55 56 48 8D 6C 24 ? 48 81 EC ? ? ? ? 44 8B 81", 0x0);
 MAKE_SIGNATURE(CBaseViewModel_DrawModel, "client.dll", "40 53 55 56 48 83 EC ? 80 B9", 0x0);
@@ -33,6 +34,14 @@ MAKE_HOOK(IVModelRender_DrawModelExecute, U::Memory.GetVirtual(I::ModelRender, 1
 	if (I::EngineVGui->IsGameUIVisible() || SDK::CleanScreenshot()
 		|| F::CameraWindow.m_bDrawing || F::FlexFOV.m_bReplacingView || !F::Materials.m_bLoaded || G::Unload)
 		return CALL_ORIGINAL(rcx, pState, pInfo, pBoneToWorld);
+
+	// The single hottest instrumented site: once per engine model draw, 200-600
+	// times a frame across every scene pass. Its *self* time is what Amalgam adds
+	// to each draw (the culls, the flat-slot probes); the nested Engine::DrawModel
+	// zones below hold the engine's actual draw cost, so the split says whether a
+	// heavy DrawModel node in vprof is our overhead or simply too many draws.
+	PROF_ZONE("DrawModelExecute (hook)", Perf::GROUP_SCENE);
+	PROF_CHARGE(Perf::COUNTER_MODELDRAW);
 
 	// FlexFOV cheap peripheral face: cosmetics are unreadable in the warped
 	// periphery and each is a full model draw with bone merging - skip them
@@ -95,17 +104,31 @@ MAKE_HOOK(IVModelRender_DrawModelExecute, U::Memory.GetVirtual(I::ModelRender, 1
 		}
 	}
 
+	// The re-draw passes. These are the calls that turn one engine model draw
+	// into several, so their zones (and the model-draw counter charged above)
+	// are what a heavy DrawModel node in vprof usually traces back to.
 	if (F::Chams.m_bRendering)
+	{
+		PROF_ZONE("Chams::RenderHandler", Perf::GROUP_SCENE);
 		return F::Chams.RenderHandler(pState, pInfo, pBoneToWorld);
+	}
 	if (F::Glow.m_bRendering)
+	{
+		PROF_ZONE("Glow::RenderHandler", Perf::GROUP_SCENE);
 		return F::Glow.RenderHandler(pState, pInfo, pBoneToWorld);
+	}
 	if (F::TrajectoryGhost.m_bRendering)
+	{
+		PROF_ZONE("TrajectoryGhost::RenderHandler", Perf::GROUP_SCENE);
 		return F::TrajectoryGhost.RenderHandler(pState, pInfo, pBoneToWorld);
+	}
 
-	if (auto it = F::Chams.m_mEntities.find(pInfo.entity_index); it != F::Chams.m_mEntities.end())
+	// Flat slot probe (no hashing, no node chase): this runs on every engine
+	// model draw, 200+ per frame, inside the DrawModel timing.
+	if (auto pPassthrough = F::Chams.m_mEntities.Find(pInfo.entity_index))
 	{
 		// false: suppressed - RenderMain redraws this entity with cham materials.
-		if (!it->second)
+		if (!*pPassthrough)
 			return;
 
 		// true: plain-Original passthrough - this engine draw IS the visible
@@ -113,11 +136,17 @@ MAKE_HOOK(IVModelRender_DrawModelExecute, U::Memory.GetVirtual(I::ModelRender, 1
 		// the occluded layers' ==0 test still masks visibly-drawn pixels.
 		// Shadow depth passes have no use for the mask.
 		if (pInfo.flags & STUDIO_SHADOWDEPTHTEXTURE)
+		{
+			PROF_ZONE("Engine::DrawModel", Perf::GROUP_ENGINE);
 			return CALL_ORIGINAL(rcx, pState, pInfo, pBoneToWorld);
+		}
 
 		auto pRenderContext = I::MaterialSystem->GetRenderContext();
 		if (!pRenderContext)
+		{
+			PROF_ZONE("Engine::DrawModel", Perf::GROUP_ENGINE);
 			return CALL_ORIGINAL(rcx, pState, pInfo, pBoneToWorld);
+		}
 
 		pRenderContext->SetStencilEnable(true);
 		pRenderContext->SetStencilCompareFunction(STENCILCOMPARISONFUNCTION_ALWAYS);
@@ -127,7 +156,10 @@ MAKE_HOOK(IVModelRender_DrawModelExecute, U::Memory.GetVirtual(I::ModelRender, 1
 		pRenderContext->SetStencilReferenceValue(1);
 		pRenderContext->SetStencilWriteMask(0xFF);
 		pRenderContext->SetStencilTestMask(0x0);
-		CALL_ORIGINAL(rcx, pState, pInfo, pBoneToWorld);
+		{
+			PROF_ZONE("Engine::DrawModel", Perf::GROUP_ENGINE);
+			CALL_ORIGINAL(rcx, pState, pInfo, pBoneToWorld);
+		}
 		pRenderContext->SetStencilEnable(false);
 		return;
 	}
@@ -140,7 +172,10 @@ MAKE_HOOK(IVModelRender_DrawModelExecute, U::Memory.GetVirtual(I::ModelRender, 1
 			return;
 	}
 
-	CALL_ORIGINAL(rcx, pState, pInfo, pBoneToWorld);
+	{
+		PROF_ZONE("Engine::DrawModel", Perf::GROUP_ENGINE);
+		CALL_ORIGINAL(rcx, pState, pInfo, pBoneToWorld);
+	}
 }
 
 MAKE_HOOK(CBaseAnimating_InternalDrawModel, S::CBaseAnimating_InternalDrawModel(), int,

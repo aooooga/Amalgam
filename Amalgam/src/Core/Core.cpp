@@ -8,6 +8,7 @@
 #include "../Features/Visuals/Materials/Materials.h"
 #include "../Features/Visuals/Visuals.h"
 #include "../Features/Spectate/Spectate.h"
+#include "../Features/Debug/AutoVprof/AutoVprof.h"
 #include "../SDK/Events/Events.h"
 #include <Psapi.h>
 
@@ -138,6 +139,10 @@ void CCore::Unload()
 		LogFailText();
 		return;
 	}
+
+	// Flush a capture in progress before the hooks that feed it come out - F11 or
+	// a host shutdown mid-match would otherwise drop the whole session.
+	F::AutoVprof.Shutdown();
 
 	G::Unload = true;
 	m_bFailed2 = !U::Hooks.Unload() || m_bFailed2;

@@ -14,6 +14,7 @@
 #include "../Features/Visuals/Glow/Glow.h"
 #include "../Features/Visuals/Groups/Groups.h"
 #include "../Features/Visuals/OffscreenArrows/OffscreenArrows.h"
+#include "../Utils/Perf/Tracker.h"
 
 MAKE_HOOK(CHLClient_FrameStageNotify, U::Memory.GetVirtual(I::Client, 35), void,
 	void* rcx, ClientFrameStage_t curStage)
@@ -29,6 +30,8 @@ MAKE_HOOK(CHLClient_FrameStageNotify, U::Memory.GetVirtual(I::Client, 35), void,
 	{
 	case FRAME_NET_UPDATE_START:
 	{
+		PROF_ZONE("NetUpdateStart (all)", Perf::GROUP_NETUPDATE);
+
 		auto pLocal = H::Entities.GetLocal();
 		F::Spectate.NetUpdateStart(pLocal);
 
@@ -37,34 +40,41 @@ MAKE_HOOK(CHLClient_FrameStageNotify, U::Memory.GetVirtual(I::Client, 35), void,
 	}
 	case FRAME_NET_UPDATE_END:
 	{
-		H::Entities.Store();
-		F::PlayerUtils.Store();
+		// The per-net-update rebuild - every feature's Store(). This runs at the
+		// server tick rate, not the frame rate, so a zone here that looks cheap
+		// per frame can still be expensive per call (watch peakms/calls).
+		PROF_ZONE("NetUpdateEnd (all)", Perf::GROUP_NETUPDATE);
 
-		F::Backtrack.Store();
-		F::MoveSim.Store();
-		F::CritHack.Store();
-		F::Aimbot.Store();
+		PROF_CALL("Entities::Store", Perf::GROUP_NETUPDATE, H::Entities.Store());
+		PROF_CALL("PlayerUtils::Store", Perf::GROUP_NETUPDATE, F::PlayerUtils.Store());
+
+		PROF_CALL("Backtrack::Store", Perf::GROUP_NETUPDATE, F::Backtrack.Store());
+		PROF_CALL("MoveSim::Store", Perf::GROUP_NETUPDATE, F::MoveSim.Store());
+		PROF_CALL("CritHack::Store", Perf::GROUP_NETUPDATE, F::CritHack.Store());
+		PROF_CALL("Aimbot::Store", Perf::GROUP_NETUPDATE, F::Aimbot.Store());
 
 		auto pLocal = H::Entities.GetLocal();
-		F::Groups.Store(pLocal);
-		F::ESP.Store(pLocal);
-		F::Chams.Store(pLocal);
-		F::Glow.Store(pLocal);
-		F::OffscreenArrows.Store();
-		F::Visuals.Store();
+		PROF_CALL("Groups::Store", Perf::GROUP_NETUPDATE, F::Groups.Store(pLocal));
+		PROF_CALL("ESP::Store", Perf::GROUP_NETUPDATE, F::ESP.Store(pLocal));
+		PROF_CALL("Chams::Store", Perf::GROUP_NETUPDATE, F::Chams.Store(pLocal));
+		PROF_CALL("Glow::Store", Perf::GROUP_NETUPDATE, F::Glow.Store(pLocal));
+		PROF_CALL("OffscreenArrows::Store", Perf::GROUP_NETUPDATE, F::OffscreenArrows.Store());
+		PROF_CALL("Visuals::Store", Perf::GROUP_NETUPDATE, F::Visuals.Store());
 
-		F::CheatDetection.Run();
-		F::Spectate.NetUpdateEnd(pLocal);
+		PROF_CALL("CheatDetection::Run", Perf::GROUP_NETUPDATE, F::CheatDetection.Run());
+		PROF_CALL("Spectate::NetUpdateEnd", Perf::GROUP_NETUPDATE, F::Spectate.NetUpdateEnd(pLocal));
 
-		F::Visuals.Modulate();
-		F::Visuals.DrawHitboxes(1);
+		PROF_CALL("Visuals::Modulate", Perf::GROUP_NETUPDATE, F::Visuals.Modulate());
+		PROF_CALL("Visuals::DrawHitboxes", Perf::GROUP_NETUPDATE, F::Visuals.DrawHitboxes(1));
 		break;
 	}
 	case FRAME_RENDER_START:
+	{
 		// Post-interpolation, pre-scene: the crosshair-target trace hits the
 		// hitbox pose this frame renders, and the targeted-chams suppression
 		// set updates before the scene consumes it (see CChams::UpdateTarget).
-		F::Chams.UpdateTarget();
+		PROF_ZONE("RenderStart (all)", Perf::GROUP_NETUPDATE);
+		PROF_CALL("Chams::UpdateTarget", Perf::GROUP_NETUPDATE, F::Chams.UpdateTarget());
 
 		for (auto& tBind : F::Binds.m_vBinds)
 		{	// don't drop inputs for binds
@@ -85,5 +95,7 @@ MAKE_HOOK(CHLClient_FrameStageNotify, U::Memory.GetVirtual(I::Client, 35), void,
 			tKey.m_bIsDouble = tKey.m_bIsDouble || bOldIsDouble;
 			tKey.m_bIsReleased = tKey.m_bIsReleased || bOldIsReleased;
 		}
+		break;
+	}
 	}
 }

@@ -9,6 +9,7 @@
 #include "../Features/Ticks/Ticks.h"
 #include "../Features/CritHack/CritHack.h"
 #include "../Features/Visuals/CritBar/CritBar.h"
+#include "../Features/Visuals/Alerts/Alerts.h"
 #include "../Features/Visuals/SpectatorList/SpectatorList.h"
 #include "../Features/Backtrack/Backtrack.h"
 #include "../Features/Visuals/PlayerConditions/PlayerConditions.h"
@@ -76,6 +77,7 @@ MAKE_HOOK(IEngineVGui_Paint, U::Memory.GetVirtual(I::EngineVGui, 14), void,
 			PROF_CALL("SpectatorList::Draw", Perf::GROUP_PAINT, F::SpectatorList.Draw(pLocal));
 			PROF_CALL("CritHack::Draw", Perf::GROUP_PAINT, F::CritHack.Draw(pLocal));
 			PROF_CALL("CritBar::Draw", Perf::GROUP_PAINT, F::CritBar.Draw(pLocal));
+			PROF_CALL("Alerts::Draw", Perf::GROUP_PAINT, F::Alerts.Draw(pLocal));
 			PROF_CALL("Ticks::Draw", Perf::GROUP_PAINT, F::Ticks.Draw(pLocal));
 
 #ifdef DEBUG_INFO

@@ -741,6 +741,27 @@ NAMESPACE_BEGIN(Vars)
 			CVar(BannedProgressColor, "Banned progress color", Color_t(255, 140, 40, 255), VISUAL);
 		NAMESPACE_END(CritBar)
 
+		NAMESPACE_BEGIN(Alerts)
+			CVar(Enabled, "Alerts", false, VISUAL);
+			CVar(Display, "Alerts display", DragBox_t(), VISUAL | NOBIND);
+			CVar(FontName, "Font", std::string("Verdana"), VISUAL);
+			CVar(FontSize, "Font size", 16, VISUAL | SLIDER_CLAMP, 8, 48, 1);
+			CVar(FontBold, "Bold", false, VISUAL);
+			CVar(Outline, "Outline", true, VISUAL);
+			CVar(Spacing, "Spacing", 4, VISUAL | SLIDER_CLAMP, 0, 40, 1);
+			CVar(Color, "Text color", Color_t(255, 60, 60, 255), VISUAL);
+			CVar(OutlineColor, "Outline color", Color_t(0, 0, 0, 255), VISUAL);
+
+			CVar(SniperSightlineEnabled, "Sniper sightline", false, VISUAL);
+			CVar(SniperSightlineRadius, "Sightline radius", 40.f, VISUAL | SLIDER_CLAMP | SLIDER_PRECISION, 5.f, 200.f, 5.f);
+			CVar(SniperSightlineText, "Sightline text", std::string("SNIPER SIGHTLINE"), VISUAL);
+
+			CVar(EnemyNearEnabled, "Enemy near", false, VISUAL);
+			CVar(EnemyNearDistance, "Enemy near distance", 300.f, VISUAL | SLIDER_CLAMP | SLIDER_PRECISION, 50.f, 2000.f, 50.f);
+			CVar(EnemyNearLineOfSight, "Line of sight only", false, VISUAL);
+			CVar(EnemyNearText, "Enemy near text", std::string("ENEMY NEARBY"), VISUAL);
+		NAMESPACE_END(Alerts)
+
 		NAMESPACE_BEGIN(Thirdperson)
 			CVar(Enabled, "Thirdperson", false, VISUAL);
 			CVar(Crosshair, VA_LIST("Crosshair", "Thirdperson crosshair"), false, VISUAL);

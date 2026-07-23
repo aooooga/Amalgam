@@ -1771,6 +1771,30 @@ void CMenu::MenuVisuals(int iTab)
 					FColorPicker(Vars::Visuals::CritBar::BackgroundColor, FColorPickerEnum::Right);
 					PopTransparent(1, 1);
 				} EndSection();
+				if (Section("Alerts"))
+				{
+					bool bAlertsOn = SectionToggle(Vars::Visuals::Alerts::Enabled);
+					PushTransparent(!bAlertsOn, true);
+					FSDropdown(Vars::Visuals::Alerts::FontName, FDropdownEnum::Left);
+					FSliderRow(Vars::Visuals::Alerts::FontSize, FSliderEnum::Right);
+					FToggleRow(Vars::Visuals::Alerts::FontBold, FToggleEnum::Left);
+					FToggleRow(Vars::Visuals::Alerts::Outline, FToggleEnum::Right);
+					FSliderRow(Vars::Visuals::Alerts::Spacing, FSliderEnum::Left);
+					FColorPicker(Vars::Visuals::Alerts::Color, FColorPickerEnum::Left);
+					FColorPicker(Vars::Visuals::Alerts::OutlineColor, FColorPickerEnum::Right);
+
+					SubGroup("Sniper sightline");
+					FToggleRow(Vars::Visuals::Alerts::SniperSightlineEnabled, FToggleEnum::Left);
+					FSliderRow(Vars::Visuals::Alerts::SniperSightlineRadius, FSliderEnum::Right);
+					FSDropdown(Vars::Visuals::Alerts::SniperSightlineText);
+
+					SubGroup("Enemy near");
+					FToggleRow(Vars::Visuals::Alerts::EnemyNearEnabled, FToggleEnum::Left);
+					FToggleRow(Vars::Visuals::Alerts::EnemyNearLineOfSight, FToggleEnum::Right);
+					FSliderRow(Vars::Visuals::Alerts::EnemyNearDistance);
+					FSDropdown(Vars::Visuals::Alerts::EnemyNearText);
+					PopTransparent(1, 1);
+				} EndSection();
 				if (Vars::Debug::Options.Value)
 				{
 					if (Section("##Debug"))
@@ -4722,6 +4746,7 @@ void CMenu::Render()
 		AddDraggable("Conditions", Vars::Menu::ConditionsDisplay, FGet(Vars::Menu::Indicators) & Vars::Menu::IndicatorsEnum::Conditions);
 		AddDraggable("Seed prediction", Vars::Menu::SeedPredictionDisplay, FGet(Vars::Menu::Indicators) & Vars::Menu::IndicatorsEnum::SeedPrediction);
 		AddDraggable("Crit bar", Vars::Visuals::CritBar::Display, FGet(Vars::Visuals::CritBar::Enabled));
+		AddDraggable("Alerts", Vars::Visuals::Alerts::Display, FGet(Vars::Visuals::Alerts::Enabled));
 		AddResizableDraggable("Camera", Vars::Visuals::Simulation::ProjectileWindow, FGet(Vars::Visuals::Simulation::ProjectileCamera), OptionalConstraints);
 
 		F::Render.Cursor = GetMouseCursor();

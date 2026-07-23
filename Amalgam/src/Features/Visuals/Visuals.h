@@ -46,6 +46,7 @@ public:
 	// pipeline's silhouette buffer. Not for general use - call DrawHealRadius.
 	void DrawHealRadiusSilhouette(bool bDisconnect, const Color_t& tColor);
 	void DrawPickupTimers();
+	void DrawSightlines();
 
 	std::vector<DrawBox_t> GetHitboxes(matrix3x4* aBones, CBaseAnimating* pEntity, std::vector<int> vHitboxes = {}, int iTarget = -1);
 	void DrawEffects();

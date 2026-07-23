@@ -784,9 +784,6 @@ void CVisuals::DrawEffects()
 		H::Draw.RenderPath(tPath.m_vPath, Vars::Colors::RealPathIgnoreZ.Value, false, tPath.m_iStyle, tPath.m_flTime);
 	}
 
-	for (auto& tSightline : m_vSightLines)
-		H::Draw.RenderLine(tSightline.m_vStart, tSightline.m_vEnd, tSightline.m_tColor, tSightline.m_bZBuffer);
-
 	for (auto& [pEntity, tProjectile] : m_mProjectiles)
 	{
 		bool bZBuffer = !(tProjectile.m_iFlags & TrajectoryEnum::IgnoreZ);
@@ -811,6 +808,15 @@ void CVisuals::DrawEffects()
 	}
 
 	DrawHitboxes();
+}
+
+// Called unconditionally alongside DrawStickyRadius/DrawHealRadius/SentryRange::Draw,
+// before the FlexFOV early-returns, so sightlines also render into the capture faces
+// and survive the composite (DrawEffects itself is skipped on those passes).
+void CVisuals::DrawSightlines()
+{
+	for (auto& tSightline : m_vSightLines)
+		H::Draw.RenderLine(tSightline.m_vStart, tSightline.m_vEnd, tSightline.m_tColor, tSightline.m_bZBuffer);
 }
 
 static std::vector<DrawBox_t> s_vHitboxes = {}, s_vLocalHitboxes = {};

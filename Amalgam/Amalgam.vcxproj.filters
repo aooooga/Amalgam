@@ -71,6 +71,7 @@
     <ClCompile Include="src\Features\Visuals\PlayerConditions\PlayerConditions.cpp" />
     <ClCompile Include="src\Features\Visuals\OffscreenArrows\OffscreenArrows.cpp" />
     <ClCompile Include="src\Features\Visuals\CritBar\CritBar.cpp" />
+    <ClCompile Include="src\Features\Visuals\Alerts\Alerts.cpp" />
     <ClCompile Include="src\Features\Visuals\SentryRange\SentryRange.cpp" />
     <ClCompile Include="src\Features\Visuals\SpectatorList\SpectatorList.cpp" />
     <ClCompile Include="src\Features\Visuals\Visuals.cpp" />
@@ -431,6 +432,7 @@
     <ClInclude Include="src\Features\Visuals\PlayerConditions\PlayerConditions.h" />
     <ClInclude Include="src\Features\Visuals\OffscreenArrows\OffscreenArrows.h" />
     <ClInclude Include="src\Features\Visuals\CritBar\CritBar.h" />
+    <ClInclude Include="src\Features\Visuals\Alerts\Alerts.h" />
     <ClInclude Include="src\Features\Visuals\SentryRange\SentryRange.h" />
     <ClInclude Include="src\Features\Visuals\SpectatorList\SpectatorList.h" />
     <ClInclude Include="src\Features\Visuals\Visuals.h" />
